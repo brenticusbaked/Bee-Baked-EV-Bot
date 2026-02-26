@@ -80,7 +80,7 @@ def calculate_ev_and_kelly(sharp_odds_target, sharp_odds_opponent, soft_odds_tar
         
     return ev_percentage, round(quarter_kelly, 2)
 
-def analyze_game_for_ev(game, min_edge=-10.0):
+def analyze_game_for_ev(game, min_edge=2.0):
     ev_plays = []
     matchup = f"{game.get('home_team')} vs {game.get('away_team')}"
     
