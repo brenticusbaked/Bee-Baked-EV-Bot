@@ -4,7 +4,7 @@ import sys
 import time
 import asyncio
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # --- SECURE CREDENTIAL LOADING ---
@@ -16,13 +16,11 @@ DISCORD_WEBHOOK_URL = os.environ.get('DISCORD_WEBHOOK_URL')
 if not ODDS_API_KEY or not DISCORD_WEBHOOK_URL:
     print("❌ Error: Missing API Key or Webhook URL. Check your GitHub Secrets.")
     sys.exit()
-else:
-    print("✅ Security credentials loaded successfully.")
 
 # --- BOT CONFIGURATION ---
 HISTORY_FILE = 'sent_alerts.json'
 
-# Expanded Bookmaker Links for Universal App Redirects
+# Links designed to trigger App/APK redirects on mobile
 BOOKMAKER_LINKS = {
     'draftkings': 'https://sportsbook.draftkings.com/event/',
     'fanduel': 'https://sportsbook.fanduel.com/sports/event/',
@@ -40,13 +38,13 @@ def load_history():
         try:
             with open(HISTORY_FILE, 'r') as f:
                 return json.load(f)
-        except json.JSONDecodeError:
-            return []
-    return []
+        except (json.JSONDecodeError, FileNotFoundError):
+            return {}
+    return {}
 
 def save_history(history):
     with open(HISTORY_FILE, 'w') as f:
-        json.dump(history, f)
+        json.dump(history, f, indent=4)
 
 def iso_to_unix(iso_str):
     try:
@@ -65,7 +63,7 @@ def american_to_implied(odds):
         return abs(odds) / (abs(odds) + 100)
 
 def implied_to_american(prob):
-    if prob == 0 or prob == 1: return None
+    if prob <= 0 or prob >= 1: return None
     if prob > 0.5:
         return int(-round((prob / (1 - prob)) * 100))
     else:
@@ -89,12 +87,4 @@ def calculate_edge_metrics(sharp_odds_target, sharp_odds_opponent, soft_odds_tar
     fair_odds = implied_to_american(true_prob_win)
     
     profit = soft_odds_target if soft_odds_target > 0 else 100 / (abs(soft_odds_target) / 100)
-    ev_percentage = round((true_prob_win * profit) - (true_prob_lose * 100), 2)
-    
-    b = american_to_decimal(soft_odds_target) - 1  
-    full_kelly_fraction = (b * true_prob_win - true_prob_lose) / b if b > 0 else 0
-    quarter_kelly = (full_kelly_fraction / 4) * 100 if full_kelly_fraction > 0 else 0
-        
-    return ev_percentage, round(quarter_kelly, 2), fair_odds
-
-def analyze_game_for_ev(game, min_edge
+    ev_percentage = round((true_prob_win * profit) - (true
