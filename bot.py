@@ -4,7 +4,7 @@ import sys
 import time
 import asyncio
 import aiohttp
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 # --- SECURE CREDENTIAL LOADING ---
@@ -55,22 +55,4 @@ def iso_to_unix(iso_str):
 
 def format_odds(odds):
     """Adds a plus sign to positive odds for cleaner display."""
-    return f"+{odds}" if odds > 0 else str(odds)
-
-def american_to_implied(odds):
-    if odds > 0:
-        return 100 / (odds + 100)
-    else:
-        return abs(odds) / (abs(odds) + 100)
-
-def implied_to_american(prob):
-    """Converts a true probability back to American odds (Fair Value)."""
-    if prob == 0 or prob == 1: return None
-    if prob > 0.5:
-        return int(-round((prob / (1 - prob)) * 100))
-    else:
-        return int(round(((1 - prob) / prob) * 100))
-
-def american_to_decimal(odds):
-    if odds > 0:
-        return (odds / 100)
+    return f"+{odds}" if odds > 0 else str(
