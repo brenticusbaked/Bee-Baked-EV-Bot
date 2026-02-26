@@ -38,10 +38,10 @@ jobs:
         run: python bot.py 
 
       - name: Save Alert History
-        # This step saves your 'sent_alerts.json' back to GitHub so it doesn't send duplicate alerts on the next run
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          touch sent_alerts.json  # <-- THIS IS THE FIX: Creates the file if it doesn't exist
           git add sent_alerts.json
           git diff --quiet && git diff --staged --quiet || git commit -m "bot: update alert history"
           git push
