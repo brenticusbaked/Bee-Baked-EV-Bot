@@ -21,7 +21,6 @@ else:
 
 # --- BOT CONFIGURATION ---
 HISTORY_FILE = 'sent_alerts.json'
-MAX_GAMES_TO_SCAN = 50 
 
 BOOKMAKER_LINKS = {
     'draftkings': 'https://sportsbook.draftkings.com',
@@ -54,7 +53,6 @@ def iso_to_unix(iso_str):
         return None
 
 def format_odds(odds):
-    """Adds a plus sign to positive odds for cleaner display."""
     return f"+{odds}" if odds > 0 else str(odds)
 
 def american_to_implied(odds):
@@ -64,7 +62,6 @@ def american_to_implied(odds):
         return abs(odds) / (abs(odds) + 100)
 
 def implied_to_american(prob):
-    """Converts a true probability back to American odds (Fair Value)."""
     if prob == 0 or prob == 1: return None
     if prob > 0.5:
         return int(-round((prob / (1 - prob)) * 100))
@@ -78,10 +75,14 @@ def american_to_decimal(odds):
         return (100 / abs(odds)) + 1
 
 def calculate_edge_metrics(sharp_odds_target, sharp_odds_opponent, soft_odds_target):
-    """Calculates EV, Kelly, and Fair Value Odds."""
-    # 1. De-vig the sharp market to get true probabilities
+    # 1. De-vig the sharp market
     ip_target = american_to_implied(sharp_odds_target)
     ip_opponent = american_to_implied(sharp_odds_opponent)
+    
+    # 🚀 IMPROVEMENT: Prevent division by zero if odds data is corrupted
+    if (ip_target + ip_opponent) == 0:
+        return 0, 0, 0
+
     true_prob_win = ip_target / (ip_target + ip_opponent)
     true_prob_lose = 1 - true_prob_win
     
@@ -98,20 +99,6 @@ def calculate_edge_metrics(sharp_odds_target, sharp_odds_opponent, soft_odds_tar
     quarter_kelly = (full_kelly_fraction / 4) * 100 if full_kelly_fraction > 0 else 0
         
     return ev_percentage, round(quarter_kelly, 2), fair_odds
-
-def calculate_clv(your_bet_odds, closing_sharp_target, closing_sharp_opponent):
-    """
-    Calculates your bet's Expected Value against the CLOSING sharp line.
-    (Can be used retroactively to grade picks)
-    """
-    ip_target = american_to_implied(closing_sharp_target)
-    ip_opponent = american_to_implied(closing_sharp_opponent)
-    true_closing_prob = ip_target / (ip_target + ip_opponent)
-    
-    decimal_odds = american_to_decimal(your_bet_odds)
-    clv_percentage = (decimal_odds * true_closing_prob) - 1
-    
-    return round(clv_percentage * 100, 2)
 
 def analyze_game_for_ev(game, min_edge=4.0):
     ev_plays = []
@@ -152,10 +139,7 @@ def analyze_game_for_ev(game, min_edge=4.0):
                                      and o.get('description', '') == player 
                                      and o.get('point') == point), None)
                                      
-                if not pinny_target:
-                    continue
-                
-                if pinny_target['price'] > 200 or pinny_target['price'] < -200:
+                if not pinny_target or pinny_target['price'] > 200 or pinny_target['price'] < -200:
                     continue
                     
                 pinny_opponent = next((o for o in pinny_market['outcomes'] 
@@ -190,36 +174,13 @@ def analyze_game_for_ev(game, min_edge=4.0):
                     
     return ev_plays
 
-async def fetch_odds_for_game(session, event_id, semaphore):
-    url_odds = f"https://api.the-odds-api.com/v4/sports/basketball_ncaab/events/{event_id}/odds/"
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "regions": "us,us_ex,us2,eu", 
-        "markets": "h2h,player_points,player_rebounds,player_assists", 
-        "oddsFormat": "american",
-        "bookmakers": "pinnacle,draftkings,fanduel,betmgm,espnbet,bet365,kalshi,novig" 
-    }
-    
-    async with semaphore:
-        async with session.get(url_odds, params=params) as response:
-            if response.status == 200:
-                data = await response.json()
-                return analyze_game_for_ev(data, min_edge=4.0)
-            else:
-                print(f"⚠️ Failed to fetch odds for game {event_id}: HTTP {response.status}")
-                return []
-
 async def send_discord_alert_async(session, play):
     book_url = BOOKMAKER_LINKS.get(play['book_key'], 'https://google.com/search?q=sportsbook')
     action_link = f"📱 [Place Bet Here]({book_url})"
     tip_time_display = f"<t:{play['unix_time']}:F>" if play.get('unix_time') else "Time TBD"
 
     kelly_pct = play['kelly'] / 100
-    stake_1 = kelly_pct * 100
-    stake_10 = kelly_pct * 1000
-    stake_100 = kelly_pct * 10000
-    
-    stake_text = f"**$1 Unit:** ${stake_1:.2f}\n**$10 Unit:** ${stake_10:.2f}\n**$100 Unit:** ${stake_100:.2f}"
+    stake_text = f"**$1 Unit:** ${kelly_pct * 100:.2f}\n**$10 Unit:** ${kelly_pct * 1000:.2f}\n**$100 Unit:** ${kelly_pct * 10000:.2f}"
 
     embed = {
         "title": "🚨 High-Value +EV Target Acquired 🚨",
@@ -240,67 +201,79 @@ async def send_discord_alert_async(session, play):
     }
     payload = {"username": "beebaked EV Bot", "embeds": [embed]}
     
+    # 🚀 IMPROVEMENT: Added try/except so a failed Discord ping doesn't crash the whole bot
     try:
         async with session.post(DISCORD_WEBHOOK_URL, json=payload) as response:
-            response.raise_for_status()
+            if response.status == 429:
+                print("⚠️ Discord Rate Limit hit. Pausing for 5 seconds...")
+                await asyncio.sleep(5)
+            else:
+                response.raise_for_status()
     except Exception as e:
         print(f"❌ Failed to send Discord alert: {e}")
 
 async def main():
-    print("Fetching live NCAAB games...")
+    print("Fetching live NCAAB games and odds...")
     
     async with aiohttp.ClientSession() as session:
-        url_events = f"https://api.the-odds-api.com/v4/sports/basketball_ncaab/events/?apiKey={ODDS_API_KEY}"
+        # 🚀 IMPROVEMENT: Use the `/odds` endpoint to fetch ALL games in ONE single API call!
+        url_all_odds = f"https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds/"
+        params = {
+            "apiKey": ODDS_API_KEY,
+            "regions": "us,us_ex,us2,eu", 
+            "markets": "h2h,player_points,player_rebounds,player_assists", 
+            "oddsFormat": "american",
+            "bookmakers": "pinnacle,draftkings,fanduel,betmgm,espnbet,bet365,kalshi,novig" 
+        }
         
-        async with session.get(url_events) as events_response:
-            events = await events_response.json() if events_response.status == 200 else []
-        
-        if events:
-            now_unix = int(time.time())
-            twenty_four_hours_from_now = now_unix + (24 * 60 * 60)
-            
-            near_term_events = []
-            for event in events:
-                commence_time = event.get('commence_time')
-                if commence_time:
-                    unix_time = iso_to_unix(commence_time)
-                    if unix_time and now_unix <= unix_time <= twenty_four_hours_from_now:
-                        near_term_events.append(event)
-            
-            events_to_scan = near_term_events[:MAX_GAMES_TO_SCAN] if MAX_GAMES_TO_SCAN else near_term_events
-            print(f"⚡ Found {len(events_to_scan)} games starting in the next 24 hours. Scanning for edges...")
-            
-            if not events_to_scan:
-                print("No near-term games to scan right now.")
-                return
+        try:
+            async with session.get(url_all_odds, params=params) as response:
+                if response.status != 200:
+                    print(f"❌ API Error: HTTP {response.status}")
+                    return
+                games_data = await response.json()
+        except Exception as e:
+            print(f"❌ Network Error fetching data: {e}")
+            return
 
-            semaphore = asyncio.Semaphore(5)
-            tasks = [fetch_odds_for_game(session, event['id'], semaphore) for event in events_to_scan]
-            results = await asyncio.gather(*tasks)
-            all_profitable_plays = [play for sublist in results for play in sublist]
-            
-            if all_profitable_plays:
-                sent_history = load_history()
-                new_alerts_sent = False
-                
-                for play in all_profitable_plays:
-                    if play['id'] not in sent_history:
-                        await send_discord_alert_async(session, play)
-                        print(f"Alert sent: {play['bet']} at {play['sportsbook']}")
-                        sent_history.append(play['id'])
-                        new_alerts_sent = True
-                        await asyncio.sleep(1.5) 
-                    else:
-                        pass # Skipping silently to keep terminal clean
-                        
-                if new_alerts_sent:
-                    # Keep the history manageable so the file doesn't get massive
-                    save_history(sent_history[-1000:]) 
-                    print("✅ New alerts successfully saved to history file.")
-            else:
-                print("No +EV plays found above the 4.0% threshold in this scan.")
-        else:
+        if not games_data:
             print("No live games found.")
+            return
+
+        now_unix = int(time.time())
+        twenty_four_hours_from_now = now_unix + (24 * 60 * 60)
+        
+        all_profitable_plays = []
+        
+        # 🚀 IMPROVEMENT: Streamlined the filtering and processing loop
+        for game in games_data:
+            commence_time = game.get('commence_time')
+            if commence_time:
+                unix_time = iso_to_unix(commence_time)
+                # Only scan games starting in the next 24 hours
+                if unix_time and now_unix <= unix_time <= twenty_four_hours_from_now:
+                    plays = analyze_game_for_ev(game, min_edge=1.0)
+                    all_profitable_plays.extend(plays)
+        
+        print(f"⚡ Scanned {len(games_data)} total games. Found {len(all_profitable_plays)} total edges.")
+        
+        if all_profitable_plays:
+            sent_history = load_history()
+            new_alerts_sent = False
+            
+            for play in all_profitable_plays:
+                if play['id'] not in sent_history:
+                    await send_discord_alert_async(session, play)
+                    print(f"Alert sent: {play['bet']} at {play['sportsbook']}")
+                    sent_history.append(play['id'])
+                    new_alerts_sent = True
+                    await asyncio.sleep(1.5) # Protects against Discord rate limits
+                
+            if new_alerts_sent:
+                save_history(sent_history[-1000:]) 
+                print("✅ New alerts successfully saved to history file.")
+        else:
+            print("No +EV plays found above the 4.0% threshold in this scan.")
 
 if __name__ == "__main__":
     try:
