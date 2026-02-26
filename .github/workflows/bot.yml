@@ -2,10 +2,9 @@ name: EV Bot Scanner
 
 on:
   schedule:
-    # This cron schedule runs the bot every 15 minutes. 
-    # (Change it to '*/5 * * * *' for every 5 minutes if you prefer)
+    # Runs the bot every 15 minutes
     - cron: '*/15 * * * *' 
-  workflow_dispatch: # This adds a button so you can run it manually anytime
+  workflow_dispatch: # Adds a button so you can run it manually anytime
 
 jobs:
   scan-odds:
@@ -23,6 +22,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip' # 🚀 ADDED: This is the caching line to save your GitHub minutes!
 
       - name: Install dependencies
         run: |
@@ -31,17 +31,15 @@ jobs:
 
       - name: Run EV Bot
         env:
-          # This injects your secure keys from Step 3 into the script
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        # ⚠️ CHANGE 'bot.py' BELOW TO THE ACTUAL NAME OF YOUR PYTHON FILE ⚠️
         run: python bot.py 
 
       - name: Save Alert History
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          touch sent_alerts.json  # <-- THIS IS THE FIX: Creates the file if it doesn't exist
+          touch sent_alerts.json  # Your clever fix to ensure the file exists!
           git add sent_alerts.json
           git diff --quiet && git diff --staged --quiet || git commit -m "bot: update alert history"
           git push
