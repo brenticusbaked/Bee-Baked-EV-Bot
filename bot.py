@@ -20,7 +20,7 @@ if not ODDS_API_KEY or not DISCORD_WEBHOOK_URL:
 # --- SMART CONFIGURATION ---
 LEAGUES_TO_SCAN = ['basketball_nba', 'basketball_ncaab', 'icehockey_nhl']
 HISTORY_FILE = 'sent_alerts.json'
-HEARTBEAT_INTERVAL_HOURS = 4 
+HEARTBEAT_INTERVAL_HOURS = 24  # 🚀 UPDATED: Now once every 24 hours
 
 BOOKMAKER_LINKS = {
     'draftkings': 'https://sportsbook.draftkings.com/event/',
@@ -107,10 +107,10 @@ def analyze_game_for_ev(game, min_edge=1.0):
 
 async def send_heartbeat(session):
     embed = {
-        "title": "🐝 $BEE BAKED BETS: System Status",
-        "description": "The hive is active and scanning markets for **NBA, NCAAB, and NHL**. \n\n*Current Market Status:* **Efficient** (No 1.0%+ edges found).",
+        "title": "🐝 $BEE BAKED BETS: Daily Status Update",
+        "description": "The hive is active and scanning markets for **NBA, NCAAB, and NHL**. \n\n*Status:* **All Systems Go.** \n*Market Condition:* **Efficient.**",
         "color": 16776960,
-        "footer": {"text": "Monitoring 24/7 • Next scan in 15 mins"},
+        "footer": {"text": "24-Hour Check-in • Monitoring 24/7"},
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
     payload = {"username": "$BEE BAKED BETS", "embeds": [embed]}
@@ -171,7 +171,7 @@ async def main():
                                 any_new = True
                                 await asyncio.sleep(1)
         
-        # Heartbeat Logic
+        # Heartbeat Logic (24-Hour Cycle)
         last_h_str = sent_history.get('last_heartbeat')
         should_h = False
         if not last_h_str: should_h = True
@@ -183,6 +183,7 @@ async def main():
             await send_heartbeat(session)
             sent_history['last_heartbeat'] = datetime.now(timezone.utc).isoformat()
         elif any_new:
+            # If we find bets, we "reset" the heartbeat timer to stay quiet for another 24h
             sent_history['last_heartbeat'] = datetime.now(timezone.utc).isoformat()
             
         save_history(sent_history)
