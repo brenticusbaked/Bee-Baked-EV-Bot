@@ -9,9 +9,7 @@ FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium
 # --- API PARAMS ---
 SPORT = 'basketball_nba'
 REGIONS = 'us,eu'
-# Targeted markets for 2026 volatility
 MARKETS = 'h2h,spreads,totals,player_points,player_assists,player_rebounds'
-# Focus on the 'Big Three' plus Pinnacle as our source of truth
 BOOKMAKERS = 'fanduel,draftkings,bet365,pinnacle'
 ODDS_FORMAT = 'decimal'
 
@@ -27,7 +25,6 @@ def get_ev_bets():
 
     try:
         res = requests.get(url, params=params, timeout=15)
-        print(f"Credits Remaining: {res.headers.get('x-requests-remaining')}")
         if res.status_code != 200: return []
         
         data = res.json()
@@ -36,15 +33,12 @@ def get_ev_bets():
             market_groups = {}
 
             for bm in game.get('bookmakers', []):
-                name = bm['key']
-                title = bm['title']
+                name, title = bm['key'], bm['title']
                 for mkt in bm.get('markets', []):
                     m_key = mkt['key']
                     for outcome in mkt['outcomes']:
-                        # Handle Player Name vs Team Name
                         label = f"{outcome.get('description', '')} {outcome['name']}".strip()
-                        price = outcome['price']
-                        point = outcome.get('point', '')
+                        price, point = outcome['price'], outcome.get('point', '')
                         gid = f"{m_key}_{abs(float(point))}" if m_key == 'spreads' and point != '' else f"{m_key}_{point}"
 
                         if gid not in market_groups: market_groups[gid] = {'sharp': {}, 'soft': {}}
@@ -66,35 +60,53 @@ def get_ev_bets():
                         if t in soft:
                             s_price = soft[t]['price']
                             ev = (s_price * probs[t]) - 1
-                            if ev > 0.01: # 1% Edge
+                            if ev > 0.01: # 1% Minimum Threshold
                                 units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
                                 m_label = gid.split('_')[0].replace('player_', '').upper()
                                 pt = f" {soft[t]['point']}" if soft[t]['point'] != '' else ""
-                                picks.append(
-                                    f"**💎 +EV ALERT ({ev*100:.1f}% Edge) 💎**\n"
-                                    f"**Match:** {matchup}\n"
-                                    f"**Market:** {m_label} | {t}{pt}\n"
-                                    f"**Best Book:** {soft[t]['book']} @ {to_american(s_price)}\n"
-                                    f"**De-Vigged Fair Price:** {to_american(1/probs[t])}\n"
-                                    f"**Suggested Bet:** {units:.2f} Units\n"
-                                )
+                                
+                                # HIGH CONFIDENCE LOGIC (OVER 5%)
+                                is_emergency = ev >= 0.05
+                                
+                                header = "🚨 **HIGH CONFIDENCE EMERGENCY ALERT** 🚨" if is_emergency else "💎 **+EV VALUE ALERT** 💎"
+                                color = 15158332 if is_emergency else 5763719 # Red for Emergency, Green for Standard
+                                
+                                picks.append({
+                                    "msg": (
+                                        f"{header}\n"
+                                        f"**Edge:** {ev*100:.2f}%\n"
+                                        f"**Match:** {matchup}\n"
+                                        f"**Market:** {m_label} | {t}{pt}\n"
+                                        f"**Book:** {soft[t]['book']} @ {to_american(s_price)}\n"
+                                        f"**Suggested:** {units:.2f} Units\n"
+                                    ),
+                                    "color": color,
+                                    "is_emergency": is_emergency
+                                })
         return picks
     except Exception as e:
         print(f"Error: {e}")
         return []
 
-def send(msg, img=False):
+def send_embed(pick):
     if not DISCORD_WEBHOOK_URL: return
-    payload = {"embeds": [{"description": msg, "color": 5763719}]}
-    if img: payload["embeds"][0]["image"] = {"url": FOOTER_IMG}
+    payload = {
+        "content": "@everyone" if pick["is_emergency"] else "", # Pings everyone for 5%+ edges
+        "embeds": [{
+            "description": pick["msg"],
+            "color": pick["color"],
+            "image": {"url": FOOTER_IMG}
+        }]
+    }
     requests.post(DISCORD_WEBHOOK_URL, json=payload)
 
 def main():
     picks = get_ev_bets()
     if picks:
-        for p in picks: send(p, True)
+        for p in picks: send_embed(p)
     else:
-        send("🏀 **Scan Complete:** No +EV edges found. Bankroll safe. 🛡️", True)
+        # Standard silent scan completion
+        print("Scan finished. No edges found.")
 
 if __name__ == "__main__":
     main()
