@@ -2,33 +2,30 @@ name: Bee-Baked-EV-Bot Sync
 
 on:
   schedule:
-    # This runs daily at 14:00 UTC (8:00 AM CST)
-    - cron: '0 14 * * *'
-  workflow_dispatch: # This adds the "Run workflow" button in GitHub Actions
+    # Runs every 4 hours to catch line movement without burning API credits
+    - cron: '0 */4 * * *'
+  workflow_dispatch: 
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Pull your code from the repository
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Set up a Python environment on the runner
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 3. INSTALL LIBRARIES (Fixes your Traceback error)
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4
 
-      # 4. Run your bot with the Discord Secret
       - name: Run Betting Bot
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
         run: python bot.py
