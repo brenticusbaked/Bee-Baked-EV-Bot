@@ -1,4 +1,51 @@
-- name: Install dependencies
+name: Bee-Baked-EV-Bot Sync
+
+on:
+  schedule:
+    - cron: '30 16 * * *'
+    - cron: '30 22 * * *'
+    - cron: '15 0 * * *'
+  workflow_dispatch: 
+
+# This is REQUIRED to push the CSV file back to your repo
+permissions:
+  contents: write  
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # This ensures the bot has the token it needs to push
+          persist-credentials: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas
+          pip install requests
+
+      - name: Run Bot
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python bot.py
+
+      - name: Commit and Push Log
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Only try to commit if the CSV file actually exists!
+          if [ -f bets_log.csv ]; then
+            git add bets_log.csv
+            # Commit changes, or quietly ignore if no new bets were added
+            git commit -m "Auto-log new +EV bets" || echo "No changes to commit"
+            git push
+          else
+            echo "No bets logged on this run. Skipping commit."
+          fi
