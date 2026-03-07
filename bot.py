@@ -25,6 +25,10 @@ def get_betideas_predictions():
             # We take the first 3 to avoid spamming the channel.
             prediction_cards = soup.select('.prediction-card')[:3]
             
+            # DEBUG: Warn if the selectors found nothing
+            if not prediction_cards:
+                print("Warning: No '.prediction-card' elements found. The website's HTML might have changed.")
+
             for card in prediction_cards:
                 try:
                     # Extracting data points
@@ -33,7 +37,6 @@ def get_betideas_predictions():
                     odds = card.select_one('.odds').get_text(strip=True)
                     
                     # FORMATTING FOR PLAYBOOK BOT:
-                    # Labels like 'Game:' and 'Pick:' are essential for Playbook to build the slip.
                     formatted_msg = (
                         f"**🤖 AI Value Alert | BetIdeas**\n"
                         f"**Game:** {matchup}\n"
@@ -43,6 +46,7 @@ def get_betideas_predictions():
                     )
                     picks_list.append(formatted_msg)
                 except AttributeError:
+                    print(f"Warning: A prediction card was missing data (matchup, pick, or odds). Skipping.")
                     continue # Skip if a specific card is missing data
         else:
             print(f"Failed to reach BetIdeas. Status Code: {response.status_code}")
@@ -55,7 +59,7 @@ def get_betideas_predictions():
 def send_to_discord(message_content):
     """Sends a single message to your Discord server via Webhook."""
     if not DISCORD_WEBHOOK_URL:
-        print("Error: DISCORD_WEBHOOK_URL not found in environment variables.")
+        print("Error: DISCORD_WEBHOOK_URL not found in environment variables. Messages will not send.")
         return
 
     payload = {"content": message_content}
