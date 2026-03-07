@@ -8,8 +8,8 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 # --- ODDS API PARAMETERS ---
 SPORT = 'basketball_nba' 
 REGIONS = 'us,eu' 
-# Swapped out 'h2h' for player props to target the most profitable edges! (Total: 4 Markets)
-MARKETS = 'spreads,totals,player_points,player_rebounds'
+# The 4 Sharpest Markets based on Pinnacle's liquidity
+MARKETS = 'h2h,spreads,totals,player_points'
 BOOKMAKERS = 'fanduel,draftkings,betmgm,pinnacle' 
 ODDS_FORMAT = 'decimal' 
 
@@ -36,7 +36,7 @@ def get_ev_bets():
     }
 
     try:
-        print("Fetching 4-Market Data (Spreads, Totals, Props) from The Odds API...")
+        print("Fetching the 4 Sharpest Markets (ML, Spreads, Totals, Points)...")
         response = requests.get(url, params=params, timeout=15)
         
         requests_remaining = response.headers.get('x-requests-remaining')
@@ -57,7 +57,6 @@ def get_ev_bets():
                         m_key = market['key']
                         
                         for outcome in market['outcomes']:
-                            # Player props format differently than team props. 
                             if 'description' in outcome:
                                 team = f"{outcome['description']} {outcome['name']}"
                             else:
@@ -109,7 +108,6 @@ def get_ev_bets():
                                     b = soft_price - 1
                                     kelly_fraction = expected_value / b
                                     
-                                    # Outputting as UNITS (Assuming 1 Unit = 1% Bankroll)
                                     quarter_kelly_units = (kelly_fraction / 4) * 100
                                     
                                     if quarter_kelly_units > 5.0:
@@ -160,7 +158,7 @@ def send_to_discord(message_content):
         return False
 
 def main():
-    print("Starting $BEE BAKED BETS 4-Market Prop & Line Scanner...")
+    print("Starting $BEE BAKED BETS Sharp Market Scanner...")
     
     ev_picks = get_ev_bets()
     
@@ -170,7 +168,7 @@ def main():
             if success:
                 print("✅ +EV alert successfully sent to Discord!")
     else:
-        no_arb_msg = "🏀 **$BEE BAKED NBA Scan Complete:** No +EV Spread, Total, or Player Prop edges > 1% found right now. Bankroll protected. 🛡️"
+        no_arb_msg = "🏀 **$BEE BAKED NBA Scan Complete:** No +EV Main Line or Point Prop edges > 1% found right now. Bankroll protected. 🛡️"
         success = send_to_discord(no_arb_msg)
         if success:
             print("✅ 'No EV' status successfully sent to Discord.")
