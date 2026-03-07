@@ -2,9 +2,15 @@ name: Bee-Baked-EV-Bot Sync
 
 on:
   schedule:
-    # Runs every 6 hours to safely scan 3 markets without hitting the 500 API limit
-    - cron: '0 */6 * * *'
-  workflow_dispatch: 
+    # 10:30 AM CST (16:30 UTC) - The Morning Prop Open
+    - cron: '30 16 * * *'
+    
+    # 4:30 PM CST (22:30 UTC) - The Afternoon Injury Scramble
+    - cron: '30 22 * * *'
+    
+    # 6:15 PM CST (00:15 UTC) - The Pre-Tip Closing Lines
+    - cron: '15 0 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
