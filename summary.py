@@ -1,44 +1,65 @@
 import pandas as pd
 import os
 import requests
+from datetime import datetime
 
-def calculate_clv():
+# --- CONFIG ---
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
+
+def calculate_clv_report():
     if not os.path.exists('bets_log.csv'):
-        return "No data yet."
+        return "⚠️ **No data found.** The `bets_log.csv` file hasn't been created yet. Run the scanner first!"
 
-    df = pd.read_csv('bets_log.csv')
+    try:
+        df = pd.read_csv('bets_log.csv')
+        
+        if df.empty:
+            return "📭 **Log file is empty.** No bets recorded this week."
+
+        total_bets = len(df)
+        
+        # CLV Logic: Did the odds we got beat the Sharp Fair Price?
+        # We need to handle the string to float conversion for 'Edge'
+        df['edge_val'] = df['Edge'].str.replace('%','').astype(float)
+        
+        # A bet beats the closing line (CLV) if Expected Value > 0
+        beat_clv_count = len(df[df['edge_val'] > 0])
+        clv_pct = (beat_clv_count / total_bets) * 100
+        avg_ev = df['edge_val'].mean()
+
+        report = (
+            f"📊 **WEEKLY $BEE BAKED CLV REPORT** 📊\n"
+            f"📅 **Generated:** {datetime.now().strftime('%Y-%m-%d')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎯 **Total Alerts Tracked:** {total_bets}\n"
+            f"📈 **Avg. Expected Value:** {avg_ev:.2f}%\n"
+            f"🏆 **Beat Closing Line (CLV):** {clv_pct:.1f}%\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 *A CLV over 50% means you are consistently outperforming the sharpest books in the world.*"
+        )
+        return report
+
+    except Exception as e:
+        return f"❌ **Error processing logs:** {str(e)}"
+
+def main():
+    report_msg = calculate_clv_report()
     
-    # Convert American odds strings back to floats for calculation if needed
-    # For this summary, we track how often our 'Odds' > 'FairPriceAtBet'
-    def is_beating(row):
-        # Simplified: If your odds were better than the fair price at the time
-        return 1 if row['Edge'].replace('%','') != '0' else 0
-
-    df['beat_market'] = df.apply(is_beating, axis=1)
-    beat_pct = (df['beat_market'].sum() / len(df)) * 100
-    avg_ev = df['Edge'].str.replace('%','').astype(float).mean()
-
-    summary_msg = (
-        f"📊 **WEEKLY $BEE BAKED CLV REPORT** 📊\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 **Total Bets Tracked:** {len(df)}\n"
-        f"📈 **Avg. Expected Value:** {avg_ev:.2f}%\n"
-        f"🏆 **Beat the Closing Line:** {beat_pct:.1f}%\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💡 *Tip: If your 'Beat %' is over 55%, you are mathematically guaranteed to be profitable long-term.*"
-    )
-    return summary_msg
-
-def send_summary():
-    msg = calculate_clv()
     payload = {
         "embeds": [{
-            "description": msg,
-            "color": 10181046, # Purple
-            "footer": {"text": "Closing Line Value (CLV) is the true mark of a pro."}
+            "title": "Weekly Market Performance",
+            "description": report_msg,
+            "color": 10181046, # Purple for CLV
+            "image": {"url": FOOTER_IMG}
         }]
     }
-    requests.post(os.getenv("DISCORD_WEBHOOK_URL"), json=payload)
+    
+    if DISCORD_WEBHOOK_URL:
+        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        print("✅ Weekly Summary with CLV sent to Discord.")
+    else:
+        print("❌ Discord URL missing.")
 
 if __name__ == "__main__":
-    send_summary()
+    main()
