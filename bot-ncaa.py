@@ -9,7 +9,7 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 # --- API PARAMS ---
-SPORT = 'basketball_nba'
+SPORT = 'basketball_ncaab' # Changed to College Basketball
 REGIONS = 'us,eu'
 MARKETS = 'h2h,spreads,totals,player_points,player_assists,player_rebounds'
 BOOKMAKERS = 'fanduel,draftkings,bet365,pinnacle'
@@ -76,21 +76,19 @@ def get_ev_bets():
                                 pt = f" {soft[t]['point']}" if soft[t]['point'] != '' else ""
                                 is_emergency = ev >= 0.05
                                 
-                                # LOGGING CALL
                                 fair_american = to_american(1/probs[t])
                                 log_bet_to_csv(matchup, m_label, f"{t}{pt}", to_american(s_price), ev, f"{units:.2f}", fair_american)
 
+                                # Updated Header to say NCAAB
+                                header = "🚨 **NCAAB EMERGENCY ALERT** 🚨" if is_emergency else "🎓 **NCAAB +EV ALERT** 🎓"
                                 picks.append({
-                                    "msg": f"{'🚨 **EMERGENCY** 🚨' if is_emergency else '💎 **+EV ALERT** 💎'}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {m_label} | {t}{pt}\n**Book:** {soft[t]['book']} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
-                                    "color": 15158332 if is_emergency else 5763719,
+                                    "msg": f"{header}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {m_label} | {t}{pt}\n**Book:** {soft[t]['book']} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
+                                    "color": 15158332 if is_emergency else 3447003, # Blue for standard college alerts
                                     "is_emergency": is_emergency
                                 })
         return picks
-        
     except Exception as e:
-        # THIS is the section that was crashing. It is now properly indented!
-        print(f"Error: {e}")
-        return []
+        print(f"Error: {e}"); return []
 
 def send_alert(p):
     if not DISCORD_WEBHOOK_URL: return
@@ -101,7 +99,7 @@ def main():
     if picks:
         for p in picks: send_alert(p)
     else:
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": "🏀 **Scan Complete:** No edges found. Bankroll safe. 🛡️", "color": 3447003, "image": {"url": FOOTER_IMG}}]})
+        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": "🎓 **NCAAB Scan Complete:** No edges found. Bankroll safe. 🛡️", "color": 3447003, "image": {"url": FOOTER_IMG}}]})
 
 if __name__ == "__main__":
     main()

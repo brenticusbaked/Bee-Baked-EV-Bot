@@ -1,0 +1,51 @@
+name: NCAAB EV Scanner
+
+on:
+  schedule:
+    # 10:35 AM CST (16:35 UTC) - 5 mins after NBA
+    - cron: '35 16 * * *'
+    # 4:35 PM CST (22:35 UTC) - 5 mins after NBA
+    - cron: '35 22 * * *'
+    # 6:20 PM CST (00:20 UTC) - 5 mins after NBA
+    - cron: '20 0 * * *'
+  workflow_dispatch: 
+
+permissions:
+  contents: write  
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run NCAAB Bot
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python bot-ncaa.py
+
+      - name: Commit and Push Log
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          if [ -f bets_log.csv ]; then
+            git add bets_log.csv
+            git commit -m "Auto-log new NCAAB +EV bets" || echo "No changes to commit"
+            # Pull before pushing just in case the NBA bot updated it a few seconds ago
+            git pull --rebase origin main
+            git push
+          else
+            echo "No bets logged on this run. Skipping commit."
+          fi
