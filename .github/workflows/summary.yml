@@ -1,0 +1,22 @@
+name: Weekly Profit Summary
+
+on:
+  schedule:
+    # Runs every Sunday at 11:59 PM UTC (approx 6:00 PM CST)
+    - cron: '59 23 * * 0'
+  workflow_dispatch: # Allows you to run it manually to test
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Run Summary
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python summary.py
