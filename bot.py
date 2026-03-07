@@ -105,4 +105,60 @@ def get_ev_bets():
                                     point_str = f" {soft_data[team]['point']}" if soft_data[team]['point'] != '' else ""
                                     market_label = group_id.split('_')[0].upper()
 
-                                    formatted_msg
+                                    formatted_msg = (
+                                        f"**💎 +EV VALUE ALERT ({ev_percentage:.2f}% Edge) 💎**\n"
+                                        f"**Game:** {matchup}\n"
+                                        f"**Market:** {market_label}\n"
+                                        f"**Play:** {team}{point_str} ({american_odds})\n"
+                                        f"**Book:** {book}\n\n"
+                                        f"👉 *Fair Win Probability: {(fair_prob * 100):.1f}%*"
+                                    )
+                                    picks_list.append(formatted_msg)
+
+        elif response.status_code == 429:
+            print("Credit limit reached on The Odds API.")
+        else:
+            print(f"API Error. Status: {response.status_code}")
+            
+    except Exception as e:
+        print(f"Script Error: {e}")
+        
+    return picks_list
+
+def send_to_discord(message_content):
+    if not DISCORD_WEBHOOK_URL:
+        print("❌ ERROR: DISCORD_WEBHOOK_URL is empty!")
+        return False
+        
+    payload = {"content": message_content}
+    try:
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        if response.status_code == 204:
+            return True
+        else:
+            print(f"❌ DISCORD REJECTED MESSAGE: Status Code {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ FAILED TO CONNECT TO DISCORD: {e}")
+        return False
+
+def main():
+    print("Starting $BEE BAKED BETS +EV Scanner...")
+    
+    ev_picks = get_ev_bets()
+    
+    if ev_picks:
+        for pick in ev_picks:
+            success = send_to_discord(pick)
+            if success:
+                print("✅ +EV alert successfully sent to Discord!")
+    else:
+        no_arb_msg = "🏀 **$BEE BAKED NBA Scan Complete:** No +EV opportunities > 1% found right now. Bankroll protected. 🛡️"
+        success = send_to_discord(no_arb_msg)
+        if success:
+            print("✅ 'No EV' status successfully sent to Discord.")
+        else:
+            print("⚠️ Scan finished, but Discord notification failed.")
+
+if __name__ == "__main__":
+    main()
