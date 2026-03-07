@@ -2,8 +2,8 @@ name: Bee-Baked-EV-Bot Sync
 
 on:
   schedule:
-    # Runs every 4 hours to catch line movement without burning API credits
-    - cron: '0 */4 * * *'
+    # Runs every 6 hours to safely scan 3 markets without hitting the 500 API limit
+    - cron: '0 */6 * * *'
   workflow_dispatch: 
 
 jobs:
