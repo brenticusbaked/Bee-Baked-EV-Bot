@@ -8,7 +8,8 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 # --- ODDS API PARAMETERS ---
 SPORT = 'basketball_nba' 
 REGIONS = 'us,eu' 
-MARKETS = 'h2h,spreads,totals'
+# Swapped out 'h2h' for player props to target the most profitable edges! (Total: 4 Markets)
+MARKETS = 'spreads,totals,player_points,player_rebounds'
 BOOKMAKERS = 'fanduel,draftkings,betmgm,pinnacle' 
 ODDS_FORMAT = 'decimal' 
 
@@ -35,7 +36,7 @@ def get_ev_bets():
     }
 
     try:
-        print("Fetching data from The Odds API to calculate Expected Value...")
+        print("Fetching 4-Market Data (Spreads, Totals, Props) from The Odds API...")
         response = requests.get(url, params=params, timeout=15)
         
         requests_remaining = response.headers.get('x-requests-remaining')
@@ -56,7 +57,12 @@ def get_ev_bets():
                         m_key = market['key']
                         
                         for outcome in market['outcomes']:
-                            team = outcome['name']
+                            # Player props format differently than team props. 
+                            if 'description' in outcome:
+                                team = f"{outcome['description']} {outcome['name']}"
+                            else:
+                                team = outcome['name']
+                                
                             price = outcome['price']
                             point = outcome.get('point', '')
 
@@ -92,15 +98,25 @@ def get_ev_bets():
                         fair_prob_a = implied_a / vig
                         fair_prob_b = implied_b / vig
 
-                        for team, fair_prob in [(team_a, fair_prob_a), (team_b, fair_prob_b)]:
+                        for team, fair_prob, pin_price in [(team_a, fair_prob_a, price_pin_a), (team_b, fair_prob_b, price_pin_b)]:
                             if team in soft_data:
                                 soft_price = soft_data[team]['price']
                                 
                                 expected_value = (soft_price * fair_prob) - 1
                                 ev_percentage = expected_value * 100
 
-                                if ev_percentage > 1.0:
+                                if ev_percentage > 1.0: 
+                                    b = soft_price - 1
+                                    kelly_fraction = expected_value / b
+                                    
+                                    # Outputting as UNITS (Assuming 1 Unit = 1% Bankroll)
+                                    quarter_kelly_units = (kelly_fraction / 4) * 100
+                                    
+                                    if quarter_kelly_units > 5.0:
+                                        quarter_kelly_units = 5.0
+
                                     american_odds = decimal_to_american(soft_price)
+                                    sharp_american = decimal_to_american(pin_price)
                                     book = soft_data[team]['book']
                                     point_str = f" {soft_data[team]['point']}" if soft_data[team]['point'] != '' else ""
                                     market_label = group_id.split('_')[0].upper()
@@ -108,10 +124,11 @@ def get_ev_bets():
                                     formatted_msg = (
                                         f"**💎 +EV VALUE ALERT ({ev_percentage:.2f}% Edge) 💎**\n"
                                         f"**Game:** {matchup}\n"
-                                        f"**Market:** {market_label}\n"
-                                        f"**Play:** {team}{point_str} ({american_odds})\n"
-                                        f"**Book:** {book}\n\n"
-                                        f"👉 *Fair Win Probability: {(fair_prob * 100):.1f}%*"
+                                        f"**Market:** {market_label} | {team}{point_str}\n"
+                                        f"**Best Book:** {book} @ {american_odds}\n"
+                                        f"**Sharp Book:** Pinnacle @ {sharp_american} (True Prob: {(fair_prob * 100):.1f}%)\n"
+                                        f"**Suggested Bet:** {quarter_kelly_units:.2f} Units (1/4 Kelly)\n\n"
+                                        f"👉 *Lock it in on {book}!*"
                                     )
                                     picks_list.append(formatted_msg)
 
@@ -143,7 +160,7 @@ def send_to_discord(message_content):
         return False
 
 def main():
-    print("Starting $BEE BAKED BETS +EV Scanner...")
+    print("Starting $BEE BAKED BETS 4-Market Prop & Line Scanner...")
     
     ev_picks = get_ev_bets()
     
@@ -153,7 +170,7 @@ def main():
             if success:
                 print("✅ +EV alert successfully sent to Discord!")
     else:
-        no_arb_msg = "🏀 **$BEE BAKED NBA Scan Complete:** No +EV opportunities > 1% found right now. Bankroll protected. 🛡️"
+        no_arb_msg = "🏀 **$BEE BAKED NBA Scan Complete:** No +EV Spread, Total, or Player Prop edges > 1% found right now. Bankroll protected. 🛡️"
         success = send_to_discord(no_arb_msg)
         if success:
             print("✅ 'No EV' status successfully sent to Discord.")
