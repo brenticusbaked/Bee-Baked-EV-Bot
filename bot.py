@@ -76,8 +76,9 @@ def get_ev_bets():
                                 pt = f" {soft[t]['point']}" if soft[t]['point'] != '' else ""
                                 is_emergency = ev >= 0.05
                                 
-                                # LOGGING CALL
-                                log_bet_to_csv(matchup, m_label, f"{t}{pt}", to_american(s_price), ev, f"{units:.2f}")
+                                # LOGGING CALL (Now correctly passing the 7th argument: the Fair Price!)
+                                fair_american = to_american(1/probs[t])
+                                log_bet_to_csv(matchup, m_label, f"{t}{pt}", to_american(s_price), ev, f"{units:.2f}", fair_american)
 
                                 picks.append({
                                     "msg": f"{'🚨 **EMERGENCY** 🚨' if is_emergency else '💎 **+EV ALERT** 💎'}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {m_label} | {t}{pt}\n**Book:** {soft[t]['book']} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
@@ -86,18 +87,3 @@ def get_ev_bets():
                                 })
         return picks
     except Exception as e:
-        print(f"Error: {e}"); return []
-
-def send_alert(p):
-    if not DISCORD_WEBHOOK_URL: return
-    requests.post(DISCORD_WEBHOOK_URL, json={"content": "@everyone" if p["is_emergency"] else "", "embeds": [{"description": p["msg"], "color": p["color"], "image": {"url": FOOTER_IMG}}]})
-
-def main():
-    picks = get_ev_bets()
-    if picks:
-        for p in picks: send_alert(p)
-    else:
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": "🏀 **Scan Complete:** No edges found. Bankroll safe. 🛡️", "color": 3447003, "image": {"url": FOOTER_IMG}}]})
-
-if __name__ == "__main__":
-    main()
