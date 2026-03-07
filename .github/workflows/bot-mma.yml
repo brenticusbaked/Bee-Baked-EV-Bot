@@ -1,0 +1,50 @@
+name: MMA Fight Night Scanner
+
+on:
+  schedule:
+    # 10:50 AM CST (16:50 UTC) - Fridays and Saturdays only
+    - cron: '50 16 * * 5,6'
+    # 4:50 PM CST (22:50 UTC) - Fridays and Saturdays only
+    - cron: '50 22 * * 5,6'
+    # 6:35 PM CST (00:35 UTC) - Fridays and Saturdays only
+    - cron: '35 0 * * 5,6'
+  workflow_dispatch: 
+
+permissions:
+  contents: write  
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run MMA Bot
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python bot-mma.py
+
+      - name: Commit and Push Log
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          if [ -f bets_log.csv ]; then
+            git add bets_log.csv
+            git commit -m "Auto-log new MMA +EV bets" || echo "No changes to commit"
+            git pull --rebase origin main
+            git push
+          else
+            echo "No bets logged on this run. Skipping commit."
+          fi
