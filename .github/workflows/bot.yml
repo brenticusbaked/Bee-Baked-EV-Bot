@@ -2,35 +2,25 @@ name: Bee-Baked-EV-Bot Sync
 
 on:
   schedule:
-    # 10:30 AM CST (16:30 UTC) - The Morning Prop Open
+    # 10:30 AM CST (Morning Props Open)
     - cron: '30 16 * * *'
-    
-    # 4:30 PM CST (22:30 UTC) - The Afternoon Injury Scramble
+    # 4:30 PM CST (Injury News Window)
     - cron: '30 22 * * *'
-    
-    # 6:15 PM CST (00:15 UTC) - The Pre-Tip Closing Lines
+    # 6:15 PM CST (Pre-Tip Closing Line)
     - cron: '15 0 * * *'
-  workflow_dispatch:
+  workflow_dispatch: 
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests beautifulsoup4
-
-      - name: Run Betting Bot
+        run: pip install requests
+      - name: Run Bot
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
