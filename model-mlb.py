@@ -1,6 +1,6 @@
 import os
 import requests
-import csv # ADDED THIS
+import csv
 from datetime import datetime
 
 # --- CONFIG ---
@@ -14,38 +14,34 @@ BOOK_LINKS = {
     'betmgm': 'https://sports.betmgm.com/',
     'bet365': 'https://www.bet365.com/',
     'espn': 'https://espnbet.com/',
-    'fanatics': 'https://sportsbook.fanatics.com/',
-    'kalshi': 'https://kalshi.com/',
-    'prizepicks': 'https://app.prizepicks.com/',
-    'pinnacle': 'https://spankodds.com/' # Free live odds screen to view sharp movement
+    'fanatics': 'https://sportsbook.fanatics.com/'
 }
 
 def to_american(dec):
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
 
-# --- ADDED THE CSV LOGGER ---
 def log_bet_to_csv(matchup, market, selection, odds, edge_val, units, fair_price):
     file_exists = os.path.isfile('bets_log.csv')
     with open('bets_log.csv', mode='a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet'])
+            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle'])
         writer.writerow([
             datetime.now().strftime("%Y-%m-%d"), 
             matchup, market, selection, odds, 
-            f"{edge_val:.2f}%", units, fair_price
+            f"{edge_val:.2f}%", units, fair_price, ""
         ])
 
-def get_best_moneyline(target_team):
+def get_best_f5_moneyline(target_team):
+    """Pulls First 5 Innings (F5) Moneyline."""
     if not ODDS_API_KEY: return None, None, None
     
     url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
     params = {
         'apiKey': ODDS_API_KEY, 
         'regions': 'us,eu', 
-        'markets': 'h2h', 
-        # Added ESPN and Fanatics, removed Pinnacle!
+        'markets': 'h2h_1st_half', # First 5 Innings Market!
         'bookmakers': 'fanduel,draftkings,betmgm,bet365,espn,fanatics',
         'oddsFormat': 'decimal'
     }
@@ -58,29 +54,24 @@ def get_best_moneyline(target_team):
         best_book = "Unknown"
         best_book_title = "Unknown"
         
-        data = res.json()
-        for game in data:
+        for game in res.json():
             if target_team in game['home_team'] or target_team in game['away_team']:
                 for bm in game.get('bookmakers', []):
-                    book_key = bm['key']
-                    book_title = bm['title']
                     for mkt in bm.get('markets', []):
-                        if mkt['key'] == 'h2h':
+                        if mkt['key'] == 'h2h_1st_half':
                             for outcome in mkt['outcomes']:
                                 if target_team in outcome['name']:
                                     price = float(outcome['price'])
                                     if price > best_price:
                                         best_price = price
-                                        best_book = book_key
-                                        best_book_title = book_title
+                                        best_book = bm['key']
+                                        best_book_title = bm['title']
                                         
         if best_price > 0:
             link = BOOK_LINKS.get(best_book, "https://www.google.com/search?q=" + best_book + "+mlb+odds")
             return best_book_title, to_american(best_price), link
-            
     except Exception as e:
         print(f"Error fetching odds: {e}")
-        
     return None, None, None
 
 def get_pitcher_stats(pitcher_id):
@@ -102,7 +93,7 @@ def get_pitcher_stats(pitcher_id):
                             innings = float(stats.get('inningsPitched', 0))
                             if innings > 20:
                                 return era, whip
-        except Exception as e:
+        except Exception:
             pass
     return None, None
 
@@ -113,75 +104,63 @@ def run_mlb_model():
     
     try:
         res = requests.get(url, timeout=15)
-        if res.status_code != 200:
-            print("Failed to fetch MLB schedule.")
-            return
+        if res.status_code != 200: return
             
         data = res.json()
-        dates = data.get('dates', [])
-        if not dates:
-            print("No MLB games today.")
-            return
-            
-        games = dates[0].get('games', [])
+        if not data.get('dates'): return
         
-        for game in games:
+        for game in data['dates'][0].get('games', []):
             away_team = game['teams']['away']['team']['name']
             home_team = game['teams']['home']['team']['name']
             matchup = f"{away_team} @ {home_team}"
             
-            away_pitcher = game['teams']['away'].get('probablePitcher')
-            home_pitcher = game['teams']['home'].get('probablePitcher')
+            away_p = game['teams']['away'].get('probablePitcher')
+            home_p = game['teams']['home'].get('probablePitcher')
             
-            if away_pitcher and home_pitcher:
-                a_era, a_whip = get_pitcher_stats(away_pitcher['id'])
-                h_era, h_whip = get_pitcher_stats(home_pitcher['id'])
+            if away_p and home_p:
+                a_era, a_whip = get_pitcher_stats(away_p['id'])
+                h_era, h_whip = get_pitcher_stats(home_p['id'])
                 
                 if a_era is not None and h_era is not None:
                     era_diff = abs(a_era - h_era)
+                    whip_diff = abs(a_whip - h_whip)
                     
-                    if era_diff >= 1.50:
+                    # Require BOTH a 1.50+ ERA gap and a 0.20+ WHIP gap
+                    if era_diff >= 1.50 and whip_diff >= 0.20:
                         is_away_better = a_era < h_era
                         better_team = away_team if is_away_better else home_team
-                        better_pitcher = away_pitcher['fullName'] if is_away_better else home_pitcher['fullName']
-                        worse_pitcher = home_pitcher['fullName'] if is_away_better else away_pitcher['fullName']
+                        better_pitcher = away_p['fullName'] if is_away_better else home_p['fullName']
+                        worse_pitcher = home_p['fullName'] if is_away_better else away_p['fullName']
                         
-                        adv_era = min(a_era, h_era)
-                        disadv_era = max(a_era, h_era)
+                        adv_era, adv_whip = min(a_era, h_era), min(a_whip, h_whip)
+                        disadv_era, disadv_whip = max(a_era, h_era), max(a_whip, h_whip)
                         
-                        best_book, best_odds, bet_link = get_best_moneyline(better_team)
+                        best_book, best_odds, bet_link = get_best_f5_moneyline(better_team)
                         
                         odds_text = ""
                         if best_book:
-                            odds_text = f"\n💰 **Best Odds:** {best_book} @ **{best_odds}**\n🔗 [Click here to bet on {best_book}]({bet_link})"
-                            # Log to CSV if we found playable odds! 
-                            # We use the ERA differential as the "Edge" metric for the accountant.
-                            log_bet_to_csv(matchup, "MODEL_ML", better_team, best_odds, era_diff, "1.00", "MODEL")
+                            odds_text = f"\n💰 **Best F5 Odds:** {best_book} @ **{best_odds}**\n🔗 [Click here to bet]({bet_link})"
+                            log_bet_to_csv(matchup, "MODEL_MLB_F5", better_team, best_odds, era_diff, "1.00", "MODEL")
                         else:
-                            odds_text = "\n⚠️ *Odds not yet available on major books.*"
+                            odds_text = "\n⚠️ *F5 Odds not yet available.*"
                         
                         alerts.append(
                             f"⚾ **MLB MODEL MISMATCH DETECTED** ⚾\n"
-                            f"**Game:** {matchup}\n"
-                            f"━━━━━━━━━━━━━━━━━━━━\n"
+                            f"**Game:** {matchup}\n━━━━━━━━━━━━━━━━━━━━\n"
                             f"**Advantage:** {better_team} ({better_pitcher})\n"
-                            f"✅ {better_pitcher} ERA: **{adv_era:.2f}**\n"
-                            f"❌ {worse_pitcher} ERA: **{disadv_era:.2f}**\n"
-                            f"**ERA Differential:** {era_diff:.2f}\n"
+                            f"✅ {better_pitcher}: **{adv_era:.2f} ERA | {adv_whip:.2f} WHIP**\n"
+                            f"❌ {worse_pitcher}: **{disadv_era:.2f} ERA | {disadv_whip:.2f} WHIP**\n"
                             f"{odds_text}"
                         )
                         
-        if alerts and DISCORD_WEBHOOK_URL:
-            for msg in alerts:
-                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 3066993, "image": {"url": FOOTER_IMG}}]})
-                print("Model Alert Sent.")
-        else:
-            if DISCORD_WEBHOOK_URL:
-                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": "⚾ **MLB Model Run:** No massive pitching mismatches found today.", "color": 3066993}]})
-            print("No significant mismatches.")
+        if DISCORD_WEBHOOK_URL:
+            if alerts:
+                for msg in alerts: requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 3066993, "image": {"url": FOOTER_IMG}}]})
+            else:
+                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": "⚾ **MLB Model:** No dual ERA/WHIP mismatches today.", "color": 3066993}]})
             
     except Exception as e:
-        print(f"Error running MLB model: {e}")
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
     run_mlb_model()

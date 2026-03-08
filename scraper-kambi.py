@@ -1,81 +1,53 @@
 import os
-import requests
-import json
+import csv
 from datetime import datetime
+from playwright.sync_api import sync_playwright
 
-# --- CONFIG ---
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-# Kambi CDN for NBA matches (using BetRivers IL as the proxy)
-KAMBI_URL = "https://eu-offering-api.kambicdn.com/offering/v2018/rsiusil/listView/basketball/nba/all/all/matches.json?lang=en_US&market=US-IL"
-TRACKER_FILE = "kambi_lines.json"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Accept": "application/json",
-    "Connection": "keep-alive"
-}
-
-def load_previous_lines():
-    if not os.path.exists(TRACKER_FILE):
-        return {}
-    with open(TRACKER_FILE, "r") as f:
-        return json.load(f)
-
-def save_current_lines(lines):
-    with open(TRACKER_FILE, "w") as f:
-        json.dump(lines, f)
-
-def scrape_kambi():
-    try:
-        res = requests.get(KAMBI_URL, headers=HEADERS, timeout=15)
-        if res.status_code != 200:
-            print(f"Blocked by Kambi! Status Code: {res.status_code}")
-            return
-            
-        data = res.json()
-        current_lines = {}
-        alerts = []
-        previous_lines = load_previous_lines()
+def scrape_kambi(url):
+    """
+    Reads Kambi-powered odds directly from the page DOM.
+    Works for BetRivers, Unibet, etc.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
         
-        for event in data.get('events', []):
-            matchup = event.get('event', {}).get('name', 'Unknown Matchup')
-            event_id = str(event.get('event', {}).get('id'))
-            
-            for bet_offer in event.get('betOffers', []):
-                # We are looking for the main point spread (Criterion ID 1001212 is often spread)
-                if bet_offer.get('criterion', {}).get('englishLabel') == 'Handicap':
-                    for outcome in bet_offer.get('outcomes', []):
-                        team = outcome.get('englishLabel')
-                        line = outcome.get('line')
-                        
-                        if line is not None:
-                            # Kambi formats lines in thousands (e.g., -5500 is -5.5)
-                            formatted_line = float(line) / 1000
-                            unique_key = f"{event_id}_{team}"
-                            current_lines[unique_key] = {"matchup": matchup, "team": team, "line": formatted_line}
-                            
-                            if unique_key in previous_lines:
-                                old_line = previous_lines[unique_key]['line']
-                                if old_line is not None and formatted_line is not None:
-                                    diff = abs(float(formatted_line) - float(old_line))
-                                    if diff >= 1.5:
-                                        alerts.append(
-                                            f"📈 **KAMBI STEAM ALERT:** {matchup}\n"
-                                            f"**{team} Spread Moved!**\n"
-                                            f"Old Line: {old_line} ➡️ **New Line: {formatted_line}**"
-                                        )
-                                        
-        save_current_lines(current_lines)
+        print(f"Scanning Kambi lines at {url}...")
+        page.goto(url, wait_until="domcontentloaded")
         
-        if alerts and DISCORD_WEBHOOK_URL:
-            for msg in alerts:
-                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 16776960}]}) # Yellow
-                print("Kambi Alert sent.")
-        else:
-            print("Kambi Scrape Complete: No major line movement.")
+        # Wait for the odds table to appear
+        page.wait_for_selector(".KambiBC-event-item__event-wrapper", timeout=15000)
+        
+        events = page.query_selector_all(".KambiBC-event-item__event-wrapper")
+        scraped_data = []
 
-    except Exception as e:
-        print(f"Error scraping Kambi: {e}")
+        for event in events:
+            try:
+                # Extracting Matchup
+                participants = event.query_selector_all(".KambiBC-event-participants__name")
+                if len(participants) < 2: continue
+                matchup = f"{participants[0].inner_text()} @ {participants[1].inner_text()}"
+                
+                # Extracting Moneyline Odds
+                odds_buttons = event.query_selector_all(".KambiBC-mod-event-outcome__odds")
+                if len(odds_buttons) >= 2:
+                    away_odds = odds_buttons[0].inner_text()
+                    home_odds = odds_buttons[1].inner_text()
+                    
+                    scraped_data.append({
+                        "Matchup": matchup,
+                        "Away_ML": away_odds,
+                        "Home_ML": home_odds,
+                        "Timestamp": datetime.now().isoformat()
+                    })
+            except Exception as e:
+                print(f"Skip row error: {e}")
+
+        browser.close()
+        return scraped_data
 
 if __name__ == "__main__":
-    scrape_kambi()
+    # Example for BetRivers Illinois
+    betrivers_nba = "https://il.betrivers.com/?page=sportsbook#filter/basketball/nba"
+    data = scrape_kambi(betrivers_nba)
+    print(f"Found {len(data)} live Kambi events.")
