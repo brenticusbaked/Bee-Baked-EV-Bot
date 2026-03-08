@@ -87,8 +87,7 @@ def get_sgo_edges():
 
             # Process Markets
             for uid, val in market_groups.items():
-                sharp = val['sharp']
-                soft = val['soft']
+                sharp, soft = val['sharp'], val['soft']
                 
                 if 'over' in sharp and 'under' in sharp:
                     p_over, p_under = sharp['over'], sharp['under']
