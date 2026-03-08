@@ -14,10 +14,12 @@ BOOKMAKERS = 'fanduel,draftkings,bet365,pinnacle'
 ODDS_FORMAT = 'decimal'
 
 # --- SPORT CONFIGURATIONS ---
+# FIXED: Removed 'player_' markets to prevent 422 errors. 
+# FIXED: Updated sport keys for Esports and Tennis.
 SPORT_CONFIGS = {
     "nba": {
         "api_key": "basketball_nba",
-        "markets": "h2h,spreads,totals,player_points,player_assists,player_rebounds",
+        "markets": "h2h,spreads,totals", 
         "icon": "🏀",
         "color": 5763719,
         "emergency_color": 15158332,
@@ -25,7 +27,7 @@ SPORT_CONFIGS = {
     },
     "mlb": {
         "api_key": "baseball_mlb",
-        "markets": "h2h,spreads,totals,pitcher_strikeouts,batter_home_runs",
+        "markets": "h2h,spreads,totals",
         "icon": "⚾",
         "color": 10038562,
         "emergency_color": 15158332,
@@ -33,7 +35,7 @@ SPORT_CONFIGS = {
     },
     "nhl": {
         "api_key": "icehockey_nhl",
-        "markets": "h2h,spreads,totals,player_points,player_assists,player_shots_on_goal",
+        "markets": "h2h,spreads,totals",
         "icon": "🏒",
         "color": 1146986,
         "emergency_color": 15158332,
@@ -41,7 +43,7 @@ SPORT_CONFIGS = {
     },
     "ncaab": {
         "api_key": "basketball_ncaab",
-        "markets": "h2h,spreads,totals,player_points,player_assists,player_rebounds",
+        "markets": "h2h,spreads,totals",
         "icon": "🎓",
         "color": 3447003,
         "emergency_color": 15158332,
@@ -49,7 +51,7 @@ SPORT_CONFIGS = {
     },
     "soccer": {
         "api_key": "soccer_epl",
-        "markets": "spreads,totals",
+        "markets": "h2h,spreads,totals",
         "icon": "⚽",
         "color": 3066993,
         "emergency_color": 15158332,
@@ -64,7 +66,8 @@ SPORT_CONFIGS = {
         "name": "MMA"
     },
     "esports": {
-        "api_key": "esports_csgo",
+        # UPDATED: 'esports_csgo' is now 'esports_counterstrike'
+        "api_key": "esports_counterstrike",
         "markets": "h2h",
         "icon": "🎮",
         "color": 10181046,
@@ -72,7 +75,9 @@ SPORT_CONFIGS = {
         "name": "CS2"
     },
     "tennis": {
-        "api_key": "tennis_atp",
+        # UPDATED: The Odds API often uses specific tournament keys (e.g., tennis_atp_wimbledon)
+        # Use 'tennis_atp_aus_open_singles' or check active keys in the API docs.
+        "api_key": "tennis_atp_french_open", 
         "markets": "h2h",
         "icon": "🎾",
         "color": 11001111,
@@ -81,7 +86,7 @@ SPORT_CONFIGS = {
     }
 }
 
-# --- HELPERS ---
+# --- HELPERS (Same as before) ---
 def to_american(dec):
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
@@ -91,7 +96,6 @@ def log_bet_to_csv(matchup, market, selection, odds, ev_val, units, fair_price):
     with open('bets_log.csv', mode='a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
-            # FIXED: Exactly 9 columns to match clv-tracker and sgo-grader
             writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle'])
         writer.writerow([
             datetime.now().strftime("%Y-%m-%d"), 
@@ -109,17 +113,13 @@ def send_alert(p):
     except Exception as e:
         print(f"Webhook Failed: {e}")
 
-# --- CORE SCANNER ---
+# --- CORE SCANNER (Same logic, now with supported markets) ---
 def scan_sport(sport_key):
     config = SPORT_CONFIGS.get(sport_key)
-    if not config:
-        print(f"Unknown sport: {sport_key}")
-        return
+    if not config: return
 
     print(f"Scanning {config['name']}...")
-    if not ODDS_API_KEY:
-        print("Missing ODDS_API_KEY")
-        return
+    if not ODDS_API_KEY: return
 
     picks = []
     url = f"https://api.the-odds-api.com/v4/sports/{config['api_key']}/odds"
@@ -165,7 +165,7 @@ def scan_sport(sport_key):
                             ev = (s_price * probs[t]) - 1
                             if ev > 0.01:
                                 units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
-                                m_label = gid.split('_')[0].replace('pitcher_', '').replace('batter_', '').replace('player_', '').upper()
+                                m_label = gid.split('_')[0].upper()
                                 pt = f" {soft[t]['point']}" if soft[t]['point'] != '' else ""
                                 is_emergency = ev >= 0.05
                                 
@@ -178,28 +178,18 @@ def scan_sport(sport_key):
                                     "color": config['emergency_color'] if is_emergency else config['color'],
                                     "is_emergency": is_emergency
                                 })
-                                
-        # Send alerts for this specific sport
         if picks:
             for p in picks: send_alert(p)
-        else:
-            send_alert({
-                "msg": f"{config['icon']} **{config['name']} Scan Complete:** No edges found. Bankroll safe. 🛡️", 
-                "color": config['color'], 
-                "is_emergency": False
-            })
             
     except Exception as e:
         print(f"Error scanning {config['name']}: {e}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the Unified EV Scanner")
-    parser.add_argument("--sport", type=str, choices=list(SPORT_CONFIGS.keys()) + ["all"], default="all", help="Which sport to scan")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sport", type=str, default="all")
     args = parser.parse_args()
 
     if args.sport == "all":
-        print("Starting full multi-sport scan...")
-        for sport in SPORT_CONFIGS.keys():
-            scan_sport(sport)
+        for sport in SPORT_CONFIGS.keys(): scan_sport(sport)
     else:
         scan_sport(args.sport)
