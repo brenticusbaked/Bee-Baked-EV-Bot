@@ -41,7 +41,6 @@ def get_sgo_edges():
         return []
 
     picks = []
-    # SGO's master v2 endpoint
     url = "https://api.sportsgameodds.com/v2/events"
     params = {
         'apiKey': SGO_API_KEY,
@@ -62,16 +61,14 @@ def get_sgo_edges():
             odds_data = event.get('odds', {})
             market_groups = {}
             
-            # SGO organizes odds by unique oddIDs
             for odd_key, odd_obj in odds_data.items():
                 odd_id = odd_obj.get('oddID', odd_key)
                 parts = odd_id.split('-')
                 
-                # oddID format: stat-player-game-ou-over
                 if len(parts) >= 5:
                     stat_type = parts[0]
                     player_raw = parts[1]
-                    side = parts[4] # 'over' or 'under'
+                    side = parts[4]
                     
                     if stat_type in TARGET_STATS:
                         bookmaker = odd_obj.get('bookmakerID', 'unknown')
@@ -87,72 +84,13 @@ def get_sgo_edges():
                         if unique_id not in market_groups:
                             market_groups[unique_id] = {'sharp': {}, 'soft': {}}
                             
-                        # Use Pinnacle as sharp, US books as soft
                         if bookmaker == 'pinnacle':
                             market_groups[unique_id]['sharp'][side] = price
                         elif bookmaker in ['fanduel', 'draftkings', 'betmgm', 'espn', 'fanatics', 'bet365']:
-                            # Text-wrap safe logic!
-                            has_side = side in market_groups[unique_id]['soft']
-                            if not has_side or price > market_groups[unique_id]['soft'][side]['price']:
-                                market_groups[unique_id]['soft'][side] = {'price': price, 'book': bookmaker, 'line': line}
-
-            # Math Engine: Calculate EV against Pinnacle
-            for uid, val in market_groups.items():
-                sharp = val['sharp']
-                soft = val['soft']
-                
-                if 'over' in sharp and 'under' in sharp:
-                    p_over = sharp['over']
-                    p_under = sharp['under']
-                    
-                    vig = (1/p_over) + (1/p_under)
-                    probs = {
-                        'over': (1/p_over)/vig, 
-                        'under': (1/p_under)/vig
-                    }
-                    
-                    for side in ['over', 'under']:
-                        if side in soft:
-                            s_price = soft[side]['price']
-                            ev = (s_price * probs[side]) - 1
-                            
-                            # 2% minimum edge threshold
-                            if ev > 0.02:
-                                units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
-                                player_name, stat_name, line_val = uid.split('_')
-                                is_emergency = ev >= 0.06
-                                
-                                fair_american = to_american(1/probs[side])
-                                log_bet_to_csv(matchup, stat_name.upper(), f"{player_name} {side.upper()} {line_val}", to_american(s_price), ev, f"{units:.2f}", fair_american)
-                                
-                                header = "🚨 **SGO PROP EMERGENCY** 🚨" if is_emergency else "🎯 **NBA PROP ALERT** 🎯"
-                                picks.append({
-                                    "msg": f"{header}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {stat_name.upper()} | {player_name} {side.upper()} {line_val}\n**Book:** {soft[side]['book'].upper()} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
-                                    "color": 15158332 if is_emergency else 3447003,
-                                    "is_emergency": is_emergency
-                                })
-                                
-    except Exception as e:
-        print(f"Error parsing SGO API: {e}")
-        
-    return picks
-
-def main():
-    picks = get_sgo_edges()
-    if picks:
-        for p in picks: 
-            if DISCORD_WEBHOOK_URL:
-                requests.post(DISCORD_WEBHOOK_URL, json={
-                    "content": "@everyone" if p["is_emergency"] else "", 
-                    "embeds": [{"description": p["msg"], "color": p["color"], "image": {"url": FOOTER_IMG}}]
-                })
-    else:
-        if DISCORD_WEBHOOK_URL:
-            # Empty scan message now includes the footer image
-            requests.post(DISCORD_WEBHOOK_URL, json={
-                "embeds": [{"description": "🎯 **SGO Scan Complete:** No NBA player prop edges found.", "color": 3447003, "image": {"url": FOOTER_IMG}}]
-            })
-        print("No SGO Prop Edges Found.")
-
-if __name__ == "__main__":
-    main()
+                            # CLEANED UP LOGIC WITH PROPER COLONS
+                            soft_data = market_groups[unique_id]['soft']
+                            if side not in soft_data:
+                                soft_data[side] = {'price': price, 'book': bookmaker, 'line': line}
+                            else:
+                                if price > soft_data[side]['price']:
+                                    soft_data
