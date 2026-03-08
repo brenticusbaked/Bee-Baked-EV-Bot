@@ -1,12 +1,12 @@
-name: Weekly Performance Accountant
+name: Weekly Results & Accountant
 on:
   schedule:
-    - cron: '0 14 * * 1' # Monday Mornings
-  workflow_dispatch:
+    - cron: '0 15 * * 1' # Monday 9:00 AM CST
+  workflow_dispatch: 
 permissions:
-  contents: write
+  contents: write  
 jobs:
-  grade_and_report:
+  grade-and-report:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,11 +16,14 @@ jobs:
       - env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SPORTS_GAME_ODDS_API_KEY: ${{ secrets.SPORTS_GAME_ODDS_API_KEY }}
+        run: python sgo-grader.py
+      - name: Safe Commit Log
         run: |
-          python sgo-grader.py
-      - run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add bets_log.csv
-          git commit -m "Weekly bet grading complete" || echo "No changes"
-          git push
+          if [ -f bets_log.csv ]; then
+            git add bets_log.csv
+            git commit -m "Grade results" || echo "No changes"
+            git pull --rebase origin main
+            git push
+          fi
