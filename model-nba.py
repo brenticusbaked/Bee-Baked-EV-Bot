@@ -9,11 +9,15 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 BOOK_LINKS = {
-    'draftkings': 'https://sportsbook.draftkings.com/leagues/basketball/nba',
-    'fanduel': 'https://sportsbook.fanduel.com/navigation/nba',
-    'betmgm': 'https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9',
-    'bet365': 'https://www.bet365.com/#/AC/B18/C20604387/D48/E1453/F10/',
-    'pinnacle': 'https://www.pinnacle.com/en/basketball/nba/matchups'
+    'draftkings': 'https://sportsbook.draftkings.com/',
+    'fanduel': 'https://sportsbook.fanduel.com/',
+    'betmgm': 'https://sports.betmgm.com/',
+    'bet365': 'https://www.bet365.com/',
+    'espn': 'https://espnbet.com/',
+    'fanatics': 'https://sportsbook.fanatics.com/',
+    'kalshi': 'https://kalshi.com/',
+    'prizepicks': 'https://app.prizepicks.com/',
+    'pinnacle': 'https://spankodds.com/' # Free live odds screen to view sharp movement
 }
 
 def to_american(dec):

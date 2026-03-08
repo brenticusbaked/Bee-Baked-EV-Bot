@@ -9,11 +9,15 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 BOOK_LINKS = {
-    'draftkings': 'https://sportsbook.draftkings.com/leagues/baseball/mlb',
-    'fanduel': 'https://sportsbook.fanduel.com/navigation/mlb',
-    'betmgm': 'https://sports.betmgm.com/en/sports/baseball-23/betting/usa-9',
-    'bet365': 'https://www.bet365.com/#/AC/B16/C1/D50/E2/F73/',
-    'pinnacle': 'https://www.pinnacle.com/en/baseball/mlb/matchups'
+    'draftkings': 'https://sportsbook.draftkings.com/',
+    'fanduel': 'https://sportsbook.fanduel.com/',
+    'betmgm': 'https://sports.betmgm.com/',
+    'bet365': 'https://www.bet365.com/',
+    'espn': 'https://espnbet.com/',
+    'fanatics': 'https://sportsbook.fanatics.com/',
+    'kalshi': 'https://kalshi.com/',
+    'prizepicks': 'https://app.prizepicks.com/',
+    'pinnacle': 'https://spankodds.com/' # Free live odds screen to view sharp movement
 }
 
 def to_american(dec):
