@@ -24,4 +24,5 @@ jobs:
       - name: Run MLB Model
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }} # ADDED THIS LINE!
         run: python model-mlb.py
