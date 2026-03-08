@@ -1,0 +1,42 @@
+name: SGO NBA Prop Scanner
+
+on:
+  schedule:
+    # Runs every 10 minutes, BUT only during hours 22, 23, 0, 1, 2, 3, 4 UTC 
+    # (Which is 5:00 PM to 12:00 AM Eastern Time)
+    - cron: '*/10 22,23,0,1,2,3,4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-sgo-scanner:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests; fi
+
+      - name: Run SGO Prop Scanner
+        env:
+          SPORTS_GAME_ODDS_API_KEY: ${{ secrets.SPORTS_GAME_ODDS_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python bot-propodds-nba.py
+
+      - name: Commit and Push CSV Updates
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add bets_log.csv
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🏀 Auto-update bets_log.csv with new NBA Props" && git push)
