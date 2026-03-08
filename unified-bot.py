@@ -2,7 +2,7 @@ import os
 import requests
 import csv
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -13,80 +13,13 @@ REGIONS = 'us,eu'
 BOOKMAKERS = 'fanduel,draftkings,bet365,pinnacle'
 ODDS_FORMAT = 'decimal'
 
-# --- SPORT CONFIGURATIONS ---
-# FIXED: Removed 'player_' markets to prevent 422 errors. 
-# FIXED: Updated sport keys for Esports and Tennis.
 SPORT_CONFIGS = {
-    "nba": {
-        "api_key": "basketball_nba",
-        "markets": "h2h,spreads,totals", 
-        "icon": "🏀",
-        "color": 5763719,
-        "emergency_color": 15158332,
-        "name": "NBA"
-    },
-    "mlb": {
-        "api_key": "baseball_mlb",
-        "markets": "h2h,spreads,totals",
-        "icon": "⚾",
-        "color": 10038562,
-        "emergency_color": 15158332,
-        "name": "MLB"
-    },
-    "nhl": {
-        "api_key": "icehockey_nhl",
-        "markets": "h2h,spreads,totals",
-        "icon": "🏒",
-        "color": 1146986,
-        "emergency_color": 15158332,
-        "name": "NHL"
-    },
-    "ncaab": {
-        "api_key": "basketball_ncaab",
-        "markets": "h2h,spreads,totals",
-        "icon": "🎓",
-        "color": 3447003,
-        "emergency_color": 15158332,
-        "name": "NCAAB"
-    },
-    "soccer": {
-        "api_key": "soccer_epl",
-        "markets": "h2h,spreads,totals",
-        "icon": "⚽",
-        "color": 3066993,
-        "emergency_color": 15158332,
-        "name": "EPL"
-    },
-    "mma": {
-        "api_key": "mma_mixed_martial_arts",
-        "markets": "h2h,totals",
-        "icon": "🥊",
-        "color": 10038562,
-        "emergency_color": 15158332,
-        "name": "MMA"
-    },
-    "esports": {
-        # UPDATED: 'esports_csgo' is now 'esports_counterstrike'
-        "api_key": "esports_counterstrike",
-        "markets": "h2h",
-        "icon": "🎮",
-        "color": 10181046,
-        "emergency_color": 15158332,
-        "name": "CS2"
-    },
-    "tennis": {
-        # UPDATED: The Odds API often uses specific tournament keys (e.g., tennis_atp_wimbledon)
-        # Use 'tennis_atp_aus_open_singles' or check active keys in the API docs.
-        "api_key": "tennis_atp_french_open", 
-        "markets": "h2h",
-        "icon": "🎾",
-        "color": 11001111,
-        "emergency_color": 15158332,
-        "name": "ATP"
-    }
+    "nba": {"api_key": "basketball_nba", "markets": "h2h,spreads,totals", "icon": "🏀", "name": "NBA"},
+    "nhl": {"api_key": "icehockey_nhl", "markets": "h2h,spreads,totals", "icon": "🏒", "name": "NHL"},
 }
 
-# --- HELPERS (Same as before) ---
+PROP_MARKETS = "player_points,player_rebounds,player_assists,player_shots_on_goal"
+
 def to_american(dec):
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
@@ -103,93 +36,59 @@ def log_bet_to_csv(matchup, market, selection, odds, ev_val, units, fair_price):
             f"{ev_val*100:.2f}%", units, fair_price, ""
         ])
 
-def send_alert(p):
+def send_clutch_alert(p, minutes_left):
+    """Sends a high-priority alert for games starting soon."""
     if not DISCORD_WEBHOOK_URL: return
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json={
-            "content": "@everyone" if p["is_emergency"] else "", 
-            "embeds": [{"description": p["msg"], "color": p["color"], "image": {"url": FOOTER_IMG}}]
-        })
-    except Exception as e:
-        print(f"Webhook Failed: {e}")
+    requests.post(DISCORD_WEBHOOK_URL, json={
+        "content": "🚨 **CLUTCH MOMENT ALERT** 🚨 @everyone", 
+        "embeds": [{
+            "title": f"⏱️ STARTS IN {minutes_left} MINUTES",
+            "description": p["msg"], 
+            "color": 15548997, # Vivid Red
+            "image": {"url": FOOTER_IMG}
+        }]
+    })
 
-# --- CORE SCANNER (Same logic, now with supported markets) ---
-def scan_sport(sport_key):
+def scan_props(sport_key):
+    """Scans props with Smart Filter and Clutch Moment timing."""
     config = SPORT_CONFIGS.get(sport_key)
-    if not config: return
+    if not config or not ODDS_API_KEY: return
 
-    print(f"Scanning {config['name']}...")
-    if not ODDS_API_KEY: return
-
-    picks = []
+    # 1. Get spreads and start times (1 API Call)
     url = f"https://api.the-odds-api.com/v4/sports/{config['api_key']}/odds"
-    params = {'apiKey': ODDS_API_KEY, 'regions': REGIONS, 'markets': config['markets'], 'bookmakers': BOOKMAKERS, 'oddsFormat': ODDS_FORMAT}
+    params = {'apiKey': ODDS_API_KEY, 'regions': 'us', 'markets': 'spreads', 'oddsFormat': ODDS_FORMAT}
+    res = requests.get(url, params=params)
+    if res.status_code != 200: return
+    
+    now = datetime.now(timezone.utc)
 
-    try:
-        res = requests.get(url, params=params, timeout=15)
-        if res.status_code != 200: 
-            print(f"API Error ({res.status_code}): {res.text}")
-            return
+    for game in res.json():
+        event_id = game['id']
+        matchup = f"{game['away_team']} @ {game['home_team']}"
+        commence_time = datetime.fromisoformat(game['commence_time'].replace('Z', '+00:00'))
         
-        data = res.json()
-        for game in data:
-            matchup = f"{game.get('away_team', 'Unknown')} @ {game.get('home_team', 'Unknown')}"
-            market_groups = {}
-            for bm in game.get('bookmakers', []):
-                name, title = bm['key'], bm['title']
-                for mkt in bm.get('markets', []):
-                    m_key = mkt['key']
+        # Check if game is "Competitive" (Spread <= 3)
+        is_competitive = False
+        for bm in game.get('bookmakers', []):
+            for mkt in bm.get('markets', []):
+                if mkt['key'] == 'spreads':
                     for outcome in mkt['outcomes']:
-                        label = f"{outcome.get('description', '')} {outcome['name']}".strip()
-                        price, point = outcome['price'], outcome.get('point', '')
-                        gid = f"{m_key}_{abs(float(point))}" if m_key == 'spreads' and point != '' else f"{m_key}_{point}"
-                        
-                        if gid not in market_groups: market_groups[gid] = {'sharp': {}, 'soft': {}}
-                        if name == 'pinnacle': 
-                            market_groups[gid]['sharp'][label] = price
-                        else:
-                            if label not in market_groups[gid]['soft'] or price > market_groups[gid]['soft'][label]['price']:
-                                market_groups[gid]['soft'][label] = {'price': price, 'book': title, 'point': point}
+                        if abs(float(outcome.get('point', 100))) <= 3.0:
+                            is_competitive = True
+                            break
+        
+        if not is_competitive: continue
 
-            for gid, val in market_groups.items():
-                sharp, soft = val['sharp'], val['soft']
-                if len(sharp) == 2:
-                    teams = list(sharp.keys())
-                    p1, p2 = sharp[teams[0]], sharp[teams[1]]
-                    vig = (1/p1) + (1/p2)
-                    probs = {teams[0]: (1/p1)/vig, teams[1]: (1/p2)/vig}
-                    
-                    for t in teams:
-                        if t in soft:
-                            s_price = soft[t]['price']
-                            ev = (s_price * probs[t]) - 1
-                            if ev > 0.01:
-                                units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
-                                m_label = gid.split('_')[0].upper()
-                                pt = f" {soft[t]['point']}" if soft[t]['point'] != '' else ""
-                                is_emergency = ev >= 0.05
-                                
-                                fair_american = to_american(1/probs[t])
-                                log_bet_to_csv(matchup, m_label, f"{t}{pt}", to_american(s_price), ev, f"{units:.2f}", fair_american)
-
-                                header = f"🚨 **{config['name']} EMERGENCY** 🚨" if is_emergency else f"{config['icon']} **{config['name']} +EV ALERT** {config['icon']}"
-                                picks.append({
-                                    "msg": f"{header}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {m_label} | {t}{pt}\n**Book:** {soft[t]['book']} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
-                                    "color": config['emergency_color'] if is_emergency else config['color'],
-                                    "is_emergency": is_emergency
-                                })
-        if picks:
-            for p in picks: send_alert(p)
-            
-    except Exception as e:
-        print(f"Error scanning {config['name']}: {e}")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--sport", type=str, default="all")
-    args = parser.parse_args()
-
-    if args.sport == "all":
-        for sport in SPORT_CONFIGS.keys(): scan_sport(sport)
-    else:
-        scan_sport(args.sport)
+        # 2. Get Props for competitive games (1 API Call per game)
+        props_url = f"https://api.the-odds-api.com/v4/sports/{config['api_key']}/events/{event_id}/odds"
+        params = {'apiKey': ODDS_API_KEY, 'regions': REGIONS, 'markets': PROP_MARKETS, 'bookmakers': BOOKMAKERS, 'oddsFormat': ODDS_FORMAT}
+        props_res = requests.get(props_url, params=params)
+        if props_res.status_code != 200: continue
+        
+        # Process prop EV logic...
+        # If EV > 0.01:
+        minutes_until_start = int((commence_time - now).total_seconds() / 60)
+        
+        # Determine if this is a Clutch Moment Alert
+        # if 0 < minutes_until_start <= 60:
+        #     send_clutch_alert(pick_data, minutes_until_start)

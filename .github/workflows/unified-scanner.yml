@@ -1,63 +1,11 @@
-name: Unified EV Scanner
-
-on:
-  schedule:
-    # Runs twice a day at 14:00 UTC (10 AM EST) and 22:00 UTC (6 PM EST)
-    - cron: '0 14,22 * * *'
-  workflow_dispatch: 
-
-permissions:
-  contents: write
-
-jobs:
-  run-scanner:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Install Playwright Browsers
-        # This installs Chromium and the Linux system libraries needed to run it
-        run: npx playwright install --with-deps chromium
-
-      - name: Run Scanners (API & Playwright)
+- name: Run Unified Scanner & Competitive Props
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # 1. Run the Unified Odds API Scanner
-          python unified-bot.py --sport nba
-          python unified-bot.py --sport nhl
-          python unified-bot.py --sport soccer
-          python unified-bot.py --sport esports
-          python unified-bot.py --sport tennis
+          # 1. Scan Main Markets (H2H, Spreads, Totals)
+          python unified-bot.py --mode main
           
-          # 2. Run Playwright Scrapers
-          python scraper-bovada.py
-          python scraper-kambi.py
-          
-          # 3. Parse and Log Scraped Data
-          python parser-scrapers.py
-          
-          # Saturday-only MMA Rule
-          if [ "$(date +'%u')" -eq 6 ]; then
-            python unified-bot.py --sport mma
-          fi
-
-      - name: Commit and Push CSV Updates
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add bets_log.csv
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Auto-update bets_log.csv with new +EV plays" && git push)
+          # 2. Scan Smart-Filtered Player Props
+          # This only calls games where spread <= 3.0
+          python unified-bot.py --mode props
