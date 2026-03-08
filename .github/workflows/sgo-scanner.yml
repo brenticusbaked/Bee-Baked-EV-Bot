@@ -28,8 +28,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install Playwright Browsers
-        # This installs Chromium and the Linux system libraries needed to run it
-        run: npx playwright install --with-deps chromium
+        run: |
+          pip install playwright
+          # This command is the key for GitHub Actions servers
+          playwright install chromium --with-deps
 
       - name: Run Scanners (API & Playwright)
         env:
