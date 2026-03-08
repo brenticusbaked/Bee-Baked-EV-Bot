@@ -1,18 +1,85 @@
 import os
 import requests
+import csv # ADDED THIS
 from datetime import datetime
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+ODDS_API_KEY = os.getenv("ODDS_API_KEY") 
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
-def get_pitcher_stats(pitcher_id):
-    """
-    Fetches the pitcher's stats. 
-    It checks 2026 stats first, but falls back to 2025 since it's currently March.
-    """
-    current_year = datetime.now().year
+BOOK_LINKS = {
+    'draftkings': 'https://sportsbook.draftkings.com/leagues/baseball/mlb',
+    'fanduel': 'https://sportsbook.fanduel.com/navigation/mlb',
+    'betmgm': 'https://sports.betmgm.com/en/sports/baseball-23/betting/usa-9',
+    'bet365': 'https://www.bet365.com/#/AC/B16/C1/D50/E2/F73/',
+    'pinnacle': 'https://www.pinnacle.com/en/baseball/mlb/matchups'
+}
+
+def to_american(dec):
+    if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
+    return str(int(-100 / (dec - 1)))
+
+# --- ADDED THE CSV LOGGER ---
+def log_bet_to_csv(matchup, market, selection, odds, edge_val, units, fair_price):
+    file_exists = os.path.isfile('bets_log.csv')
+    with open('bets_log.csv', mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet'])
+        writer.writerow([
+            datetime.now().strftime("%Y-%m-%d"), 
+            matchup, market, selection, odds, 
+            f"{edge_val:.2f}%", units, fair_price
+        ])
+
+def get_best_moneyline(target_team):
+    if not ODDS_API_KEY: return None, None, None
     
+    url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
+    params = {
+        'apiKey': ODDS_API_KEY, 
+        'regions': 'us,eu', 
+        'markets': 'h2h', 
+        'bookmakers': 'fanduel,draftkings,betmgm,bet365,pinnacle',
+        'oddsFormat': 'decimal'
+    }
+    
+    try:
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code != 200: return None, None, None
+        
+        best_price = 0.0
+        best_book = "Unknown"
+        best_book_title = "Unknown"
+        
+        data = res.json()
+        for game in data:
+            if target_team in game['home_team'] or target_team in game['away_team']:
+                for bm in game.get('bookmakers', []):
+                    book_key = bm['key']
+                    book_title = bm['title']
+                    for mkt in bm.get('markets', []):
+                        if mkt['key'] == 'h2h':
+                            for outcome in mkt['outcomes']:
+                                if target_team in outcome['name']:
+                                    price = float(outcome['price'])
+                                    if price > best_price:
+                                        best_price = price
+                                        best_book = book_key
+                                        best_book_title = book_title
+                                        
+        if best_price > 0:
+            link = BOOK_LINKS.get(best_book, "https://www.google.com/search?q=" + best_book + "+mlb+odds")
+            return best_book_title, to_american(best_price), link
+            
+    except Exception as e:
+        print(f"Error fetching odds: {e}")
+        
+    return None, None, None
+
+def get_pitcher_stats(pitcher_id):
+    current_year = datetime.now().year
     for year in [current_year, current_year - 1]:
         url = f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}?hydrate=stats(group=[pitching],type=[season],season={year})"
         try:
@@ -28,19 +95,15 @@ def get_pitcher_stats(pitcher_id):
                             era = float(stats.get('era', 9.99))
                             whip = float(stats.get('whip', 2.00))
                             innings = float(stats.get('inningsPitched', 0))
-                            
-                            # Only trust the stats if they pitched at least 20 innings
                             if innings > 20:
                                 return era, whip
         except Exception as e:
             pass
-            
     return None, None
 
 def run_mlb_model():
     today = datetime.now().strftime("%Y-%m-%d")
     url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}&hydrate=probablePitcher"
-    
     alerts = []
     
     try:
@@ -58,35 +121,39 @@ def run_mlb_model():
         games = dates[0].get('games', [])
         
         for game in games:
-            matchup = f"{game['teams']['away']['team']['name']} @ {game['teams']['home']['team']['name']}"
+            away_team = game['teams']['away']['team']['name']
+            home_team = game['teams']['home']['team']['name']
+            matchup = f"{away_team} @ {home_team}"
             
-            # Extract probable pitchers
             away_pitcher = game['teams']['away'].get('probablePitcher')
             home_pitcher = game['teams']['home'].get('probablePitcher')
             
             if away_pitcher and home_pitcher:
-                away_id = away_pitcher['id']
-                away_name = away_pitcher['fullName']
-                
-                home_id = home_pitcher['id']
-                home_name = home_pitcher['fullName']
-                
-                # Fetch their underlying stats
-                a_era, a_whip = get_pitcher_stats(away_id)
-                h_era, h_whip = get_pitcher_stats(home_id)
+                a_era, a_whip = get_pitcher_stats(away_pitcher['id'])
+                h_era, h_whip = get_pitcher_stats(home_pitcher['id'])
                 
                 if a_era is not None and h_era is not None:
-                    # CALCULATE THE DIFFERENTIAL
                     era_diff = abs(a_era - h_era)
                     
-                    # If one pitcher is significantly better (ERA difference > 1.50)
                     if era_diff >= 1.50:
-                        better_team = "Away" if a_era < h_era else "Home"
-                        better_pitcher = away_name if a_era < h_era else home_name
-                        worse_pitcher = home_name if a_era < h_era else away_name
+                        is_away_better = a_era < h_era
+                        better_team = away_team if is_away_better else home_team
+                        better_pitcher = away_pitcher['fullName'] if is_away_better else home_pitcher['fullName']
+                        worse_pitcher = home_pitcher['fullName'] if is_away_better else away_pitcher['fullName']
                         
                         adv_era = min(a_era, h_era)
                         disadv_era = max(a_era, h_era)
+                        
+                        best_book, best_odds, bet_link = get_best_moneyline(better_team)
+                        
+                        odds_text = ""
+                        if best_book:
+                            odds_text = f"\n💰 **Best Odds:** {best_book} @ **{best_odds}**\n🔗 [Click here to bet on {best_book}]({bet_link})"
+                            # Log to CSV if we found playable odds! 
+                            # We use the ERA differential as the "Edge" metric for the accountant.
+                            log_bet_to_csv(matchup, "MODEL_ML", better_team, best_odds, era_diff, "1.00", "MODEL")
+                        else:
+                            odds_text = "\n⚠️ *Odds not yet available on major books.*"
                         
                         alerts.append(
                             f"⚾ **MLB MODEL MISMATCH DETECTED** ⚾\n"
@@ -95,14 +162,13 @@ def run_mlb_model():
                             f"**Advantage:** {better_team} ({better_pitcher})\n"
                             f"✅ {better_pitcher} ERA: **{adv_era:.2f}**\n"
                             f"❌ {worse_pitcher} ERA: **{disadv_era:.2f}**\n"
-                            f"**ERA Differential:** {era_diff:.2f}\n\n"
-                            f"💡 *Action:* Check Moneyline or First 5 Innings odds for {better_pitcher}'s team."
+                            f"**ERA Differential:** {era_diff:.2f}\n"
+                            f"{odds_text}"
                         )
                         
-        # Send alerts to Discord
         if alerts and DISCORD_WEBHOOK_URL:
             for msg in alerts:
-                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 3066993, "image": {"url": FOOTER_IMG}}]}) # Deep blue
+                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 3066993, "image": {"url": FOOTER_IMG}}]})
                 print("Model Alert Sent.")
         else:
             if DISCORD_WEBHOOK_URL:
