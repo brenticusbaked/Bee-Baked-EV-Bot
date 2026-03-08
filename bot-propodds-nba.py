@@ -143,3 +143,16 @@ def main():
         for p in picks: 
             if DISCORD_WEBHOOK_URL:
                 requests.post(DISCORD_WEBHOOK_URL, json={
+                    "content": "@everyone" if p["is_emergency"] else "", 
+                    "embeds": [{"description": p["msg"], "color": p["color"], "image": {"url": FOOTER_IMG}}]
+                })
+    else:
+        if DISCORD_WEBHOOK_URL:
+            # Empty scan message now includes the footer image
+            requests.post(DISCORD_WEBHOOK_URL, json={
+                "embeds": [{"description": "🎯 **SGO Scan Complete:** No NBA player prop edges found.", "color": 3447003, "image": {"url": FOOTER_IMG}}]
+            })
+        print("No SGO Prop Edges Found.")
+
+if __name__ == "__main__":
+    main()
