@@ -45,7 +45,8 @@ def get_best_moneyline(target_team):
         'apiKey': ODDS_API_KEY, 
         'regions': 'us,eu', 
         'markets': 'h2h', 
-        'bookmakers': 'fanduel,draftkings,betmgm,bet365,pinnacle',
+        # Added ESPN and Fanatics, removed Pinnacle!
+        'bookmakers': 'fanduel,draftkings,betmgm,bet365,espn,fanatics',
         'oddsFormat': 'decimal'
     }
     

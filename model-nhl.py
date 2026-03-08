@@ -39,7 +39,15 @@ def log_bet_to_csv(matchup, market, selection, odds, edge_val, units, fair_price
 def get_best_moneyline(target_team):
     if not ODDS_API_KEY: return None, None, None
     url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
-    params = {'apiKey': ODDS_API_KEY, 'regions': 'us,eu', 'markets': 'h2h', 'bookmakers': 'fanduel,draftkings,betmgm,bet365,pinnacle', 'oddsFormat': 'decimal'}
+    params = {
+        'apiKey': ODDS_API_KEY, 
+        'regions': 'us,eu', 
+        'markets': 'h2h', 
+        # Added ESPN and Fanatics, removed Pinnacle!
+        'bookmakers': 'fanduel,draftkings,betmgm,bet365,espn,fanatics',
+        'oddsFormat': 'decimal'
+    }
+
     try:
         res = requests.get(url, params=params, timeout=10)
         if res.status_code != 200: return None, None, None
