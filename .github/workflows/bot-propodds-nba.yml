@@ -29,10 +29,10 @@ jobs:
           pip install requests
           
       - name: Run Prop-Odds Bot
+        - name: Run NBA Props Bot
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # Calling the new secret here!
-          PROP_ODDS_API_KEY: ${{ secrets.PROP_ODDS_API_KEY }} 
+          SPORTS_GAME_ODDS_API_KEY: ${{ secrets.SPORTS_GAME_ODDS_API_KEY }}
         run: python bot-propodds-nba.py
         
       - name: Commit and Push Log
