@@ -28,7 +28,6 @@ def log_bet_to_csv(matchup, market, selection, odds, ev_val, units, fair_price):
     with open('bets_log.csv', mode='a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
-            # We ensure the CLV column is created from the start
             writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle'])
         writer.writerow([
             datetime.now().strftime("%Y-%m-%d"), 
@@ -92,5 +91,55 @@ def get_sgo_edges():
                         if bookmaker == 'pinnacle':
                             market_groups[unique_id]['sharp'][side] = price
                         elif bookmaker in ['fanduel', 'draftkings', 'betmgm', 'espn', 'fanatics', 'bet365']:
-                            # Only keep the best soft price for this side
-                            if side not in market_groups[unique_id]['soft']
+                            # Text-wrap safe logic!
+                            has_side = side in market_groups[unique_id]['soft']
+                            if not has_side or price > market_groups[unique_id]['soft'][side]['price']:
+                                market_groups[unique_id]['soft'][side] = {'price': price, 'book': bookmaker, 'line': line}
+
+            # Math Engine: Calculate EV against Pinnacle
+            for uid, val in market_groups.items():
+                sharp = val['sharp']
+                soft = val['soft']
+                
+                if 'over' in sharp and 'under' in sharp:
+                    p_over = sharp['over']
+                    p_under = sharp['under']
+                    
+                    vig = (1/p_over) + (1/p_under)
+                    probs = {
+                        'over': (1/p_over)/vig, 
+                        'under': (1/p_under)/vig
+                    }
+                    
+                    for side in ['over', 'under']:
+                        if side in soft:
+                            s_price = soft[side]['price']
+                            ev = (s_price * probs[side]) - 1
+                            
+                            # 2% minimum edge threshold
+                            if ev > 0.02:
+                                units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
+                                player_name, stat_name, line_val = uid.split('_')
+                                is_emergency = ev >= 0.06
+                                
+                                fair_american = to_american(1/probs[side])
+                                log_bet_to_csv(matchup, stat_name.upper(), f"{player_name} {side.upper()} {line_val}", to_american(s_price), ev, f"{units:.2f}", fair_american)
+                                
+                                header = "🚨 **SGO PROP EMERGENCY** 🚨" if is_emergency else "🎯 **NBA PROP ALERT** 🎯"
+                                picks.append({
+                                    "msg": f"{header}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {stat_name.upper()} | {player_name} {side.upper()} {line_val}\n**Book:** {soft[side]['book'].upper()} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
+                                    "color": 15158332 if is_emergency else 3447003,
+                                    "is_emergency": is_emergency
+                                })
+                                
+    except Exception as e:
+        print(f"Error parsing SGO API: {e}")
+        
+    return picks
+
+def main():
+    picks = get_sgo_edges()
+    if picks:
+        for p in picks: 
+            if DISCORD_WEBHOOK_URL:
+                requests.post(DISCORD_WEBHOOK_URL, json={
