@@ -52,6 +52,10 @@ def run_accountant():
                     bet_odds_str = row.get('Odds', '')
                     clv_str = row.get('Closing_Line_Pinnacle', '')
                     
+                    # SANITIZE EVEN ODDS
+                    if bet_odds_str.upper() == "EVEN": bet_odds_str = "+100"
+                    if clv_str.upper() == "EVEN": clv_str = "+100"
+                    
                     if clv_str and bet_odds_str:
                         clv_tracked += 1
                         bet_odds = float(bet_odds_str.replace('+', ''))

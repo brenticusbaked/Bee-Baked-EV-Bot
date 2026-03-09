@@ -20,14 +20,17 @@ def calculate_clv_report():
 
         total_bets = len(df)
         
-        # Clean the 'Edge' column (remove % and convert to float)
-        df['edge_val'] = df['Edge'].str.replace('%','').astype(float)
+        # Safely convert Edge to float, turning "SCRAPED" into NaN
+        df['edge_val'] = pd.to_numeric(df['Edge'].str.replace('%', ''), errors='coerce')
+        avg_ev = df['edge_val'].dropna().mean()
+
+        # Calculate true CLV (Comparing Bet Odds to Pinnacle Closing Odds)
+        df['Odds_Num'] = pd.to_numeric(df['Odds'].astype(str).str.replace('+', ''), errors='coerce')
+        df['CLV_Num'] = pd.to_numeric(df['Closing_Line_Pinnacle'].astype(str).str.replace('+', ''), errors='coerce')
         
-        # Calculate how many bets beat the sharp fair price (CLV)
-        # Any edge > 0 means you got a better price than the sharp 'Fair Price'
-        beat_clv_count = len(df[df['edge_val'] > 0])
-        clv_pct = (beat_clv_count / total_bets) * 100
-        avg_ev = df['edge_val'].mean()
+        # American odds: You beat the CLV if your Odds number is higher than the closing line
+        beat_clv_count = len(df.dropna(subset=['Odds_Num', 'CLV_Num'])[df['Odds_Num'] > df['CLV_Num']])
+        clv_pct = (beat_clv_count / total_bets) * 100 if total_bets > 0 else 0
 
         report = (
             f"📊 **WEEKLY $BEE BAKED CLV REPORT** 📊\n"
@@ -50,18 +53,4 @@ def main():
     payload = {
         "embeds": [{
             "title": "Weekly Market Performance",
-            "description": report_msg,
-            "color": 10181046, # Purple for CLV
-            "image": {"url": FOOTER_IMG}
-        }]
-    }
-    
-    if DISCORD_WEBHOOK_URL:
-        requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        print("✅ Weekly Summary sent to Discord.")
-    else:
-        print(report_msg)
-        print("❌ Discord URL missing.")
-
-if __name__ == "__main__":
-    main()
+            "description":

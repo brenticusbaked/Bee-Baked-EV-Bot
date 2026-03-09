@@ -28,11 +28,11 @@ def log_bet_to_csv(matchup, market, selection, odds, ev_val, units, fair_price):
     with open('bets_log.csv', mode='a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle'])
+            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle', 'Result'])
         writer.writerow([
             datetime.now().strftime("%Y-%m-%d"), 
             matchup, market, selection, odds, 
-            f"{ev_val*100:.2f}%", units, fair_price, ""
+            f"{ev_val*100:.2f}%", units, fair_price, "", ""
         ])
 
 def get_sgo_edges():
