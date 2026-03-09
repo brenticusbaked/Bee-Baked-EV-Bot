@@ -26,11 +26,12 @@ def log_bet_to_csv(matchup, market, selection, odds, edge_val, units, fair_price
     with open('bets_log.csv', mode='a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle'])
+            # Updated to 10 columns
+            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle', 'Result'])
         writer.writerow([
             datetime.now().strftime("%Y-%m-%d"), 
             matchup, market, selection, odds, 
-            f"{edge_val:.2f}%", units, fair_price, ""
+            f"{edge_val:.2f}%", units, fair_price, "", ""
         ])
 
 def get_best_puckline(target_team):
