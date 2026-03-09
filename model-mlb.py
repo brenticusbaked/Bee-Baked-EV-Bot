@@ -51,7 +51,17 @@ def run_mlb_model():
     res = requests.get(url)
     if res.status_code != 200: return
     
-    for game in res.json().get('dates', [{}])[0].get('games', []):
+    data = res.json()
+    dates = data.get('dates', [])
+    
+    # Safely handle days with no MLB games scheduled
+    if not dates:
+        print(f"No MLB games scheduled for {today}.")
+        if DISCORD_WEBHOOK_URL:
+            requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": "⚾ **MLB Model Run:** No games scheduled today.", "color": 3066993}]})
+        return
+        
+    for game in dates[0].get('games', []):
         away_p = game['teams']['away'].get('probablePitcher')
         home_p = game['teams']['home'].get('probablePitcher')
         
