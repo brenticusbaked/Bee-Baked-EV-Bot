@@ -34,6 +34,10 @@ def track_clv():
         updated_rows.append(header)
         
         for row in reader:
+            # Pad the row to match the header length to prevent IndexErrors on corrupted lines
+            while len(row) < len(header):
+                row.append("")
+                
             if not row[8]: # If Closing_Line_Pinnacle is empty
                 matchup = row[1].lower()
                 market = row[2].lower().replace('h2h_1st_half', 'h2h')
@@ -42,12 +46,4 @@ def track_clv():
                 # Create search key based on selection string
                 search_key = f"{matchup}_{market}_{selection}"
                 if search_key in pinnacle:
-                    row[8] = f"+{pinnacle[search_key]}" if pinnacle[search_key] > 0 else str(pinnacle[search_key])
-            updated_rows.append(row)
-
-    with open('bets_log.csv', mode='w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerows(updated_rows)
-
-if __name__ == "__main__":
-    track_clv()
+                    row[8] = f"+{pinnacle[search_key]}" if pinnacle[search_key] > 0 else str(pinnacle[search_key
