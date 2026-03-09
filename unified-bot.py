@@ -2,7 +2,7 @@ import os
 import requests
 import csv
 import argparse
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -13,7 +13,6 @@ REGIONS = 'us,eu'
 BOOKMAKERS = 'fanduel,draftkings,bet365,pinnacle'
 ODDS_FORMAT = 'decimal'
 
-# Updated sport keys and main markets
 SPORT_CONFIGS = {
     "nba": {"api_key": "basketball_nba", "markets": "h2h,spreads,totals", "icon": "🏀", "name": "NBA"},
     "nhl": {"api_key": "icehockey_nhl", "markets": "h2h,spreads,totals", "icon": "🏒", "name": "NHL"},
@@ -25,41 +24,137 @@ SPORT_CONFIGS = {
 
 PROP_MARKETS = "player_points,player_rebounds,player_assists,player_shots_on_goal"
 
+# Global list to hold all found bets before sending them
+DISCORD_BATCH = []
+
 def to_american(dec):
-    """Converts decimal odds to American format string."""
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
 
+def is_already_logged(matchup, market, selection):
+    """Checks if we have already logged this specific bet today to prevent spam."""
+    if not os.path.exists('bets_log.csv'): return False
+    today = datetime.now().strftime("%Y-%m-%d")
+    with open('bets_log.csv', 'r') as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) > 3 and row[0] == today:
+                if row[1] == matchup and row[2].upper() == market.upper() and row[3] == selection:
+                    return True
+    return False
+
 def log_bet_to_csv(matchup, market, selection, odds, ev_val, units, fair_price):
-    """Logs the identified +EV bet to bets_log.csv for tracking."""
     file_exists = os.path.isfile('bets_log.csv')
     with open('bets_log.csv', mode='a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle'])
-        writer.writerow([datetime.now().strftime("%Y-%m-%d"), matchup, market, selection, odds, f"{ev_val*100:.2f}%", units, fair_price, ""])
+            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle', 'Result'])
+        writer.writerow([datetime.now().strftime("%Y-%m-%d"), matchup, market, selection, odds, f"{ev_val*100:.2f}%", units, fair_price, "", ""])
 
-def send_alert(msg, is_clutch=False, minutes_left=0):
-    """Sends a formatted alert to the Discord webhook."""
-    if not DISCORD_WEBHOOK_URL: return
-    color = 15548997 if is_clutch else 5763719
-    content = "🚨 **CLUTCH MOMENT ALERT** 🚨 @everyone" if is_clutch else ""
-    title = f"⏱️ STARTS IN {minutes_left} MINUTES" if is_clutch else "🔥 +EV OPPORTUNITY"
+def process_odds_data(game_data, config, commence_time, now):
+    """Processes odds for a single game and queues any found edges into the batch list."""
+    matchup = f"{game_data['away_team']} @ {game_data['home_team']}"
+    market_data = {}
+
+    for bm in game_data.get('bookmakers', []):
+        for mkt in bm['markets']:
+            mkey = mkt['key']
+            if mkey not in market_data: market_data[mkey] = {}
+            for outcome in mkt['outcomes']:
+                okey = f"{outcome['name']}_{outcome.get('point', '')}"
+                if okey not in market_data[mkey]: market_data[mkey][okey] = {'pinnacle': None, 'softs': []}
+                
+                price = float(outcome['price'])
+                if bm['key'] == 'pinnacle':
+                    market_data[mkey][okey]['pinnacle'] = price
+                else:
+                    market_data[mkey][okey]['softs'].append({'book': bm['title'], 'price': price})
+
+    for mkey, outcomes in market_data.items():
+        for okey, data in outcomes.items():
+            if data['pinnacle'] and data['softs']:
+                fair_price = data['pinnacle'] * 0.97 
+                for soft in data['softs']:
+                    ev = (soft['price'] / fair_price) - 1
+                    if ev >= 0.03:
+                        selection = okey.replace('_', ' ').strip()
+                        units = min((ev / (soft['price'] - 1)) / 4 * 100, 5.0)
+                        
+                        DISCORD_BATCH.append({
+                            'matchup': matchup,
+                            'market': mkey,
+                            'selection': selection,
+                            'odds_american': to_american(soft['price']),
+                            'ev': ev,
+                            'units': units,
+                            'fair_price': to_american(fair_price),
+                            'book': soft['book'],
+                            'icon': config['icon']
+                        })
+
+def flush_alerts():
+    """Deduplicates conflicting bets, filters out previously logged bets, and sends ONE Discord message."""
+    if not DISCORD_BATCH: 
+        print("No new +EV bets found.")
+        return
+        
+    best_bets = {}
     
-    payload = {
-        "content": content,
-        "embeds": [{
-            "title": title,
-            "description": msg,
-            "color": color,
-            "image": {"url": FOOTER_IMG},
-            "footer": {"text": "Bee-Baked Automated Syndicate"}
-        }]
-    }
-    requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    # 1. Resolve Contradictions and Duplicates
+    for bet in DISCORD_BATCH:
+        mkey = bet['market'].lower()
+        sel = bet['selection'].lower()
+        matchup = bet['matchup']
+        
+        # Create a unique key to group conflicting bets
+        if mkey in ['h2h', 'spreads', 'totals']:
+            # For main markets, only allow ONE bet per game per market
+            c_key = f"{matchup}_{mkey}"
+        else:
+            # For props, isolate the player's name so Over/Under conflict
+            player = sel.split(' over ')[0].split(' under ')[0]
+            c_key = f"{matchup}_{mkey}_{player}"
+            
+        # Keep only the bet with the highest EV in its conflict group
+        if c_key not in best_bets or bet['ev'] > best_bets[c_key]['ev']:
+            best_bets[c_key] = bet
+            
+    # 2. Filter out bets we already logged today
+    final_bets = []
+    for bet in best_bets.values():
+        if not is_already_logged(bet['matchup'], bet['market'], bet['selection']):
+            final_bets.append(bet)
+            # Save to CSV now that it's approved
+            log_bet_to_csv(bet['matchup'], bet['market'].upper(), bet['selection'], bet['odds_american'], bet['ev'], f"{bet['units']:.2f}", bet['fair_price'])
+
+    if not final_bets:
+        print("All found bets were already logged today. Skipping Discord alert.")
+        return
+        
+    # 3. Build and send the consolidated Discord message
+    final_bets.sort(key=lambda x: x['ev'], reverse=True) # Sort highest edge first
+    
+    description = ""
+    for b in final_bets:
+        row = f"{b['icon']} **{b['market'].upper()}** | {b['matchup']}\n↳ **{b['selection']}** | **{b['book']}** @ {b['odds_american']} (Edge: {b['ev']*100:.1f}%)\n\n"
+        # Discord limit is 4096 characters per description
+        if len(description) + len(row) < 4000:
+            description += row
+            
+    if DISCORD_WEBHOOK_URL:
+        payload = {
+            "embeds": [{
+                "title": f"🔥 {len(final_bets)} NEW +EV OPPORTUNITIES 🔥",
+                "description": description,
+                "color": 5763719,
+                "image": {"url": FOOTER_IMG},
+                "footer": {"text": "Bee-Baked Automated Syndicate"}
+            }]
+        }
+        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        print(f"Sent consolidated alert for {len(final_bets)} bets.")
 
 def scan_props(sport_key):
-    """Scans for +EV player props in competitive games."""
     config = SPORT_CONFIGS.get(sport_key)
     if not config or not ODDS_API_KEY: return
     print(f"Filtering competitive games for {config['name']} props...")
@@ -71,7 +166,6 @@ def scan_props(sport_key):
     now = datetime.now(timezone.utc)
     for game in res.json():
         commence_time = datetime.fromisoformat(game['commence_time'].replace('Z', '+00:00'))
-        # Only look at props for games with a spread of 3 points or less
         is_competitive = any(abs(float(o['point'])) <= 3.0 for bm in game['bookmakers'] for m in bm['markets'] for o in m['outcomes'] if m['key'] == 'spreads')
         
         if is_competitive:
@@ -81,7 +175,6 @@ def scan_props(sport_key):
                 process_odds_data(props_res.json(), config, commence_time, now)
 
 def scan_sport(sport_key):
-    """Scans main markets for a specific sport for +EV opportunities."""
     config = SPORT_CONFIGS.get(sport_key)
     if not config or not ODDS_API_KEY: return
     print(f"Scanning {config['name']} main markets...")
@@ -91,56 +184,13 @@ def scan_sport(sport_key):
     
     try:
         res = requests.get(url, params=params, timeout=15)
-        if res.status_code != 200: return
-        
-        for game in res.json():
-            commence_time = datetime.fromisoformat(game['commence_time'].replace('Z', '+00:00'))
-            process_odds_data(game, config, commence_time, datetime.now(timezone.utc))
+        if res.status_code == 200:
+            now = datetime.now(timezone.utc)
+            for game in res.json():
+                commence_time = datetime.fromisoformat(game['commence_time'].replace('Z', '+00:00'))
+                process_odds_data(game, config, commence_time, now)
     except Exception as e:
         print(f"Error scanning {sport_key}: {e}")
-
-def process_odds_data(game_data, config, commence_time, now):
-    """Processes odds for a single game/event to identify edges against Pinnacle."""
-    matchup = f"{game_data['away_team']} @ {game_data['home_team']}"
-    market_data = {}
-
-    # Organize bookmaker data by market and specific outcome
-    bookmakers = game_data.get('bookmakers', [])
-    for bm in bookmakers:
-        for mkt in bm['markets']:
-            mkey = mkt['key']
-            if mkey not in market_data: market_data[mkey] = {}
-            for outcome in mkt['outcomes']:
-                # Create a unique key for the outcome (e.g., Team Name + Point Spread)
-                okey = f"{outcome['name']}_{outcome.get('point', '')}"
-                if okey not in market_data[mkey]: market_data[mkey][okey] = {'pinnacle': None, 'softs': []}
-                
-                price = float(outcome['price'])
-                if bm['key'] == 'pinnacle':
-                    market_data[mkey][okey]['pinnacle'] = price
-                else:
-                    market_data[mkey][okey]['softs'].append({'book': bm['title'], 'price': price})
-
-    # Compare soft books against Pinnacle (sharp line)
-    for mkey, outcomes in market_data.items():
-        for okey, data in outcomes.items():
-            if data['pinnacle'] and data['softs']:
-                # Estimate fair price by removing estimated Pinnacle vig (approx 3%)
-                fair_price = data['pinnacle'] * 0.97 
-                for soft in data['softs']:
-                    ev = (soft['price'] / fair_price) - 1
-                    if ev >= 0.03: # Alert if Expected Value is 3% or higher
-                        selection = okey.replace('_', ' ').strip()
-                        # Suggest Kelly Criterion units (fractional)
-                        units = min((ev / (soft['price'] - 1)) / 4 * 100, 5.0)
-                        
-                        mins_left = int((commence_time - now).total_seconds() / 60)
-                        is_clutch = 0 < mins_left <= 60
-
-                        log_bet_to_csv(matchup, mkey.upper(), selection, to_american(soft['price']), ev, f"{units:.2f}", to_american(fair_price))
-                        
-                        msg = f"**Match:** {matchup}\n**Market:** {mkey.upper()}\n**Bet:** {selection}\n**Book:** {soft['book']} @ {to_american(soft['price'])}\n**Edge:** {ev*100:.1f}% | **Units:** {units:.2f}"
-                        send_alert(f"{config['icon']} {msg}", is_clutch=is_clutch, minutes_left=mins_left)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -148,10 +198,13 @@ if __name__ == "__main__":
     parser.add_argument("--sport", type=str, default="all")
     args = parser.parse_args()
 
+    # Step 1: Run the requested scans (adds edges to DISCORD_BATCH)
     if args.mode == "props":
-        # Scanning major sports for props when in props mode
         for s in ["nba", "nhl"]: scan_props(s)
     elif args.sport == "all":
         for s in SPORT_CONFIGS: scan_sport(s)
     else:
         scan_sport(args.sport)
+        
+    # Step 2: Flush the alerts (Deduplicates, logs, and sends ONE Discord message)
+    flush_alerts()

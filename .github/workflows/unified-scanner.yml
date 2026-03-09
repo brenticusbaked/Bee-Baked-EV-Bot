@@ -1,13 +1,16 @@
 name: Unified EV Scanner
+
 on:
   schedule:
     - cron: '*/30 * * * *'  # Standard 30-minute scan for daily sports
     - cron: '0 18-23 * * 6' # MMA Peak: Every hour from 6 PM to 11 PM UTC on Saturdays
-  workflow_dispatch:
+  workflow_dispatch:        # Allows manual trigger button
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
+    # FIXED: Reverted to ubuntu-22.04 to resolve the Playwright libasound2 dependency crash
+    runs-on: ubuntu-22.04 
+    
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -18,27 +21,41 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          # Install Playwright browsers (ubuntu-22.04 natively supports the older dependencies)
+          playwright install --with-deps chromium
 
-      # Run standard sports
-      - name: Run Daily Sports
+      - name: Run Main Market Scanner
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python unified-bot.py --mode main --sport all
 
-      # Add MMA specifically for Saturdays or if sport is available
-      - name: Run MMA Scanner
+      - name: Run MMA Scanner (Saturdays)
+        # Only runs if triggered by the Saturday cron or manually
         if: github.event.schedule == '0 18-23 * * 6' || github.event_name == 'workflow_dispatch'
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python unified-bot.py --mode main --sport mma
 
+      - name: Run NBA/NHL Prop Scanner
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python unified-bot.py --mode props
+
+      - name: Track Closing Line Value (CLV)
+        # Runs the repaired CLV script to update lines for pending bets
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: python clv-tracker.py
+
       - name: Commit Logs
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add bets_log.csv
-          git commit -m "Update bets log [skip ci]" || echo "No changes to commit"
+          git commit -m "Update bets log and CLV [skip ci]" || echo "No changes to commit"
           git push
