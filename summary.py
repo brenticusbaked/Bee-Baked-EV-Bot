@@ -20,8 +20,8 @@ def calculate_clv_report():
 
         total_bets = len(df)
         
-        # Safely convert Edge to float, turning "SCRAPED" into NaN
-        df['edge_val'] = pd.to_numeric(df['Edge'].str.replace('%', ''), errors='coerce')
+        # SAFELY convert Edge to float by enforcing string type first, turning "SCRAPED" into NaN
+        df['edge_val'] = pd.to_numeric(df['Edge'].astype(str).str.replace('%', ''), errors='coerce')
         avg_ev = df['edge_val'].dropna().mean()
 
         # Calculate true CLV (Comparing Bet Odds to Pinnacle Closing Odds)
