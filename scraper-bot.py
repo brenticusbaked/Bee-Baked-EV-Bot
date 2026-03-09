@@ -78,3 +78,16 @@ def scrape_news():
                 }
                 requests.post(DISCORD_WEBHOOK_URL, json=payload)
                 print(f"🚨 Alert sent: {alert['title']}")
+        elif not alerts:
+            print("No new injury alerts found.")
+        else:
+            print("Alerts found, but DISCORD_WEBHOOK_URL is not set.")
+
+    except Exception as e:
+        print(f"An error occurred during scraping: {e}")
+
+# --- EXECUTION BLOCK ---
+if __name__ == "__main__":
+    print(f"Starting injury scraper at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
+    scrape_news()
+    print("Scraping finished.")
