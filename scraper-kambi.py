@@ -1,5 +1,5 @@
 import os
-import csv
+import json
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
@@ -49,5 +49,4 @@ def scrape_kambi(url):
 if __name__ == "__main__":
     # Example for BetRivers Illinois
     betrivers_nba = "https://il.betrivers.com/?page=sportsbook#filter/basketball/nba"
-    data = scrape_kambi(betrivers_nba)
-    print(f"Found {len(data)} live Kambi events.")
+    data = scrape_k

@@ -12,15 +12,16 @@ TRACKER_FILE = "seen_news.txt"
 def get_seen_news():
     """Reads the local file to see which news updates we've already alerted you about."""
     if not os.path.exists(TRACKER_FILE):
-        return set()
+        return []
     with open(TRACKER_FILE, "r") as f:
-        return set(line.strip() for line in f.readlines())
+        return [line.strip() for line in f.readlines()]
 
 def save_seen_news(news_ids):
     """Saves the latest news IDs back to the file so we don't spam Discord."""
     # We only keep the last 50 IDs to keep the file small and fast
     with open(TRACKER_FILE, "w") as f:
-        for nid in list(news_ids)[:50]:
+        # Save the last 50 items (the most recent ones)
+        for nid in news_ids[-50:]:
             f.write(f"{nid}\n")
 
 def scrape_news():
@@ -45,7 +46,8 @@ def scrape_news():
             
             # If we haven't seen this specific news alert yet...
             if guid not in seen:
-                new_seen.add(guid)
+                # Append to the end of our ordered list
+                new_seen.append(guid)
                 
                 # Check for critical injury keywords
                 keywords = ["out", "injury", "questionable", "will not play", "miss", "surgery", "downgraded"]
@@ -76,11 +78,3 @@ def scrape_news():
                 }
                 requests.post(DISCORD_WEBHOOK_URL, json=payload)
                 print(f"🚨 Alert sent: {alert['title']}")
-        else:
-            print("No new injury updates found.")
-                
-    except Exception as e:
-        print(f"❌ Error scraping news: {e}")
-
-if __name__ == "__main__":
-    scrape_news()
