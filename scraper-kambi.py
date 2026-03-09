@@ -49,4 +49,13 @@ def scrape_kambi(url):
 if __name__ == "__main__":
     # Example for BetRivers Illinois
     betrivers_nba = "https://il.betrivers.com/?page=sportsbook#filter/basketball/nba"
-    data = scrape_k
+    
+    # Correctly calling the function without the typo
+    data = scrape_kambi(betrivers_nba)
+    
+    if data:
+        with open("kambi_lines.json", "w") as f:
+            json.dump(data, f, indent=4)
+        print(f"Saved {len(data)} live Kambi events.")
+    else:
+        print("No Kambi events found to save.")
