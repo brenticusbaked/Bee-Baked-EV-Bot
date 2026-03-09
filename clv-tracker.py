@@ -46,4 +46,4 @@ def track_clv():
                 # Create search key based on selection string
                 search_key = f"{matchup}_{market}_{selection}"
                 if search_key in pinnacle:
-                    row[8] = f"+{pinnacle[search_key]}" if pinnacle[search_key] > 0 else str(pinnacle[search_key
+                    row[8] = f"+{pinnacle[search_key]}" if pinnacle[search_key] > 0 else str(pinnacle[search_key)]
