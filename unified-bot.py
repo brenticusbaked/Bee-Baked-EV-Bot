@@ -81,7 +81,8 @@ def process_odds_data(game_data, config):
     market_data = {}
 
     for bm in game_data.get('bookmakers', []):
-        for mkt in bm['markets']:
+        # SAFELY check for markets using .get()
+        for mkt in bm.get('markets', []):
             mkey = mkt['key']
             if mkey not in market_data:
                 market_data[mkey] = {}
