@@ -29,18 +29,31 @@ def parse_bovada_json(filepath):
     """Parses Bovada raw network capture into the CSV log."""
     if not os.path.exists(filepath): return
     with open(filepath, 'r') as f:
-        data = json.load(f)
-        for event_group in data:
-            for event in event_group.get('path', [{}])[0].get('events', []):
-                matchup = event.get('description')
-                for display_group in event.get('displayGroups', []):
-                    if display_group.get('description') == 'Game Lines':
-                        for market in display_group.get('markets', []):
-                            if market.get('description') == 'Moneyline':
-                                for outcome in market.get('outcomes', []):
-                                    selection = outcome.get('description')
-                                    price = outcome.get('price', {}).get('american')
-                                    log_parsed_bet(matchup, "MONEYLINE", f"Bovada: {selection}", price)
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            print("Error: JSON file is corrupted or empty.")
+            return
+            
+        # SAFELY ensure the data is a list of events, not an API error dict
+        if isinstance(data, list):
+            for event_group in data:
+                if isinstance(event_group, dict):
+                    for event in event_group.get('path', [{}])[0].get('events', []):
+                        matchup = event.get('description')
+                        for display_group in event.get('displayGroups', []):
+                            if display_group.get('description') == 'Game Lines':
+                                for market in display_group.get('markets', []):
+                                    if market.get('description') == 'Moneyline':
+                                        for outcome in market.get('outcomes', []):
+                                            selection = outcome.get('description')
+                                            price = outcome.get('price', {}).get('american')
+                                            
+                                            # Only log if a price actually exists
+                                            if price: 
+                                                log_parsed_bet(matchup, "MONEYLINE", f"Bovada: {selection}", price)
+        else:
+            print("Bovada data was blocked or returned unexpected format.")
 
 if __name__ == "__main__":
     print("Parsing raw scraper data...")

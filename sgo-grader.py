@@ -5,7 +5,6 @@ from datetime import datetime
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-# FIXED: Updated to match the variable name defined in the sgo-scanner.yml
 SGO_API_KEY = os.getenv("SGO_API_KEY") 
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
@@ -62,15 +61,11 @@ def run_grader():
             selection = row[3].lower()
             
             if bet_date < today and not row[res_idx]:
-                
-                # FIXED: Check against the actual market names logged by unified-bot.py
                 if market in ['player_points', 'player_assists', 'player_rebounds']:
-                    
                     if bet_date not in daily_stats_cache:
                         daily_stats_cache[bet_date] = get_sgo_results(bet_date)
                         
                     stats_map = daily_stats_cache[bet_date]
-                    
                     is_over = "over" in selection
                     split_word = " over " if is_over else " under "
                     
@@ -80,23 +75,27 @@ def run_grader():
                         line = float(parts[1].strip())
                         
                         if player_name in stats_map:
-                            # FIXED: Map 'player_points' back to 'points' for the SGO dictionary lookup
                             sgo_stat_key = market.replace('player_', '')
                             actual = stats_map[player_name].get(sgo_stat_key, 0)
                             
-                            win = (actual > line) if is_over else (actual < line)
-                            row[res_idx] = "WIN" if win else "LOSS"
-                            
-                            odds = float(row[4].replace('+', '')) if '+' in row[4] else float(row[4])
-                            units = float(row[6])
-                            
-                            if win:
-                                p = units * (odds/100) if odds > 0 else units * (100/abs(odds))
-                                profit += p
+                            # SAFELY handle Pushes so you don't lose fake money
+                            if actual == line:
+                                row[res_idx] = "PUSH"
+                                results_found += 1
                             else:
-                                profit -= units
+                                win = (actual > line) if is_over else (actual < line)
+                                row[res_idx] = "WIN" if win else "LOSS"
                                 
-                            results_found += 1
+                                odds = float(row[4].replace('+', '')) if '+' in row[4] else float(row[4])
+                                units = float(row[6])
+                                
+                                if win:
+                                    p = units * (odds/100) if odds > 0 else units * (100/abs(odds))
+                                    profit += p
+                                else:
+                                    profit -= units
+                                    
+                                results_found += 1
             
             updated_rows.append(row)
 
