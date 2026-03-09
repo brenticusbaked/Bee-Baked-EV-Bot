@@ -23,7 +23,7 @@ jobs:
         env:
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python sgo-grader.py # Or your specific SGO script name
+        run: python sgo-grader.py
 
       - name: Commit and Push
         run: |
