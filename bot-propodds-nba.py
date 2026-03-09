@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-SGO_API_KEY = os.getenv("SPORTS_GAME_ODDS_API_KEY") 
+SGO_API_KEY = os.getenv("SGO_API_KEY") 
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 TARGET_STATS = ['points', 'assists']
