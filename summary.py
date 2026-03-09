@@ -53,4 +53,18 @@ def main():
     payload = {
         "embeds": [{
             "title": "Weekly Market Performance",
-            "description":
+            "description": report_msg,
+            "color": 10181046, # Purple for CLV
+            "image": {"url": FOOTER_IMG}
+        }]
+    }
+    
+    if DISCORD_WEBHOOK_URL:
+        requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        print("✅ Weekly Summary sent to Discord.")
+    else:
+        print(report_msg)
+        print("❌ Discord URL missing.")
+
+if __name__ == "__main__":
+    main()
