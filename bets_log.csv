@@ -90,3 +90,4 @@ Date,Matchup,Market,Selection,Odds,Edge,Units,FairPriceAtBet,Closing_Line_Pinnac
 2026-03-09,Calgary @ Washington,MODEL_NHL_PUCKLINE,Washington -1.5,+129,42.00%,1.00,MODEL,,
 2026-03-09,Utah @ Chicago,MODEL_NHL_PUCKLINE,Utah -1.5,+127,64.00%,1.00,MODEL,,
 2026-03-09,Ottawa @ Vancouver,MODEL_NHL_PUCKLINE,Ottawa -1.5,+114,85.00%,1.00,MODEL,,
+2026-03-09,Philadelphia 76ers @ Cleveland Cavaliers,MODEL_NBA_SPREAD,Philadelphia 76ers 12.5,-109,5.00%,1.00,MODEL,,
