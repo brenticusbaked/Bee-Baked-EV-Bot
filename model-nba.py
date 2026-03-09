@@ -93,14 +93,20 @@ def run_nba_model():
     today_obj = datetime.now()
     yesterday_obj = today_obj - timedelta(days=1)
     
+    # SAFELY check for competitions existence
     teams_played_yesterday = [
         comp['team']['displayName']
         for game in get_espn_schedule(yesterday_obj.strftime("%Y%m%d"))
-        for comp in game['competitions'][0]['competitors']
+        if game.get('competitions') 
+        for comp in game['competitions'][0].get('competitors', [])
     ]
             
     alerts = []
     for game in get_espn_schedule(today_obj.strftime("%Y%m%d")):
+        # Skip if game has no competitions block (postponed/TBD)
+        if not game.get('competitions'):
+            continue
+            
         comp = game['competitions'][0]
         away_team = next(c for c in comp['competitors'] if c['homeAway'] == 'away')['team']['displayName']
         home_team = next(c for c in comp['competitors'] if c['homeAway'] == 'home')['team']['displayName']
