@@ -46,7 +46,7 @@ def is_already_logged(matchup, market, selection):
     """Checks bets_log.csv to prevent duplicate alerts for the same bet on the same day."""
     if not os.path.exists('bets_log.csv'):
         return False
-    today = datetime.now().strftime("%Y-%m-%d")
+    row[8] = f"+{pinnacle[search_key]}" if pinnacle[search_key] > 0 else str(pinnacle[search_key])
     with open('bets_log.csv', 'r') as f:
         reader = csv.reader(f)
         for row in reader:
