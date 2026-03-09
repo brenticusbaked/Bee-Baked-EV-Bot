@@ -50,4 +50,5 @@ def process_odds_data(game_data, config):
             if mkey not in market_data: market_data[mkey] = {}
             for outcome in mkt['outcomes']:
                 okey = f"{outcome['name']}_{outcome.get('point', '')}"
-                if okey not in market_data[mkey]: market_data[mkey][okey] = {'pinnacle':
+                if okey not in market_data[mkey]: 
+    market_data[mkey][okey] = {'pinnacle': None, 'softs': []}
