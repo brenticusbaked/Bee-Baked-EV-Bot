@@ -1,8 +1,9 @@
 name: Unified EV Scanner
 on:
   schedule:
-    - cron: '*/30 * * * *' # Runs every 30 minutes
-  workflow_dispatch: # Allows manual trigger
+    - cron: '*/30 * * * *'  # Standard 30-minute scan for daily sports
+    - cron: '0 18-23 * * 6' # MMA Peak: Every hour from 6 PM to 11 PM UTC on Saturdays
+  workflow_dispatch:
 
 jobs:
   scan:
@@ -17,23 +18,22 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: |
-          pip install -r requirements.txt
-          # If using Playwright for the scrapers you mentioned
-          pip install playwright
-          playwright install chromium
+        run: pip install -r requirements.txt
 
-      - name: Run Main Market Scanner
+      # Run standard sports
+      - name: Run Daily Sports
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python unified-bot.py --mode main --sport all
 
-      - name: Run NBA/NHL Prop Scanner
+      # Add MMA specifically for Saturdays or if sport is available
+      - name: Run MMA Scanner
+        if: github.event.schedule == '0 18-23 * * 6' || github.event_name == 'workflow_dispatch'
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python unified-bot.py --mode props
+        run: python unified-bot.py --mode main --sport mma
 
       - name: Commit Logs
         run: |
