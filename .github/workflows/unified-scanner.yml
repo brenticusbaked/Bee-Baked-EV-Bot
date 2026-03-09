@@ -1,20 +1,14 @@
 name: Unified EV Scanner
-
 on:
   schedule:
-    - cron: '0 14,22 * * *'
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    - cron: '*/30 * * * *' # Runs every 30 minutes
+  workflow_dispatch: # Allows manual trigger
 
 jobs:
-  run-scanner:
-    # This is the magic fix. 22.04 has the libraries Playwright needs.
-    runs-on: ubuntu-22.04
-    
+  scan:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -24,29 +18,27 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Install Playwright Browsers
-        run: |
+          # If using Playwright for the scrapers you mentioned
           pip install playwright
-          # Standard install command works perfectly on 22.04
-          playwright install chromium --with-deps
+          playwright install chromium
 
-      - name: Run Scanners
+      - name: Run Main Market Scanner
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          python unified-bot.py --mode main
-          python unified-bot.py --mode props
-          python scraper-bovada.py
-          python scraper-kambi.py
-          python parser-scrapers.py
+        run: python unified-bot.py --mode main --sport all
 
-      - name: Commit and Push
+      - name: Run NBA/NHL Prop Scanner
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python unified-bot.py --mode props
+
+      - name: Commit Logs
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
           git add bets_log.csv
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Auto-update bets_log.csv" && git push)
+          git commit -m "Update bets log [skip ci]" || echo "No changes to commit"
+          git push
