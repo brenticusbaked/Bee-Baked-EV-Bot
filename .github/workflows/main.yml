@@ -1,0 +1,33 @@
+name: Bee-Baked Master Run
+
+on:
+  schedule:
+    # Runs every 4 hours (saves ~87% of minutes vs every 30m)
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip' # Speeds up subsequent runs
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Execute Master Run
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
+        run: python master_run.py
+      - name: Commit Logs
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add bets_log.csv
+          git commit -m "Update bets log [automated]" || exit 0
+          git push
