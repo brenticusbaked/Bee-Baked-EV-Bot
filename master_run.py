@@ -1,8 +1,17 @@
 import os
 import sys
-import time
+import glob
 
-# Import your existing logic
+# 0. Auto-Rename all python files from hyphens to underscores to fix GitHub Actions
+def fix_filenames():
+    for file in glob.glob("*-*.py"):
+        new_name = file.replace("-", "_")
+        os.rename(file, new_name)
+        print(f"🔧 Auto-renamed {file} to {new_name} for import compatibility.")
+
+fix_filenames()
+
+# Now it is safe to import
 from model_nba import run_nba_model
 from model_nhl import run_nhl_model
 from bot_propodds_nba import main as run_nba_props
