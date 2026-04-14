@@ -94,3 +94,8 @@ Date,Matchup,Market,Selection,Odds,Edge,Units,FairPriceAtBet,Closing_Line_Pinnac
 2026-03-09,Calgary @ Washington,MODEL_NHL_PUCKLINE,Washington -1.5,+129,42.00%,1.00,MODEL,,
 2026-03-09,Utah @ Chicago,MODEL_NHL_PUCKLINE,Utah -1.5,+120,64.00%,1.00,MODEL,,
 2026-03-09,Ottawa @ Vancouver,MODEL_NHL_PUCKLINE,Ottawa -1.5,+114,85.00%,1.00,MODEL,,
+2026-04-14,Winnipeg @ Utah,MODEL_NHL_PUCKLINE,Utah -1.5,+129,50.00%,1.00,MODEL,,
+2026-04-14,Colorado @ Calgary,MODEL_NHL_PUCKLINE,Colorado -1.5,+165,142.00%,1.00,MODEL,,
+2026-04-14,Los Angeles @ Vancouver,MODEL_NHL_PUCKLINE,Los Angeles -1.5,+154,77.00%,1.00,MODEL,,
+2026-04-14,Manchester City @ Burnley,H2H,Burnley,+950,12.27%,0.32,+808,,
+2026-04-14,Everton @ West Ham United,H2H,Draw,+250,3.60%,0.36,+227,,
