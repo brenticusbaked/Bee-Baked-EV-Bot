@@ -53,15 +53,19 @@ def run_grader():
         res_idx = header.index("Result")
         
         for row in reader:
+            # Protect against empty lines
+            if not row or not any(row): 
+                continue
+
             while len(row) < len(header): 
                 row.append("")
                 
-            bet_date = row[0]
-            market = row[2].lower()
-            selection = row[3].lower()
+            bet_date = row[0].strip()
+            market = row[2].lower().strip()
+            selection = row[3].lower().strip()
             
-            if bet_date < today and not row[res_idx]:
-                if market in ['player_points', 'player_assists', 'player_rebounds']:
+            if bet_date and bet_date < today and not row[res_idx]:
+                if market in ['points', 'assists', 'rebounds']:
                     if bet_date not in daily_stats_cache:
                         daily_stats_cache[bet_date] = get_sgo_results(bet_date)
                         
@@ -71,31 +75,36 @@ def run_grader():
                     
                     if split_word in selection:
                         parts = selection.split(split_word)
-                        player_name = parts[0].strip()
-                        line = float(parts[1].strip())
                         
-                        if player_name in stats_map:
-                            sgo_stat_key = market.replace('player_', '')
-                            actual = stats_map[player_name].get(sgo_stat_key, 0)
+                        try:
+                            player_name = parts[0].strip()
+                            line = float(parts[1].strip())
                             
-                            # SAFELY handle Pushes so you don't lose fake money
-                            if actual == line:
-                                row[res_idx] = "PUSH"
-                                results_found += 1
-                            else:
-                                win = (actual > line) if is_over else (actual < line)
-                                row[res_idx] = "WIN" if win else "LOSS"
+                            if player_name in stats_map:
+                                sgo_stat_key = market
+                                actual = stats_map[player_name].get(sgo_stat_key, 0)
                                 
-                                odds = float(row[4].replace('+', '')) if '+' in row[4] else float(row[4])
-                                units = float(row[6])
-                                
-                                if win:
-                                    p = units * (odds/100) if odds > 0 else units * (100/abs(odds))
-                                    profit += p
+                                # SAFELY handle Pushes so you don't lose fake money
+                                if actual == line:
+                                    row[res_idx] = "PUSH"
+                                    results_found += 1
                                 else:
-                                    profit -= units
+                                    win = (actual > line) if is_over else (actual < line)
+                                    row[res_idx] = "WIN" if win else "LOSS"
                                     
-                                results_found += 1
+                                    odds_str = row[4].replace('+', '').strip()
+                                    odds = float(odds_str)
+                                    units = float(row[6].strip())
+                                    
+                                    if win:
+                                        p = units * (odds/100) if odds > 0 else units * (100/abs(odds))
+                                        profit += p
+                                    else:
+                                        profit -= units
+                                        
+                                    results_found += 1
+                        except (ValueError, IndexError) as e:
+                            print(f"Skipping malformed row data: {row} - Error: {e}")
             
             updated_rows.append(row)
 
