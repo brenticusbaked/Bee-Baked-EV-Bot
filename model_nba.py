@@ -1,7 +1,7 @@
 import os
 import requests
-import csv
 from datetime import datetime, timedelta
+from db_manager import is_already_logged, log_bet_to_db
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -20,31 +20,6 @@ BOOK_LINKS = {
 def to_american(dec):
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
-
-def is_already_logged(matchup, market, selection):
-    """Prevents the bot from spamming the same NBA mismatch all day."""
-    if not os.path.exists('bets_log.csv'): return False
-    today = datetime.now().strftime("%Y-%m-%d")
-    with open('bets_log.csv', 'r') as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if not row or not any(row): continue
-            if len(row) > 3 and row[0] == today:
-                if row[1] == matchup and row[2].upper() == market.upper() and row[3] == selection:
-                    return True
-    return False
-
-def log_bet_to_csv(matchup, market, selection, odds, edge_val, units, fair_price):
-    file_exists = os.path.isfile('bets_log.csv')
-    with open('bets_log.csv', mode='a', newline='') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle', 'Result'])
-        writer.writerow([
-            datetime.now().strftime("%Y-%m-%d"), 
-            matchup, market, selection, odds, 
-            f"{edge_val:.2f}%", units, fair_price, "", ""
-        ])
 
 def get_best_spread(target_team):
     """Pulls the main line spread for the target team."""
@@ -119,7 +94,6 @@ def run_nba_model():
             home_fatigue = 2 if teams_yesterday[home_team] == 'away' else 1
             
         # We only care about massive scheduling mismatches (Differential of 3 or more)
-        # Usually means a fully rested Home team is hosting a team on a Road/Road B2B
         fatigue_diff = away_fatigue - home_fatigue
         
         target_team, reason, edge = None, "", 0.0
@@ -127,7 +101,7 @@ def run_nba_model():
         if fatigue_diff >= 3:
             target_team = home_team
             reason = f"{away_team} is on a brutal Road Back-to-Back. {home_team} is rested."
-            edge = float(fatigue_diff) # Use the differential as an artificial edge metric
+            edge = float(fatigue_diff) 
             
         elif fatigue_diff <= -3:
             target_team = away_team
@@ -139,9 +113,10 @@ def run_nba_model():
             market = "MODEL_NBA_SPREAD"
             selection = f"{target_team} {spread_line}"
             
-            # Anti-Spam Check
+            # Database Anti-Spam Check
             if best_book and not is_already_logged(matchup, market, selection):
-                log_bet_to_csv(matchup, market, selection, best_odds, edge, "1.00", "MODEL")
+                # Log to Supabase Cloud
+                log_bet_to_db(matchup, market, selection, best_odds, edge, "1.00", "MODEL")
                 
                 odds_text = f"\n💰 **Best Odds:** {best_book} | **{spread_line} ({best_odds})**\n🔗 [Click here to bet]({bet_link})"
                 alerts.append(

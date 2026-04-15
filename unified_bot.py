@@ -1,8 +1,8 @@
 import os
 import requests
-import csv
 import argparse
 from datetime import datetime
+from db_manager import is_already_logged, log_bet_to_db
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -32,30 +32,6 @@ def calculate_ev(pinnacle_decimal, soft_decimal):
     fair_prob = 1 / (pinnacle_decimal * 1.03) 
     return (soft_decimal * fair_prob) - 1
 
-def is_already_logged(matchup, market, selection):
-    if not os.path.exists('bets_log.csv'): return False
-    
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    with open('bets_log.csv', 'r') as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if not row or not any(row): continue
-            if len(row) > 3 and row[0] == today:
-                if row[1] == matchup and row[2].upper() == market.upper() and row[3] == selection:
-                    return True
-    return False
-
-def log_bet_to_csv(matchup, market, selection, odds, ev_val, units, fair_price):
-    file_exists = os.path.isfile('bets_log.csv')
-    with open('bets_log.csv', mode='a', newline='') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle', 'Result'])
-        writer.writerow([
-            datetime.now().strftime("%Y-%m-%d"), matchup, market, selection, odds, f"{ev_val*100:.2f}%", units, fair_price, "", ""
-        ])
-
 def process_odds_data(game_data, config):
     matchup = f"{game_data['away_team']} @ {game_data['home_team']}"
     market_data = {}
@@ -78,7 +54,7 @@ def process_odds_data(game_data, config):
             if data['pinnacle'] and data['softs']:
                 for soft in data['softs']:
                     ev = calculate_ev(data['pinnacle'], soft['price'])
-                    if ev >= 0.03:  # 3% Edge Threshold
+                    if ev >= 0.03: 
                         selection = okey.replace('_', ' ').strip()
                         units = min((ev / (soft['price'] - 1)) / 4 * 100, 5.0)
                         
@@ -104,7 +80,7 @@ def flush_alerts():
     for bet in DISCORD_BATCH:
         if not is_already_logged(bet['matchup'], bet['market'], bet['selection']):
             final_bets.append(bet)
-            log_bet_to_csv(bet['matchup'], bet['market'].upper(), bet['selection'], bet['odds_american'], bet['ev'], f"{bet['units']:.2f}", bet['fair_price'])
+            log_bet_to_db(bet['matchup'], bet['market'].upper(), bet['selection'], bet['odds_american'], bet['ev'], f"{bet['units']:.2f}", bet['fair_price'])
 
     if not final_bets: return
         
