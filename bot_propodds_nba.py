@@ -1,5 +1,6 @@
 import os
 import requests
+import urllib.parse
 from db_manager import is_already_logged, log_bet_to_db
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -20,6 +21,19 @@ def to_decimal(price):
         return p
     except:
         return 1.909
+
+def get_dynamic_link(bookmaker, target_string):
+    query = urllib.parse.quote(target_string)
+    book = bookmaker.lower().replace(' ', '')
+    links = {
+        'draftkings': f'https://sportsbook.draftkings.com/search?q={query}',
+        'fanduel': f'https://sportsbook.fanduel.com/navigation/search?q={query}',
+        'betmgm': f'https://sports.betmgm.com/en/sports/search?q={query}',
+        'bet365': f'https://www.bet365.com/#/search?q={query}',
+        'espn': f'https://espnbet.com/search?q={query}',
+        'fanatics': f'https://sportsbook.fanatics.com/search?q={query}'
+    }
+    return links.get(book, f"https://www.google.com/search?q={bookmaker}+sportsbook")
 
 def get_sgo_edges():
     if not SGO_API_KEY: return []
@@ -80,11 +94,13 @@ def get_sgo_edges():
                                 if not is_already_logged(matchup, market, selection):
                                     units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
                                     is_em = ev >= 0.06
-                                    log_bet_to_db(matchup, market, selection, to_american(s_price), ev, f"{units:.2f}", to_american(1/probs[side]))
+                                    log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), to_american(s_price), ev, f"{units:.2f}", to_american(1/probs[side]))
                                     
+                                    deep_link = get_dynamic_link(soft[side]['book'], p_name)
                                     header = "🚨 **SGO PROP EMERGENCY** 🚨" if is_em else "🏀 **NBA PROP ALERT** 🏀"
+                                    
                                     picks.append({
-                                        "msg": f"{header}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {market} | {selection}\n**Book:** {soft[side]['book'].upper()} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
+                                        "msg": f"{header}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {market} | {selection}\n**Book:** [{soft[side]['book'].upper()}]({deep_link}) @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
                                         "color": 15158332 if is_em else 3447003,
                                         "is_emergency": is_em
                                     })

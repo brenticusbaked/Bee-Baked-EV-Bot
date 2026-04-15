@@ -1,24 +1,29 @@
 import os
 import requests
 import json
+import urllib.parse
 from datetime import datetime, timedelta
 from db_manager import is_already_logged, log_bet_to_db
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
-BOOK_LINKS = {
-    'draftkings': 'https://sportsbook.draftkings.com/',
-    'fanduel': 'https://sportsbook.fanduel.com/',
-    'betmgm': 'https://sports.betmgm.com/',
-    'bet365': 'https://www.bet365.com/',
-    'espn': 'https://espnbet.com/',
-    'fanatics': 'https://sportsbook.fanatics.com/',
-}
-
 def to_american(dec):
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
+
+def get_dynamic_link(bookmaker, target_string):
+    query = urllib.parse.quote(target_string)
+    book = bookmaker.lower().replace(' ', '')
+    links = {
+        'draftkings': f'https://sportsbook.draftkings.com/search?q={query}',
+        'fanduel': f'https://sportsbook.fanduel.com/navigation/search?q={query}',
+        'betmgm': f'https://sports.betmgm.com/en/sports/search?q={query}',
+        'bet365': f'https://www.bet365.com/#/search?q={query}',
+        'espn': f'https://espnbet.com/search?q={query}',
+        'fanatics': f'https://sportsbook.fanatics.com/search?q={query}'
+    }
+    return links.get(book, f"https://www.google.com/search?q={bookmaker}+sportsbook")
 
 def get_best_spread(target_team):
     try:
@@ -44,7 +49,7 @@ def get_best_spread(target_team):
                                     best_book_title = bm['title']
                                         
     if best_price > 0:
-        link = BOOK_LINKS.get(best_book, f"https://www.google.com/search?q={best_book}+nba+odds")
+        link = get_dynamic_link(best_book, target_team)
         return best_book_title, to_american(best_price), f"{best_point}", link
     return None, None, None, None
 
@@ -101,8 +106,8 @@ def run_nba_model():
             selection = f"{target_team} {spread_line}"
             
             if best_book and not is_already_logged(matchup, market, selection):
-                log_bet_to_db(matchup, market, selection, best_odds, edge, "1.00", "MODEL")
-                odds_text = f"\n💰 **Best Odds:** {best_book} | **{spread_line} ({best_odds})**\n🔗 [Click here to bet]({bet_link})"
+                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), best_odds, edge, "1.00", "MODEL")
+                odds_text = f"\n💰 **Best Odds:** [{best_book}]({bet_link}) | **{spread_line} ({best_odds})**"
                 alerts.append(
                     f"🏀 **NBA TRAVEL FATIGUE DETECTED** 🏀\n"
                     f"**Game:** {matchup}\n━━━━━━━━━━━━━━━━━━━━\n"

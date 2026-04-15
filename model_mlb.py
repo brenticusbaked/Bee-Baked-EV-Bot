@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+import urllib.parse
 from datetime import datetime
 from db_manager import is_already_logged, log_bet_to_db
 
@@ -11,12 +12,25 @@ def to_american(dec):
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
 
+def get_dynamic_link(bookmaker, target_string):
+    query = urllib.parse.quote(target_string)
+    book = bookmaker.lower().replace(' ', '')
+    links = {
+        'draftkings': f'https://sportsbook.draftkings.com/search?q={query}',
+        'fanduel': f'https://sportsbook.fanduel.com/navigation/search?q={query}',
+        'betmgm': f'https://sports.betmgm.com/en/sports/search?q={query}',
+        'bet365': f'https://www.bet365.com/#/search?q={query}',
+        'espn': f'https://espnbet.com/search?q={query}',
+        'fanatics': f'https://sportsbook.fanatics.com/search?q={query}'
+    }
+    return links.get(book, f"https://www.google.com/search?q={bookmaker}+sportsbook")
+
 def get_best_f5_moneyline(target_team):
     try:
         with open("master_odds_cache.json", "r") as f:
             cache = json.load(f)
     except FileNotFoundError:
-        return None, None
+        return None, None, None
         
     best_price = 0.0
     best_book = "Unknown"
@@ -37,8 +51,9 @@ def get_best_f5_moneyline(target_team):
                                     best_book_title = bm['title']
                                     
     if best_price > 0:
-        return best_book_title, to_american(best_price)
-    return None, None
+        link = get_dynamic_link(best_book, target_team)
+        return best_book_title, to_american(best_price), link
+    return None, None, None
 
 def get_advanced_pitcher_stats(pitcher_id):
     url = f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}?hydrate=stats(group=[pitching],type=[season])"
@@ -97,17 +112,17 @@ def run_mlb_model():
                         selection = better_team
                         
                         if not is_already_logged(matchup, market, selection):
-                            book, odds = get_best_f5_moneyline(better_team)
+                            book, odds, link = get_best_f5_moneyline(better_team)
                             
                             if book:
-                                log_bet_to_db(matchup, market, selection, odds, fip_diff, "1.00", "MODEL")
+                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), odds, fip_diff, "1.00", "MODEL")
                                 alerts.append(
                                     f"⚾ **MLB ADVANCED METRIC MISMATCH** ⚾\n"
                                     f"**Game:** {matchup}\n━━━━━━━━━━━━━━━━━━━━\n"
                                     f"**Advantage:** {better_team} (First 5 Innings)\n"
                                     f"📊 {away_p['fullName']} FIP: **{a_fip:.2f}** (ERA: {a_era:.2f})\n"
                                     f"📊 {home_p['fullName']} FIP: **{h_fip:.2f}** (ERA: {h_era:.2f})\n"
-                                    f"💰 **Best F5 ML:** {book} @ {odds}"
+                                    f"💰 **Best F5 ML:** [{book}]({link}) @ {odds}"
                                 )
 
         if DISCORD_WEBHOOK_URL and alerts:
