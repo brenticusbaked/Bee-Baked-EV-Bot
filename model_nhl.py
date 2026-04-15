@@ -1,7 +1,7 @@
 import os
 import requests
-import csv
 from datetime import datetime
+from db_manager import is_already_logged, log_bet_to_db
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -21,19 +21,6 @@ def to_american(dec):
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
 
-def log_bet_to_csv(matchup, market, selection, odds, edge_val, units, fair_price):
-    file_exists = os.path.isfile('bets_log.csv')
-    with open('bets_log.csv', mode='a', newline='') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            # Updated to 10 columns
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle', 'Result'])
-        writer.writerow([
-            datetime.now().strftime("%Y-%m-%d"), 
-            matchup, market, selection, odds, 
-            f"{edge_val:.2f}%", units, fair_price, "", ""
-        ])
-
 def get_best_puckline(target_team):
     """Searches specifically for the -1.5 Puck Line."""
     if not ODDS_API_KEY: return None, None, None
@@ -41,7 +28,7 @@ def get_best_puckline(target_team):
     params = {
         'apiKey': ODDS_API_KEY, 
         'regions': 'us,eu', 
-        'markets': 'spreads', # Upgraded to spreads for Puck Line
+        'markets': 'spreads',
         'bookmakers': 'fanduel,draftkings,betmgm,bet365,espn,fanatics',
         'oddsFormat': 'decimal'
     }
@@ -103,29 +90,37 @@ def run_nhl_model():
                         worse_team = home if away_gd > home_gd else away
                         worse_gd = min(away_gd, home_gd)
                         
-                        best_book, best_odds, bet_link = get_best_puckline(better_team)
-                        odds_text = ""
-                        
-                        if best_book:
-                            odds_text = f"\n💰 **Best Puck Line:** {best_book} | **-1.5 ({best_odds})**\n🔗 [Click here to bet]({bet_link})"
-                            log_bet_to_csv(matchup, "MODEL_NHL_PUCKLINE", f"{better_team} -1.5", best_odds, gd_diff, "1.00", "MODEL")
-                        else:
-                            odds_text = "\n⚠️ *-1.5 Puck Line not available on tracked books.*"
+                        market = "MODEL_NHL_PUCKLINE"
+                        selection = f"{better_team} -1.5"
 
-                        alerts.append(
-                            f"🏒 **NHL MODEL MISMATCH DETECTED** 🏒\n"
-                            f"**Game:** {matchup}\n━━━━━━━━━━━━━━━━━━━━\n"
-                            f"**Advantage:** {better_team}\n"
-                            f"✅ {better_team} GD: **{better_gd}**\n"
-                            f"❌ {worse_team} GD: **{worse_gd}**\n"
-                            f"**Net Gap:** {gd_diff} Goals\n{odds_text}"
-                        )
+                        # Database Anti-Spam Check
+                        if not is_already_logged(matchup, market, selection):
+                            best_book, best_odds, bet_link = get_best_puckline(better_team)
+                            
+                            # Only alert and log if a book is actually offering the line
+                            if best_book:
+                                odds_text = f"\n💰 **Best Puck Line:** {best_book} | **-1.5 ({best_odds})**\n🔗 [Click here to bet]({bet_link})"
+                                
+                                # Log directly to Supabase Cloud
+                                log_bet_to_db(matchup, market, selection, best_odds, gd_diff, "1.00", "MODEL")
+
+                                alerts.append(
+                                    f"🏒 **NHL MODEL MISMATCH DETECTED** 🏒\n"
+                                    f"**Game:** {matchup}\n━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"**Advantage:** {better_team}\n"
+                                    f"✅ {better_team} GD: **{better_gd}**\n"
+                                    f"❌ {worse_team} GD: **{worse_gd}**\n"
+                                    f"**Net Gap:** {gd_diff} Goals\n{odds_text}"
+                                )
                         
         if DISCORD_WEBHOOK_URL:
             if alerts:
-                for msg in alerts: requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 3447003, "image": {"url": FOOTER_IMG}}]})
+                for msg in alerts: 
+                    requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 3447003, "image": {"url": FOOTER_IMG}}]})
+                print(f"Sent {len(alerts)} NHL mismatch alerts.")
             else:
-                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": "🏒 **NHL Model Run:** No major Goal Differential mismatches today.", "color": 3447003}]})
+                # Silenced the empty Discord webhook ping to avoid cron job spam!
+                print("NHL Model Run Complete: No major Goal Differential mismatches today.")
                 
     except Exception as e:
         print(f"Error running NHL model: {e}")
