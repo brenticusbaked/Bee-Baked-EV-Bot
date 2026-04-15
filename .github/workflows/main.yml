@@ -1,54 +1,43 @@
-import os
-import sys
+name: Bee-Baked Master Run
 
-from model_nba import run_nba_model
-from model_nhl import run_nhl_model
-from model_mlb import run_mlb_model
-from bot_propodds_nba import main as run_nba_props
-from unified_bot import scan_sport, flush_alerts, SPORT_CONFIGS
-from clv_tracker import track_clv
-from sgo_grader import run_grader
-from clv_analyzer import run_clv_analysis
+on:
+  schedule:
+    # Runs twice a day at 8:00 AM UTC and 4:00 PM UTC
+    - cron: '0 8,16 * * *'
+  workflow_dispatch: 
+    # Allows you to manually trigger a run anytime from the GitHub Actions tab
 
-def main():
-    print("🚀 Starting Bee-Baked Master Efficiency Run...")
-    
-    # 1. Run Situational Models
-    print("Scanning Situational Models...")
-    try: run_nba_model()
-    except Exception as e: print(f"NBA Model Error: {e}")
-    
-    try: run_nhl_model()
-    except Exception as e: print(f"NHL Model Error: {e}")
+jobs:
+  run-syndicate-bot:
+    runs-on: ubuntu-latest
 
-    try: run_mlb_model()
-    except Exception as e: print(f"MLB Model Error: {e}")
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    # 2. Run API Scanners (Props & Unified)
-    print("Scanning Market Odds...")
-    try: run_nba_props()
-    except Exception as e: print(f"NBA Props Error: {e}")
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Recommended stable version
+          cache: 'pip'
 
-    # 3. Run Unified Scan (Batching all sports into one alert)
-    for sport in SPORT_CONFIGS:
-        try: scan_sport(sport)
-        except Exception as e: print(f"Unified {sport} Error: {e}")
-    flush_alerts()
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    # 4. Maintenance (CLV & Grading)
-    print("Running Maintenance Task...")
-    try: track_clv()
-    except Exception as e: print(f"CLV Error: {e}")
-    
-    try: run_grader()
-    except Exception as e: print(f"Grader Error: {e}")
+      - name: Install Playwright Browsers
+        run: |
+          playwright install chromium
+          # Installs the headless browser required for your soft-book scrapers
 
-    # 5. Reporting
-    print("Generating Sharp Metrics Report...")
-    try: run_clv_analysis()
-    except Exception as e: print(f"CLV Analyzer Error: {e}")
-
-    print("✅ Master Run Complete.")
-
-if __name__ == "__main__":
-    main()
+      - name: Execute Master Run
+        env:
+          # Pulls your secure keys directly from GitHub Repository Secrets
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python master_run.py
