@@ -17,14 +17,12 @@ def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None,
     Generates Mobile-First Deep Links.
     Prioritizes API links, explicit Add-to-Slip URLs, then native App Schemes.
     """
-    # 1. Highest Priority: Direct link provided by the API
     if api_link:
         return api_link 
 
     book = bookmaker.lower().replace(' ', '').replace('sportsbook', '')
     query = urllib.parse.quote(target_string)
     
-    # 2. explicit "Add to Slip" links (requires Selection ID / Event ID)
     if selection_id:
         slip_links = {
             'draftkings': f'https://sportsbook.draftkings.com/add-to-slip/{selection_id}',
@@ -37,7 +35,6 @@ def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None,
         if book in slip_links:
              return slip_links[book]
 
-    # 3. Fallback: Force the native app to open and search
     app_schemes = {
         'draftkings': f'draftkings://sportsbook/search?q={query}',
         'fanduel': f'fanduel://sportsbook/navigation/search?q={query}',
@@ -50,7 +47,6 @@ def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None,
         'prizepicks': f'https://app.prizepicks.com/search/{query}'
     }
     
-    # 4. Default to web search if not a known app
     return app_schemes.get(book, f"https://www.google.com/search?q={bookmaker}+{query}")
 
 def scan_markets():
@@ -75,7 +71,7 @@ def scan_markets():
             markets = {}
             
             for bm in event['bookmakers']:
-                api_link = bm.get('link') # Capture direct link from API
+                api_link = bm.get('link') 
                 for mkt in bm['markets']:
                     mkt_key = mkt['key']
                     if mkt_key not in markets: 
@@ -109,13 +105,21 @@ def scan_markets():
                             selection = f"{s_bet['name']} {s_bet['point']}"
                             
                             if not is_already_logged(matchup, m_type, selection):
-                                # PASSING ALL 9 ARGUMENTS TO DB
+                                
+                                # --- DYNAMIC UNIT SIZING (Quarter Kelly Criterion) ---
+                                # Formula: (Edge / Fractional Odds) / 4 (for safety) * 100 (for unit scale)
+                                fractional_odds = s_bet['price'] - 1
+                                calculated_units = (ev / fractional_odds) / 4 * 100
+                                # Cap the max bet at 5 Units to prevent overexposure
+                                units = min(calculated_units, 5.0)
+                                # ------------------------------------------------------
+                                
                                 log_bet_to_db(
                                     matchup, m_type, selection, to_american(s_bet['price']), 
-                                    ev, "1.00", to_american(p_price), sport, event['id']
+                                    ev, f"{units:.2f}", to_american(p_price), sport, event['id']
                                 )
                                 link = get_dynamic_link(s_bet['book_key'], s_bet['name'], s_bet['id'], event['id'], s_bet['api_link'])
-                                alerts.append(f"🟢 **+EV {m_type.upper()}**\n**Match:** {matchup}\n**Bet:** {selection}\n**Book:** [{s_bet['book']}]({link}) @ {to_american(s_bet['price'])}\n**Edge:** {ev*100:.2f}%")
+                                alerts.append(f"🟢 **+EV {m_type.upper()}**\n**Match:** {matchup}\n**Bet:** {selection}\n**Book:** [{s_bet['book']}]({link}) @ {to_american(s_bet['price'])}\n**Edge:** {ev*100:.2f}%\n**Suggested:** {units:.2f} Units")
 
     if alerts and DISCORD_WEBHOOK_URL:
         for a in alerts: 
