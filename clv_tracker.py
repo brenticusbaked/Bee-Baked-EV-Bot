@@ -69,8 +69,8 @@ def track_clv():
                 elif 'ml' in raw_market or 'moneyline' in raw_market or 'f5' in raw_market or 'h2h' in raw_market: api_market = 'h2h'
                 else: api_market = raw_market
 
-                formatted_selection = selection.replace(' ', '_')
-                search_key = f"{matchup}_{api_market}_{formatted_selection}".lower()
+                # formatted_selection = selection.replace(' ', '_')
+                search_key = f"{matchup}_{api_market}_{formatted_selection}".replace(' ', '_').lower()
                 
                 if search_key in pinnacle:
                     price = pinnacle[search_key]
