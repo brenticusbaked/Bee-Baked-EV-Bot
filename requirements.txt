@@ -1,3 +1,4 @@
-requests
 pandas
 playwright>=1.45.0
+requests
+supabase
