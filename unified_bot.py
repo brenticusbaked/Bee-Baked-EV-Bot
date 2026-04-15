@@ -71,12 +71,32 @@ def flush_alerts():
     if not DISCORD_BATCH: return
         
     final_bets = []
+    local_seen = set() # Prevents duplicates within the exact same scan
+    
     for bet in DISCORD_BATCH:
-        if not is_already_logged(bet['matchup'], bet['market'], bet['selection']):
-            final_bets.append(bet)
-            log_bet_to_db(bet['matchup'], bet['market'].upper(), bet['selection'], bet['odds_american'], bet['ev'], f"{bet['units']:.2f}", bet['fair_price'])
+        # Create a unique fingerprint for this specific bet
+        bet_fingerprint = f"{bet['matchup']}_{bet['market']}_{bet['selection']}".strip().lower()
+        
+        # If we haven't seen it in this 15-minute run...
+        if bet_fingerprint not in local_seen:
+            # ...and we haven't seen it in the Supabase Cloud...
+            if not is_already_logged(bet['matchup'], bet['market'], bet['selection']):
+                
+                # Mark it as seen, log it, and add to the Discord batch!
+                local_seen.add(bet_fingerprint)
+                final_bets.append(bet)
+                log_bet_to_db(
+                    bet['matchup'].strip(), 
+                    bet['market'].strip().upper(), 
+                    bet['selection'].strip(), 
+                    bet['odds_american'], 
+                    bet['ev'], 
+                    f"{bet['units']:.2f}", 
+                    bet['fair_price']
+                )
 
     if not final_bets: return
+        
     final_bets.sort(key=lambda x: x['ev'], reverse=True)
     
     current_msg = ""

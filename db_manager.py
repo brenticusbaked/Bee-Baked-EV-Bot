@@ -13,8 +13,22 @@ else:
 
 def is_already_logged(matchup, market, selection):
     if not supabase: return False
-    today = datetime.now().strftime("%Y-%m-%d")
-    res = supabase.table("bets_log").select("id").eq("date", today).eq("matchup", matchup).eq("market", market.upper()).eq("selection", selection).execute()
+    
+    # 1. Clean the strings (removes accidental spaces from sportsbooks)
+    c_matchup = matchup.strip()
+    c_market = market.strip().upper()
+    c_selection = selection.strip()
+
+    # 2. Use ILIKE (case-insensitive) and check for UNGRADED bets
+    # This completely bypasses the GitHub UTC Timezone bug!
+    res = supabase.table("bets_log")\
+        .select("id")\
+        .ilike("matchup", c_matchup)\
+        .eq("market", c_market)\
+        .ilike("selection", c_selection)\
+        .eq("result", "")\
+        .execute()
+        
     return len(res.data) > 0
 
 def log_bet_to_db(matchup, market, selection, odds, edge_val, units, fair_price):
