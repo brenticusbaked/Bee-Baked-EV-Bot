@@ -11,14 +11,11 @@ def american_to_decimal(american_str):
         if american > 0: return (american / 100.0) + 1.0
         elif american < 0: return (100.0 / abs(american)) + 1.0
         return 1.0
-    except ValueError:
-        return 0.0
+    except ValueError: return 0.0
 
 def run_clv_analysis():
     bets = get_all_clv_bets()
-    if not bets:
-        print("Not enough CLV data to analyze yet.")
-        return
+    if not bets: return
 
     total_bets_with_clv = len(bets)
     clv_beaten = 0
@@ -29,8 +26,7 @@ def run_clv_analysis():
         closing_dec = american_to_decimal(bet['closing_line_pinnacle'])
         
         if taken_dec > 0 and closing_dec > 0:
-            if taken_dec > closing_dec:
-                clv_beaten += 1
+            if taken_dec > closing_dec: clv_beaten += 1
             total_clv_value += (taken_dec / closing_dec) - 1
 
     if total_bets_with_clv > 0:
@@ -40,8 +36,7 @@ def run_clv_analysis():
         if DISCORD_WEBHOOK_URL:
             color = 5763719 if win_rate >= 50 else 15158332
             msg = (
-                f"📈 **$BEE BAKED SHARP METRICS** 📈\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"📈 **$BEE BAKED SHARP METRICS** 📈\n━━━━━━━━━━━━━━━━━━━━\n"
                 f"**Total Bets Tracked:** {total_bets_with_clv}\n"
                 f"**CLV Beaten Rate:** {win_rate:.1f}%\n"
                 f"**Avg Edge vs Close:** {avg_clv_edge:+.2f}%\n\n"
@@ -49,5 +44,4 @@ def run_clv_analysis():
             )
             requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": color, "image": {"url": FOOTER_IMG}}]})
 
-if __name__ == "__main__":
-    run_clv_analysis()
+if __name__ == "__main__": run_clv_analysis()

@@ -1,9 +1,7 @@
 import os
 import requests
-from datetime import datetime
 from db_manager import is_already_logged, log_bet_to_db
 
-# --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 SGO_API_KEY = os.getenv("SGO_API_KEY") 
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
@@ -24,8 +22,7 @@ def to_decimal(price):
         return 1.909
 
 def get_sgo_edges():
-    if not SGO_API_KEY:
-        return []
+    if not SGO_API_KEY: return []
 
     picks = []
     url = "https://api.sportsgameodds.com/v2/events"
@@ -33,53 +30,38 @@ def get_sgo_edges():
 
     try:
         res = requests.get(url, params=params, timeout=15)
-        if res.status_code != 200:
-            return []
+        if res.status_code != 200: return []
         
         data = res.json()
         for event in data:
             matchup = event.get('name', 'Unknown Matchup')
-            odds_data = event.get('odds', {})
             market_groups = {}
             
-            for odd_key, odd_obj in odds_data.items():
+            for odd_key, odd_obj in event.get('odds', {}).items():
                 odd_id = odd_obj.get('oddID', odd_key)
                 parts = odd_id.split('-')
                 
-                if len(parts) < 5: 
-                    continue
+                if len(parts) < 5 or parts[0] not in TARGET_STATS: continue
                 
-                stat_type = parts[0]
-                if stat_type not in TARGET_STATS: 
-                    continue
+                stat_type, player_raw, side = parts[0], parts[1], parts[4]
+                bookmaker, price_raw, line = odd_obj.get('bookmakerID', 'unknown'), odd_obj.get('price'), odd_obj.get('handicap')
                 
-                player_raw = parts[1]
-                side = parts[4]
-                bookmaker = odd_obj.get('bookmakerID', 'unknown')
-                price_raw = odd_obj.get('price') 
-                line = odd_obj.get('handicap')
-                
-                if price_raw is None or line is None: 
-                    continue
+                if price_raw is None or line is None: continue
                 
                 price = to_decimal(price_raw)
                 player = player_raw.split('_1_')[0].replace('_', ' ').title()
                 uid = f"{player}_{stat_type}_{line}"
                 
-                if uid not in market_groups:
-                    market_groups[uid] = {'sharp': {}, 'soft': {}}
+                if uid not in market_groups: market_groups[uid] = {'sharp': {}, 'soft': {}}
                 
                 if bookmaker == 'pinnacle':
                     market_groups[uid]['sharp'][side] = price
                 elif bookmaker in ['fanduel', 'draftkings', 'betmgm', 'espn', 'fanatics', 'bet365']:
-                    current_soft_price = market_groups[uid]['soft'].get(side, {}).get('price', 0)
-                    if price > current_soft_price:
+                    if price > market_groups[uid]['soft'].get(side, {}).get('price', 0):
                         market_groups[uid]['soft'][side] = {'price': price, 'book': bookmaker, 'line': line}
 
-            # Process Markets
             for uid, val in market_groups.items():
                 sharp, soft = val['sharp'], val['soft']
-                
                 if 'over' in sharp and 'under' in sharp:
                     p_over, p_under = sharp['over'], sharp['under']
                     vig = (1/p_over) + (1/p_under)
@@ -95,14 +77,10 @@ def get_sgo_edges():
                                 market = s_name.upper()
                                 selection = f"{p_name} {side.upper()} {l_val}"
                                 
-                                # Database Anti-Spam Check
                                 if not is_already_logged(matchup, market, selection):
                                     units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
                                     is_em = ev >= 0.06
-                                    f_american = to_american(1/probs[side])
-                                    
-                                    # Log to Supabase Cloud
-                                    log_bet_to_db(matchup, market, selection, to_american(s_price), ev, f"{units:.2f}", f_american)
+                                    log_bet_to_db(matchup, market, selection, to_american(s_price), ev, f"{units:.2f}", to_american(1/probs[side]))
                                     
                                     header = "🚨 **SGO PROP EMERGENCY** 🚨" if is_em else "🏀 **NBA PROP ALERT** 🏀"
                                     picks.append({
@@ -110,14 +88,12 @@ def get_sgo_edges():
                                         "color": 15158332 if is_em else 3447003,
                                         "is_emergency": is_em
                                     })
-    except Exception as e:
-        print(f"Error fetching SGO prop edges: {e}")
+    except Exception as e: print(f"Error fetching SGO prop edges: {e}")
     return picks
 
 def main():
     picks = get_sgo_edges()
-    if not DISCORD_WEBHOOK_URL: 
-        return
+    if not DISCORD_WEBHOOK_URL: return
     
     if picks:
         for p in picks:
@@ -126,8 +102,6 @@ def main():
                 "embeds": [{"description": p["msg"], "color": p["color"], "image": {"url": FOOTER_IMG}}]
             })
         print(f"Sent {len(picks)} NBA Prop alerts.")
-    else:
-        print("SGO Scan Complete: No new NBA player prop edges found.")
+    else: print("SGO Scan Complete: No new NBA player prop edges found.")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()

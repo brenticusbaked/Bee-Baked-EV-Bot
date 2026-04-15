@@ -1,29 +1,31 @@
-import os
-import requests
+import json
 from db_manager import get_open_clv_bets, update_clv
 
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 SPORTS = ['baseball_mlb', 'basketball_nba', 'icehockey_nhl']
+
+def to_american(dec):
+    if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
+    return str(int(-100 / (dec - 1)))
 
 def get_pinnacle_lines():
     lines = {}
+    try:
+        with open("master_odds_cache.json", "r") as f:
+            cache = json.load(f)
+    except FileNotFoundError:
+        return lines
+
     for sport in SPORTS:
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
-        params = {'apiKey': ODDS_API_KEY, 'regions': 'us', 'markets': 'h2h,totals,spreads', 'bookmakers': 'pinnacle', 'oddsFormat': 'american'}
-        try:
-            res = requests.get(url, params=params, timeout=10)
-            if res.status_code == 200:
-                for game in res.json():
-                    matchup = f"{game['away_team']} @ {game['home_team']}"
-                    for bm in game.get('bookmakers', []):
-                        for mkt in bm['markets']:
-                            for out in mkt['outcomes']:
-                                point = out.get('point', '')
-                                selection_str = f"{out['name']} {point}".strip()
-                                key = f"{matchup}_{mkt['key']}_{selection_str}".replace(' ', '_').lower()
-                                lines[key] = out['price']
-        except Exception as e:
-            print(f"Error fetching Pinnacle lines for {sport}: {e}")
+        for game in cache.get(sport, []):
+            matchup = f"{game['away_team']} @ {game['home_team']}"
+            for bm in game.get('bookmakers', []):
+                if bm['key'] == 'pinnacle':
+                    for mkt in bm['markets']:
+                        for out in mkt['outcomes']:
+                            point = out.get('point', '')
+                            selection_str = f"{out['name']} {point}".strip()
+                            key = f"{matchup}_{mkt['key']}_{selection_str}".replace(' ', '_').lower()
+                            lines[key] = to_american(float(out['price']))
     return lines
 
 def track_clv():
@@ -32,7 +34,7 @@ def track_clv():
         print("No open bets require CLV tracking.")
         return
 
-    print(f"Found {len(open_bets)} bets awaiting CLV. Fetching Pinnacle lines...")
+    print(f"Found {len(open_bets)} bets awaiting CLV. Fetching Pinnacle lines from cache...")
     pinnacle = get_pinnacle_lines()
     
     for bet in open_bets:

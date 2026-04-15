@@ -1,15 +1,11 @@
 import os
 import requests
 import argparse
+import json
 from db_manager import is_already_logged, log_bet_to_db
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
-
-REGIONS = 'us,eu'
-BOOKMAKERS = 'fanduel,draftkings,bet365,pinnacle'
-ODDS_FORMAT = 'decimal'
 
 SPORT_CONFIGS = {
     "nba": {"api_key": "basketball_nba", "markets": "h2h,spreads,totals", "icon": "🏀", "name": "NBA"},
@@ -81,7 +77,6 @@ def flush_alerts():
             log_bet_to_db(bet['matchup'], bet['market'].upper(), bet['selection'], bet['odds_american'], bet['ev'], f"{bet['units']:.2f}", bet['fair_price'])
 
     if not final_bets: return
-        
     final_bets.sort(key=lambda x: x['ev'], reverse=True)
     
     current_msg = ""
@@ -97,17 +92,17 @@ def flush_alerts():
 
 def scan_sport(sport_key):
     config = SPORT_CONFIGS.get(sport_key)
-    if not config or not ODDS_API_KEY: return
+    if not config: return
 
-    url = f"https://api.the-odds-api.com/v4/sports/{config['api_key']}/odds"
-    params = {'apiKey': ODDS_API_KEY, 'regions': REGIONS, 'markets': config['markets'], 'bookmakers': BOOKMAKERS, 'oddsFormat': ODDS_FORMAT}
-    
     try:
-        res = requests.get(url, params=params, timeout=15)
-        if res.status_code == 200:
-            for game in res.json(): process_odds_data(game, config)
-    except Exception as e:
-        print(f"Error scanning {sport_key}: {e}")
+        with open("master_odds_cache.json", "r") as f:
+            cache = json.load(f)
+            
+        game_data = cache.get(config['api_key'], [])
+        for game in game_data: 
+            process_odds_data(game, config)
+    except FileNotFoundError:
+        print(f"Cache missing for {sport_key}.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

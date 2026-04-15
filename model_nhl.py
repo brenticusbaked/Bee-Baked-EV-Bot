@@ -1,11 +1,10 @@
 import os
 import requests
+import json
 from datetime import datetime
 from db_manager import is_already_logged, log_bet_to_db
 
-# --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-ODDS_API_KEY = os.getenv("ODDS_API_KEY") 
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 BOOK_LINKS = {
@@ -22,44 +21,33 @@ def to_american(dec):
     return str(int(-100 / (dec - 1)))
 
 def get_best_puckline(target_team):
-    """Searches specifically for the -1.5 Puck Line."""
-    if not ODDS_API_KEY: return None, None, None
-    url = "https://api.the-odds-api.com/v4/sports/icehockey_nhl/odds"
-    params = {
-        'apiKey': ODDS_API_KEY, 
-        'regions': 'us,eu', 
-        'markets': 'spreads',
-        'bookmakers': 'fanduel,draftkings,betmgm,bet365,espn,fanatics',
-        'oddsFormat': 'decimal'
-    }
-
     try:
-        res = requests.get(url, params=params, timeout=10)
-        if res.status_code != 200: return None, None, None
+        with open("master_odds_cache.json", "r") as f:
+            cache = json.load(f)
+    except FileNotFoundError:
+        return None, None, None
         
-        best_price = 0.0
-        best_book = "Unknown"
-        best_book_title = "Unknown"
-        
-        for game in res.json():
-            if target_team in game['home_team'] or target_team in game['away_team']:
-                for bm in game.get('bookmakers', []):
-                    for mkt in bm.get('markets', []):
-                        if mkt['key'] == 'spreads':
-                            for outcome in mkt['outcomes']:
-                                # Enforce that it MUST be the -1.5 spread
-                                if target_team in outcome['name'] and outcome.get('point') == -1.5:
-                                    price = float(outcome['price'])
-                                    if price > best_price:
-                                        best_price = price
-                                        best_book = bm['key']
-                                        best_book_title = bm['title']
-                                        
-        if best_price > 0:
-            link = BOOK_LINKS.get(best_book, "https://www.google.com/search?q=" + best_book + "+nhl+odds")
-            return best_book_title, to_american(best_price), link
-    except Exception as e:
-        print(f"Error fetching odds: {e}")
+    best_price = 0.0
+    best_book = "Unknown"
+    best_book_title = "Unknown"
+    
+    for game in cache.get('icehockey_nhl', []):
+        if target_team in game['home_team'] or target_team in game['away_team']:
+            for bm in game.get('bookmakers', []):
+                if bm['key'] == 'pinnacle': continue
+                for mkt in bm.get('markets', []):
+                    if mkt['key'] == 'spreads':
+                        for outcome in mkt['outcomes']:
+                            if target_team in outcome['name'] and outcome.get('point') == -1.5:
+                                price = float(outcome['price'])
+                                if price > best_price:
+                                    best_price = price
+                                    best_book = bm['key']
+                                    best_book_title = bm['title']
+                                    
+    if best_price > 0:
+        link = BOOK_LINKS.get(best_book, "https://www.google.com/search?q=" + best_book + "+nhl+odds")
+        return best_book_title, to_american(best_price), link
     return None, None, None
 
 def run_nhl_model():
@@ -93,15 +81,11 @@ def run_nhl_model():
                         market = "MODEL_NHL_PUCKLINE"
                         selection = f"{better_team} -1.5"
 
-                        # Database Anti-Spam Check
                         if not is_already_logged(matchup, market, selection):
                             best_book, best_odds, bet_link = get_best_puckline(better_team)
                             
-                            # Only alert and log if a book is actually offering the line
                             if best_book:
                                 odds_text = f"\n💰 **Best Puck Line:** {best_book} | **-1.5 ({best_odds})**\n🔗 [Click here to bet]({bet_link})"
-                                
-                                # Log directly to Supabase Cloud
                                 log_bet_to_db(matchup, market, selection, best_odds, gd_diff, "1.00", "MODEL")
 
                                 alerts.append(
@@ -119,7 +103,6 @@ def run_nhl_model():
                     requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 3447003, "image": {"url": FOOTER_IMG}}]})
                 print(f"Sent {len(alerts)} NHL mismatch alerts.")
             else:
-                # Silenced the empty Discord webhook ping to avoid cron job spam!
                 print("NHL Model Run Complete: No major Goal Differential mismatches today.")
                 
     except Exception as e:

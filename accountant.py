@@ -6,9 +6,7 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 def run_accountant():
     graded_bets = get_all_graded_bets()
-    if not graded_bets: 
-        print("No graded bets found in the database.")
-        return
+    if not graded_bets: return
     
     total_risk = 0.0
     total_profit = 0.0
@@ -29,11 +27,8 @@ def run_accountant():
         else:
             total_profit -= units
 
-    if graded > 0:
+    if graded > 0 and DISCORD_WEBHOOK_URL:
         report = f"📊 **$BEE BAKED WEEKLY REPORT** 📊\nNet Profit: **{total_profit:+.2f} Units**\nWin Rate: {(wins/graded)*100:.1f}%"
-        if DISCORD_WEBHOOK_URL:
-            requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": report, "color": 5763719 if total_profit >= 0 else 15158332}]})
-            print("Accountant report sent.")
+        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": report, "color": 5763719 if total_profit >= 0 else 15158332}]})
 
-if __name__ == "__main__":
-    run_accountant()
+if __name__ == "__main__": run_accountant()
