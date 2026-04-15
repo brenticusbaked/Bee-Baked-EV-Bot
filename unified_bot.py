@@ -1,10 +1,8 @@
 import os
 import requests
 import argparse
-from datetime import datetime
 from db_manager import is_already_logged, log_bet_to_db
 
-# --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"

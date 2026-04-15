@@ -40,7 +40,6 @@ def get_open_clv_bets():
 
 def update_clv(bet_id, closing_line):
     if not supabase: return
-    # Store with a '+' if positive
     formatted_line = f"+{closing_line}" if float(closing_line) > 0 else str(closing_line)
     supabase.table("bets_log").update({"closing_line_pinnacle": formatted_line}).eq("id", bet_id).execute()
 
@@ -60,13 +59,11 @@ def get_all_clv_bets():
     return res.data
 
 def get_all_graded_bets():
-    """Fetches bets that have a final WIN or LOSS result."""
     if not supabase: return []
     res = supabase.table("bets_log").select("*").in_("result", ["WIN", "LOSS"]).execute()
     return res.data
 
 def get_all_bets():
-    """Fetches the entire betting history for macro-level analysis."""
     if not supabase: return []
     res = supabase.table("bets_log").select("*").execute()
     return res.data
