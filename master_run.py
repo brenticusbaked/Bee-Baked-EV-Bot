@@ -9,6 +9,13 @@ from clv_tracker import track_clv
 from sgo_grader import run_grader
 from clv_analyzer import run_clv_analysis
 
+# Import your standalone scrapers
+from scraper_draftkings import scrape_draftkings
+from scraper_fanduel import scrape_fanduel
+from scraper_prizepicks import scrape_prizepicks
+from scraper_betmgm import scrape_betmgm
+from scraper_bot import scrape_news
+
 def main():
     print("🚀 Starting Bee-Baked Master Efficiency Run...")
     
@@ -37,7 +44,24 @@ def main():
         except Exception as e: print(f"Unified {sport} Error: {e}")
     flush_alerts()
 
-    # 4. Maintenance
+    # 4. Run Live Scrapers (Steam & News)
+    print("Running Standalone Scrapers...")
+    try: scrape_draftkings()
+    except Exception as e: print(f"DK Scraper Error: {e}")
+    
+    try: scrape_fanduel()
+    except Exception as e: print(f"FD Scraper Error: {e}")
+
+    try: scrape_prizepicks()
+    except Exception as e: print(f"PrizePicks Scraper Error: {e}")
+
+    try: scrape_betmgm()
+    except Exception as e: print(f"MGM Scraper Error: {e}")
+
+    try: scrape_news()
+    except Exception as e: print(f"News Scraper Error: {e}")
+
+    # 5. Maintenance
     print("Running Maintenance Task...")
     try: track_clv()
     except Exception as e: print(f"CLV Error: {e}")
@@ -45,7 +69,7 @@ def main():
     try: run_grader()
     except Exception as e: print(f"Grader Error: {e}")
 
-    # 5. Reporting
+    # 6. Reporting
     print("Generating Sharp Metrics Report...")
     try: run_clv_analysis()
     except Exception as e: print(f"CLV Analyzer Error: {e}")
