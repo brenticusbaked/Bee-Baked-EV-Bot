@@ -22,10 +22,8 @@ def to_decimal(price):
     except: return 1.909
 
 def get_dynamic_link(bookmaker, target_string):
-    """Mobile App Deep Linking for Props."""
     query = urllib.parse.quote(target_string)
     book = bookmaker.lower().replace(' ', '').replace('sportsbook', '')
-    
     app_schemes = {
         'draftkings': f'draftkings://sportsbook/search?q={query}',
         'fanduel': f'fanduel://sportsbook/navigation/search?q={query}',
@@ -37,9 +35,9 @@ def get_dynamic_link(bookmaker, target_string):
 
 def get_sgo_edges():
     if not SGO_API_KEY: return []
-    soft_list = ['fanduel', 'draftkings', 'betmgm', 'espn', 'fanatics', 'bet365', 'caesars', 'betrivers', 'bovada', 'prizepicks']
-
+    soft_list = ['fanduel', 'draftkings', 'betmgm', 'espn', 'fanatics', 'bet365', 'caesars', 'betrivers', 'bovada', 'prizepicks', 'pick6', 'novig', 'dabble']
     picks = []
+    
     url = "https://api.sportsgameodds.com/v2/events"
     params = {'apiKey': SGO_API_KEY, 'leagueID': 'NBA', 'oddsAvailable': 'true'}
 
@@ -54,8 +52,11 @@ def get_sgo_edges():
             for odd_key, odd_obj in event.get('odds', {}).items():
                 parts = odd_obj.get('oddID', odd_key).split('-')
                 if len(parts) < 5 or parts[0] not in TARGET_STATS: continue
+                
                 stat, player_raw, side = parts[0], parts[1], parts[4]
-                book, price, line = odd_obj.get('bookmakerID', 'unknown'), to_decimal(odd_obj.get('price')), odd_obj.get('handicap')
+                book = odd_obj.get('bookmakerID', 'unknown')
+                price, line = to_decimal(odd_obj.get('price')), odd_obj.get('handicap')
+                prop_link = odd_obj.get('deepLink') # Extract SGO deep link
                 
                 player = player_raw.split('_1_')[0].replace('_', ' ').title()
                 uid = f"{player}_{stat}_{line}"
@@ -64,7 +65,7 @@ def get_sgo_edges():
                 if book == 'pinnacle': market_groups[uid]['sharp'][side] = price
                 elif book in soft_list:
                     if price > market_groups[uid]['soft'].get(side, {}).get('price', 0):
-                        market_groups[uid]['soft'][side] = {'price': price, 'book': book, 'line': line}
+                        market_groups[uid]['soft'][side] = {'price': price, 'book': book, 'line': line, 'prop_link': prop_link}
 
             for uid, val in market_groups.items():
                 sharp, soft = val['sharp'], val['soft']
@@ -80,12 +81,12 @@ def get_sgo_edges():
                                 
                                 if not is_already_logged(matchup, market, selection):
                                     units = min((ev / (soft[side]['price'] - 1)) / 4 * 100, 5.0)
-                                    # PASSING ALL 9 ARGUMENTS TO DB
                                     log_bet_to_db(
-                                        matchup, market, selection, to_american(soft[side]['price']), 
+                                        matchup.strip(), market, selection, to_american(soft[side]['price']), 
                                         ev, f"{units:.2f}", to_american(1/probs[side]), "basketball_nba", str(event.get('id', ''))
                                     )
-                                    link = get_dynamic_link(soft[side]['book'], p_name)
+                                    # Fallback to app scheme if deepLink is missing
+                                    link = soft[side].get('prop_link') or get_dynamic_link(soft[side]['book'], p_name)
                                     picks.append({"msg": f"🏀 **NBA PROP ALERT** 🏀\n**Match:** {matchup}\n**Prop:** {selection}\n**Book:** [{soft[side]['book'].upper()}]({link}) @ {to_american(soft[side]['price'])}\n**Edge:** {ev*100:.2f}%"})
     except Exception as e: print(f"Prop Bot Error: {e}")
     return picks
