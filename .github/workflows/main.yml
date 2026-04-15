@@ -2,32 +2,45 @@ name: Bee-Baked Master Run
 
 on:
   schedule:
-    # Runs every 4 hours (saves ~87% of minutes vs every 30m)
-    - cron: '0 */4 * * *'
-  workflow_dispatch:
+    # Runs every 15 minutes. Adjust as needed for your quota.
+    - cron: '*/15 * * * *'
+  workflow_dispatch: 
+    # Allows you to manually trigger a run from the GitHub Actions tab
 
 jobs:
-  run-bot:
+  run-syndicate-bot:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip' # Speeds up subsequent runs
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+          python-version: '3.10' # Recommended stable version
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Browsers
+        run: |
+          playwright install chromium
+          # Using only chromium saves runner minutes. If your scrapers need Firefox/Webkit, change to 'playwright install'
+
       - name: Execute Master Run
         env:
+          # Pulls your secure keys from GitHub Repository Secrets
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
-        run: python master_run.py
-      - name: Commit Logs
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add bets_log.csv
-          git commit -m "Update bets log [automated]" || exit 0
-          git push
+          python master_run.py
+
+      # Notice there are NO git commit or git push steps here anymore!
+      # All data is pushed silently and instantly to your Supabase cloud.
