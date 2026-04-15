@@ -1,57 +1,80 @@
+import os
+import requests
 import json
-from db_manager import get_open_clv_bets, update_clv
+from db_manager import get_untracked_bets, update_bet_clv
 
-SPORTS = ['baseball_mlb', 'basketball_nba', 'icehockey_nhl']
+# Retrieve API Key for final closing line checks
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
-def to_american(dec):
-    if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
-    return str(int(-100 / (dec - 1)))
-
-def get_pinnacle_lines():
-    lines = {}
+def to_decimal(price):
     try:
-        with open("master_odds_cache.json", "r") as f:
-            cache = json.load(f)
-    except FileNotFoundError:
-        return lines
+        p = float(price)
+        if p > 100: return (p / 100) + 1
+        if p < -100: return (100 / abs(p)) + 1
+        return p
+    except: return 1.909
 
-    for sport in SPORTS:
-        for game in cache.get(sport, []):
-            matchup = f"{game['away_team']} @ {game['home_team']}"
-            for bm in game.get('bookmakers', []):
-                if bm['key'] == 'pinnacle':
-                    for mkt in bm['markets']:
-                        for out in mkt['outcomes']:
-                            point = out.get('point', '')
-                            selection_str = f"{out['name']} {point}".strip()
-                            key = f"{matchup}_{mkt['key']}_{selection_str}".replace(' ', '_').lower()
-                            lines[key] = to_american(float(out['price']))
-    return lines
-
-def track_clv():
-    open_bets = get_open_clv_bets()
-    if not open_bets:
-        print("No open bets require CLV tracking.")
+def run_clv_tracker():
+    """
+    Identifies bets in the database missing CLV data, fetches the sharpest 
+    closing price from Pinnacle, and calculates the final edge.
+    """
+    # Fetch bets from DB that haven't been audited for CLV yet
+    bets = get_untracked_bets()
+    if not bets:
+        print("No new bets requiring CLV tracking.")
         return
 
-    print(f"Found {len(open_bets)} bets awaiting CLV. Fetching Pinnacle lines from cache...")
-    pinnacle = get_pinnacle_lines()
-    
-    for bet in open_bets:
-        matchup = bet['matchup'].lower()
-        raw_market = bet['market'].lower()
-        selection = bet['selection'].lower()
+    # Comprehensive list of monitored sources for Kentucky & Offshore
+    soft_books = [
+        'fanduel', 'draftkings', 'betmgm', 'bet365', 'espn', 'fanatics', 
+        'caesars', 'betrivers', 'bovada', 'betonline', 'bookmaker', 
+        'lowvig', 'betus', 'mybookie', 'prizepicks', 'pick6', 'novig', 'dabble'
+    ]
 
-        if 'spread' in raw_market or 'puckline' in raw_market: api_market = 'spreads'
-        elif 'total' in raw_market or 'over' in raw_market or 'under' in raw_market: api_market = 'totals'
-        elif 'ml' in raw_market or 'moneyline' in raw_market or 'f5' in raw_market or 'h2h' in raw_market: api_market = 'h2h'
-        else: api_market = raw_market
+    print(f"📊 Auditing CLV for {len(bets)} bets...")
 
-        search_key = f"{matchup}_{api_market}_{selection}".replace(' ', '_').lower()
+    for bet in bets:
+        # We use Pinnacle as the 'Gold Standard' for the true closing market price
+        sport = bet.get('sport', 'basketball_nba')
+        event_id = bet.get('event_id')
         
-        if search_key in pinnacle:
-            update_clv(bet['id'], pinnacle[search_key])
-            print(f"Updated CLV for {selection}: {pinnacle[search_key]}")
+        if not event_id: continue
+
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds"
+        params = {
+            'apiKey': ODDS_API_KEY,
+            'regions': 'us,eu,us_dfs,us_ex',
+            'markets': 'h2h,spreads,totals',
+            'bookmakers': 'pinnacle'
+        }
+
+        try:
+            res = requests.get(url, params=params, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                sharp_price = None
+                
+                # Extract Pinnacle's final price for the specific selection
+                for bm in data.get('bookmakers', []):
+                    if bm['key'] == 'pinnacle':
+                        for mkt in bm.get('markets', []):
+                            for outcome in mkt.get('outcomes', []):
+                                if outcome['name'] == bet['selection']:
+                                    sharp_price = float(outcome['price'])
+                
+                if sharp_price:
+                    # Calculate CLV: (Your Price / Sharp Price) - 1
+                    user_price = to_decimal(bet['odds'])
+                    clv_edge = (user_price / sharp_price) - 1
+                    
+                    # Update the database with the final audit results
+                    update_bet_clv(bet['id'], sharp_price, clv_edge)
+                    print(f"✅ CLV Updated for {bet['selection']}: {clv_edge*100:.2f}%")
+            else:
+                print(f"⚠️ Could not fetch closing lines for Event {event_id}")
+        except Exception as e:
+            print(f"❌ Error tracking CLV: {e}")
 
 if __name__ == "__main__":
-    track_clv()
+    run_clv_tracker()
