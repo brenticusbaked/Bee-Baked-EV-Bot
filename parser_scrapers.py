@@ -1,32 +1,22 @@
 import json
-import csv
 import os
 from datetime import datetime
+from db_manager import log_bet_to_db
 
 def log_parsed_bet(matchup, market, selection, odds):
-    """Standardized 10-column logger for scraper data."""
-    file_exists = os.path.isfile('bets_log.csv')
-    with open('bets_log.csv', mode='a', newline='') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            # Matches the exact structure used by your Unified Bot and Models
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle', 'Result'])
-        
-        writer.writerow([
-            datetime.now().strftime("%Y-%m-%d"),
-            matchup,
-            market,
-            selection,
-            odds,
-            "SCRAPED", # Placeholder for Edge
-            "1.00",    # Default Unit
-            "N/A",     # No Fair Price available from raw scrape
-            "",        # Empty Closing Line for clv-tracker to fill later
-            ""         # Empty Result column
-        ])
+    """Standardized logger for scraper data sending directly to Supabase."""
+    log_bet_to_db(
+        matchup=matchup,
+        market=market,
+        selection=selection,
+        odds=odds,
+        edge_val="SCRAPED", # Placeholder for Edge
+        units="1.00",       # Default Unit
+        fair_price="N/A"    # No Fair Price available from raw scrape
+    )
 
 def parse_bovada_json(filepath):
-    """Parses Bovada raw network capture into the CSV log."""
+    """Parses Bovada raw network capture into the database."""
     if not os.path.exists(filepath): return
     with open(filepath, 'r') as f:
         try:
@@ -35,7 +25,6 @@ def parse_bovada_json(filepath):
             print("Error: JSON file is corrupted or empty.")
             return
             
-        # SAFELY ensure the data is a list of events, not an API error dict
         if isinstance(data, list):
             for event_group in data:
                 if isinstance(event_group, dict):
@@ -49,7 +38,6 @@ def parse_bovada_json(filepath):
                                             selection = outcome.get('description')
                                             price = outcome.get('price', {}).get('american')
                                             
-                                            # Only log if a price actually exists
                                             if price: 
                                                 log_parsed_bet(matchup, "MONEYLINE", f"Bovada: {selection}", price)
         else:
