@@ -2,31 +2,29 @@ import pandas as pd
 import os
 import requests
 from datetime import datetime
+from db_manager import get_all_bets
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 def calculate_clv_report():
-    if not os.path.exists('bets_log.csv'):
-        return "⚠️ **No data found.** Run the scanner first to generate `bets_log.csv`!"
+    data = get_all_bets()
+    if not data:
+        return "📭 **Database is empty.** No bets recorded yet."
 
     try:
-        # Read the log
-        df = pd.read_csv('bets_log.csv')
-        
-        if df.empty:
-            return "📭 **Log file is empty.** No bets recorded yet."
-
+        # Load the Supabase JSON directly into Pandas
+        df = pd.DataFrame(data)
         total_bets = len(df)
         
         # SAFELY convert Edge to float by enforcing string type first, turning "SCRAPED" into NaN
-        df['edge_val'] = pd.to_numeric(df['Edge'].astype(str).str.replace('%', ''), errors='coerce')
+        df['edge_val'] = pd.to_numeric(df['edge'].astype(str).str.replace('%', ''), errors='coerce')
         avg_ev = df['edge_val'].dropna().mean()
 
         # Calculate true CLV (Comparing Bet Odds to Pinnacle Closing Odds)
-        df['Odds_Num'] = pd.to_numeric(df['Odds'].astype(str).str.replace('+', ''), errors='coerce')
-        df['CLV_Num'] = pd.to_numeric(df['Closing_Line_Pinnacle'].astype(str).str.replace('+', ''), errors='coerce')
+        df['Odds_Num'] = pd.to_numeric(df['odds'].astype(str).str.replace('+', ''), errors='coerce')
+        df['CLV_Num'] = pd.to_numeric(df['closing_line_pinnacle'].astype(str).str.replace('+', ''), errors='coerce')
         
         # American odds: You beat the CLV if your Odds number is higher than the closing line
         beat_clv_count = len(df.dropna(subset=['Odds_Num', 'CLV_Num'])[df['Odds_Num'] > df['CLV_Num']])

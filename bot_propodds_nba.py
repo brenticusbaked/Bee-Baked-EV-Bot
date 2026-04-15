@@ -1,7 +1,7 @@
 import os
 import requests
-import csv
 from datetime import datetime
+from db_manager import is_already_logged, log_bet_to_db
 
 # --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -22,18 +22,6 @@ def to_decimal(price):
         return p
     except:
         return 1.909
-
-def log_bet_to_csv(matchup, market, selection, odds, ev_val, units, fair_price):
-    file_exists = os.path.isfile('bets_log.csv')
-    with open('bets_log.csv', mode='a', newline='') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(['Date', 'Matchup', 'Market', 'Selection', 'Odds', 'Edge', 'Units', 'FairPriceAtBet', 'Closing_Line_Pinnacle', 'Result'])
-        writer.writerow([
-            datetime.now().strftime("%Y-%m-%d"), 
-            matchup, market, selection, odds, 
-            f"{ev_val*100:.2f}%", units, fair_price, "", ""
-        ])
 
 def get_sgo_edges():
     if not SGO_API_KEY:
@@ -101,21 +89,29 @@ def get_sgo_edges():
                         if side in soft:
                             s_price = soft[side]['price']
                             ev = (s_price * probs[side]) - 1
+                            
                             if ev > 0.02:
                                 p_name, s_name, l_val = uid.split('_')
-                                units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
-                                is_em = ev >= 0.06
-                                f_american = to_american(1/probs[side])
-                                log_bet_to_csv(matchup, s_name.upper(), f"{p_name} {side.upper()} {l_val}", to_american(s_price), ev, f"{units:.2f}", f_american)
+                                market = s_name.upper()
+                                selection = f"{p_name} {side.upper()} {l_val}"
                                 
-                                header = "🚨 **SGO PROP EMERGENCY** 🚨" if is_em else "🎯 **NBA PROP ALERT** 🎯"
-                                picks.append({
-                                    "msg": f"{header}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {s_name.upper()} | {p_name} {side.upper()} {l_val}\n**Book:** {soft[side]['book'].upper()} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
-                                    "color": 15158332 if is_em else 3447003,
-                                    "is_emergency": is_em
-                                })
+                                # Database Anti-Spam Check
+                                if not is_already_logged(matchup, market, selection):
+                                    units = min((ev / (s_price - 1)) / 4 * 100, 5.0)
+                                    is_em = ev >= 0.06
+                                    f_american = to_american(1/probs[side])
+                                    
+                                    # Log to Supabase Cloud
+                                    log_bet_to_db(matchup, market, selection, to_american(s_price), ev, f"{units:.2f}", f_american)
+                                    
+                                    header = "🚨 **SGO PROP EMERGENCY** 🚨" if is_em else "🏀 **NBA PROP ALERT** 🏀"
+                                    picks.append({
+                                        "msg": f"{header}\n**Edge:** {ev*100:.2f}%\n**Match:** {matchup}\n**Market:** {market} | {selection}\n**Book:** {soft[side]['book'].upper()} @ {to_american(s_price)}\n**Suggested:** {units:.2f} Units",
+                                        "color": 15158332 if is_em else 3447003,
+                                        "is_emergency": is_em
+                                    })
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error fetching SGO prop edges: {e}")
     return picks
 
 def main():
@@ -129,10 +125,9 @@ def main():
                 "content": "@everyone" if p["is_emergency"] else "", 
                 "embeds": [{"description": p["msg"], "color": p["color"], "image": {"url": FOOTER_IMG}}]
             })
+        print(f"Sent {len(picks)} NBA Prop alerts.")
     else:
-        requests.post(DISCORD_WEBHOOK_URL, json={
-            "embeds": [{"description": "🎯 **SGO Scan Complete:** No NBA player prop edges found.", "color": 3447003, "image": {"url": FOOTER_IMG}}]
-        })
+        print("SGO Scan Complete: No new NBA player prop edges found.")
 
 if __name__ == "__main__":
     main()
