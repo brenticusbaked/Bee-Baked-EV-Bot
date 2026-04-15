@@ -2,8 +2,10 @@ import os
 import requests
 import argparse
 import json
+import urllib.parse
 from db_manager import is_already_logged, log_bet_to_db
 
+# --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
@@ -25,6 +27,22 @@ def to_american(dec):
 def calculate_ev(pinnacle_decimal, soft_decimal):
     fair_prob = 1 / (pinnacle_decimal * 1.03) 
     return (soft_decimal * fair_prob) - 1
+
+def get_dynamic_link(bookmaker, target_string):
+    """Generates a deep link directly to the sportsbook's search page for the team/player."""
+    query = urllib.parse.quote(target_string)
+    book = bookmaker.lower().replace(' ', '')
+    
+    links = {
+        'draftkings': f'https://sportsbook.draftkings.com/search?q={query}',
+        'fanduel': f'https://sportsbook.fanduel.com/navigation/search?q={query}',
+        'betmgm': f'https://sports.betmgm.com/en/sports/search?q={query}',
+        'bet365': f'https://www.bet365.com/#/search?q={query}',
+        'espn': f'https://espnbet.com/search?q={query}',
+        'fanatics': f'https://sportsbook.fanatics.com/search?q={query}'
+    }
+    
+    return links.get(book, f"https://www.google.com/search?q={bookmaker}+sportsbook")
 
 def process_odds_data(game_data, config):
     matchup = f"{game_data['away_team']} @ {game_data['home_team']}"
@@ -52,10 +70,20 @@ def process_odds_data(game_data, config):
                         selection = okey.replace('_', ' ').strip()
                         units = min((ev / (soft['price'] - 1)) / 4 * 100, 5.0)
                         
+                        # Generate the deep link using the away team as the search query
+                        deep_link = get_dynamic_link(soft['book'], game_data['away_team'])
+                        
                         DISCORD_BATCH.append({
-                            'matchup': matchup, 'market': mkey, 'selection': selection,
-                            'odds_american': to_american(soft['price']), 'ev': ev, 'units': units,
-                            'fair_price': to_american(data['pinnacle']), 'book': soft['book'], 'icon': config['icon']
+                            'matchup': matchup, 
+                            'market': mkey, 
+                            'selection': selection,
+                            'odds_american': to_american(soft['price']), 
+                            'ev': ev, 
+                            'units': units,
+                            'fair_price': to_american(data['pinnacle']), 
+                            'book': soft['book'], 
+                            'icon': config['icon'],
+                            'link': deep_link
                         })
 
 def send_discord_chunk(chunk_text):
@@ -77,12 +105,12 @@ def flush_alerts():
         # Create a unique fingerprint for this specific bet
         bet_fingerprint = f"{bet['matchup']}_{bet['market']}_{bet['selection']}".strip().lower()
         
-        # If we haven't seen it in this 15-minute run...
+        # If we haven't seen it in this run...
         if bet_fingerprint not in local_seen:
             # ...and we haven't seen it in the Supabase Cloud...
             if not is_already_logged(bet['matchup'], bet['market'], bet['selection']):
                 
-                # Mark it as seen, log it, and add to the Discord batch!
+                # Mark it as seen, log it, and add to the Discord batch
                 local_seen.add(bet_fingerprint)
                 final_bets.append(bet)
                 log_bet_to_db(
@@ -101,7 +129,8 @@ def flush_alerts():
     
     current_msg = ""
     for b in final_bets:
-        row = f"{b['icon']} **{b['market'].upper()}** | {b['matchup']}\n↳ **{b['selection']}** | **{b['book']}** @ {b['odds_american']} (Edge: {b['ev']*100:.1f}%)\n\n"
+        # Formats the Bookmaker text as a clickable URL pointing to the app's search page
+        row = f"{b['icon']} **{b['market'].upper()}** | {b['matchup']}\n↳ **{b['selection']}** | **[{b['book']}]({b['link']})** @ {b['odds_american']} (Edge: {b['ev']*100:.1f}%)\n\n"
         if len(current_msg) + len(row) > 1900:
             send_discord_chunk(current_msg)
             current_msg = row
@@ -115,6 +144,7 @@ def scan_sport(sport_key):
     if not config: return
 
     try:
+        # Read from the Master Cache instead of hitting the API directly
         with open("master_odds_cache.json", "r") as f:
             cache = json.load(f)
             
