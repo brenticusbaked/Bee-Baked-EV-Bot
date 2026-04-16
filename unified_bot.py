@@ -17,24 +17,27 @@ def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None,
     Generates Mobile-First Deep Links.
     Prioritizes API links, explicit Add-to-Slip URLs, then native App Schemes.
     """
+    # 1. Highest Priority: Direct link provided by the API
     if api_link:
         return api_link 
 
     book = bookmaker.lower().replace(' ', '').replace('sportsbook', '')
     query = urllib.parse.quote(target_string)
     
+    # 2. Explicit "Add to Slip" links (requires Selection ID / Event ID)
     if selection_id:
         slip_links = {
             'draftkings': f'https://sportsbook.draftkings.com/add-to-slip/{selection_id}',
             'fanduel': f'https://sportsbook.fanduel.com/sports/event/{event_id}/selection/{selection_id}',
             'caesars': f'https://sportsbook.caesars.com/us/ky/bet/selection/{selection_id}',
             'betmgm': f'https://sports.betmgm.com/en/sports/event/{event_id}', 
-            'espn': f'espnbet://bet/{selection_id}',
-            'novig': f'https://novig.co/selection/{selection_id}'
+            'espn': f'espnbet://bet/{selection_id}'
+            # Novig uses the app scheme below
         }
         if book in slip_links:
              return slip_links[book]
 
+    # 3. Fallback: Force the native app to open and search
     app_schemes = {
         'draftkings': f'draftkings://sportsbook/search?q={query}',
         'fanduel': f'fanduel://sportsbook/navigation/search?q={query}',
@@ -44,9 +47,11 @@ def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None,
         'espn': f'espnbet://search?q={query}',
         'fanatics': f'fanatics://search?q={query}',
         'betrivers': f'betrivers://search?q={query}',
+        'novig': f'novig://search?q={query}', # Native Novig app scheme
         'prizepicks': f'https://app.prizepicks.com/search/{query}'
     }
     
+    # 4. Default to web search if not a known app
     return app_schemes.get(book, f"https://www.google.com/search?q={bookmaker}+{query}")
 
 def scan_markets():
@@ -71,7 +76,7 @@ def scan_markets():
             markets = {}
             
             for bm in event['bookmakers']:
-                api_link = bm.get('link') 
+                api_link = bm.get('link') # Capture direct link from API
                 for mkt in bm['markets']:
                     mkt_key = mkt['key']
                     if mkt_key not in markets: 
@@ -107,13 +112,12 @@ def scan_markets():
                             if not is_already_logged(matchup, m_type, selection):
                                 
                                 # --- DYNAMIC UNIT SIZING (Quarter Kelly Criterion) ---
-                                # Formula: (Edge / Fractional Odds) / 4 (for safety) * 100 (for unit scale)
                                 fractional_odds = s_bet['price'] - 1
                                 calculated_units = (ev / fractional_odds) / 4 * 100
-                                # Cap the max bet at 5 Units to prevent overexposure
-                                units = min(calculated_units, 5.0)
+                                units = min(calculated_units, 5.0) # Cap at 5 Units
                                 # ------------------------------------------------------
                                 
+                                # PASSING ALL 9 ARGUMENTS TO DB
                                 log_bet_to_db(
                                     matchup, m_type, selection, to_american(s_bet['price']), 
                                     ev, f"{units:.2f}", to_american(p_price), sport, event['id']
