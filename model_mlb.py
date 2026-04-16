@@ -115,7 +115,7 @@ def run_mlb_model():
                             book, odds, link = get_best_f5_moneyline(better_team)
                             
                             if book:
-                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), odds, fip_diff, "1.00", "MODEL")
+                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), odds, fip_diff, "1.00", "MODEL", "baseball_mlb", "MLB_MODEL_NO_ID")
                                 alerts.append(
                                     f"⚾ **MLB ADVANCED METRIC MISMATCH** ⚾\n"
                                     f"**Game:** {matchup}\n━━━━━━━━━━━━━━━━━━━━\n"

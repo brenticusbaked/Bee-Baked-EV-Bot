@@ -11,6 +11,7 @@ from scraper_draftkings import scrape_draftkings
 from scraper_fanduel import scrape_fanduel
 from scraper_prizepicks import scrape_prizepicks
 from scraper_betmgm import scrape_betmgm
+from scraper_bot import scrape_news
 
 def main():
     print("🚀 BEE-BAKED SYNDICATE STARTING...")
@@ -22,6 +23,7 @@ def main():
     run_mlb_model()
     scan_markets()
     run_nba_props()
+    scrape_news()
 
     # Headless Scrapers (DraftKings, FanDuel, PrizePicks, MGM)
     try: scrape_draftkings(); scrape_fanduel(); scrape_prizepicks(); scrape_betmgm()

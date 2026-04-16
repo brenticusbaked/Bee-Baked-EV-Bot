@@ -69,3 +69,15 @@ def get_all_graded_bets():
     if not supabase: return []
     res = supabase.table("bets_log").select("*").neq("result", "").execute()
     return res.data
+
+def get_all_clv_bets():
+    """Retrieves all bets that have a tracked closing line for CLV analysis."""
+    if not supabase: return []
+    res = supabase.table("bets_log").select("*").neq("closing_line_pinnacle", "").execute()
+    return res.data
+
+def get_all_bets():
+    """Retrieves the entire betting history."""
+    if not supabase: return []
+    res = supabase.table("bets_log").select("*").execute()
+    return res.data

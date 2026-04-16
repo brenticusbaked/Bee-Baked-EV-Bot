@@ -91,7 +91,7 @@ def run_nhl_model():
                             
                             if best_book:
                                 odds_text = f"\n💰 **Best Puck Line:** [{best_book}]({bet_link}) | **-1.5 ({best_odds})**"
-                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), best_odds, gd_diff, "1.00", "MODEL")
+                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), best_odds, gd_diff, "1.00", "MODEL", "icehockey_nhl", "NHL_MODEL_NO_ID")
 
                                 alerts.append(
                                     f"🏒 **NHL MODEL MISMATCH DETECTED** 🏒\n"

@@ -12,7 +12,9 @@ def log_parsed_bet(matchup, market, selection, odds):
         odds=odds,
         edge_val="SCRAPED", # Placeholder for Edge
         units="1.00",       # Default Unit
-        fair_price="N/A"    # No Fair Price available from raw scrape
+        fair_price="N/A",   # No Fair Price available from raw scrape
+        sport="unknown_scraped", 
+        event_id="SCRAPE_NO_ID"  
     )
 
 def parse_bovada_json(filepath):
