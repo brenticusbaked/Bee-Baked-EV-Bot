@@ -36,11 +36,11 @@ def scrape_draftkings():
                         team = outcome.get('label')
                         line = outcome.get('line')
                         price = outcome.get('oddsAmerican')
-                        # Logic to detect movements would go here
-                        print(f"DK {matchup}: {team} {line} ({price})")
+                        # FIXED: Now appends found lines to alerts
+                        alerts.append(f"📊 **DK Movement Detected**\n{matchup}: {team} {line} ({price})")
 
         if alerts and DISCORD_WEBHOOK_URL:
-            for a in alerts: requests.post(DISCORD_WEBHOOK_URL, json={"content": a})
+            for a in alerts: requests.post(DISCORD_WEBHOOK_URL, json={"content": "\n".join(alerts)})
 
     except Exception as e:
         print(f"Error scraping DK: {e}")
