@@ -13,7 +13,6 @@ def get_decimal(american_odds):
         return 2.0  # Fallback to even money
 
 def run_clv_tracker():
-    # Pulls bets without closing lines and the fresh cloud cache
     untracked = get_untracked_bets()
     cache = get_master_cache()
     
@@ -25,16 +24,13 @@ def run_clv_tracker():
     
     for bet in untracked:
         sport = bet.get('sport')
-        if sport not in cache:
-            continue
+        if sport not in cache: continue
             
-        # Locate the specific game in the cache
         game_data = next((g for g in cache[sport] if str(g.get('id')) == str(bet.get('event_id'))), None)
         
         if game_data:
             pinnacle = next((bm for bm in game_data.get('bookmakers', []) if bm['key'] == 'pinnacle'), None)
             if pinnacle:
-                # Normalize market lookup to lowercase
                 market_key = bet['market'].lower()
                 market_data = next((m for m in pinnacle.get('markets', []) if m['key'].lower() == market_key), None)
                 
@@ -45,13 +41,9 @@ def run_clv_tracker():
                     
                     if outcome:
                         closing_price = float(outcome['price'])
-                        
-                        # SAFETY: Prevents anomalous edges from missing data
-                        if closing_price <= 1.0:
-                            print(f"⚠️ Invalid price for {bet['selection']}. Skipping.")
-                            continue
+                        if closing_price <= 1.0: continue
                             
-                        # FIXED: Use the helper to avoid KeyError: 'odds_decimal'
+                        # FIXED: Use helper to avoid KeyError: 'odds_decimal'
                         placed_decimal = get_decimal(bet.get('odds', 0))
                         clv_edge = (placed_decimal / closing_price) - 1
                         
