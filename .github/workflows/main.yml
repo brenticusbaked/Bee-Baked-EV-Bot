@@ -1,23 +1,30 @@
 name: Syndicate Automation
+
 on:
   schedule:
+    # Runs at 8:00 AM and 4:00 PM UTC
     - cron: '0 8,16 * * *'
   workflow_dispatch:
+
 jobs:
-  run:
+  run-syndicate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-          # FIXED: Critical step to prevent scraper crashes
+          # CRITICAL: Installs Chromium and required Linux system libraries
           npx playwright install --with-deps chromium
-      - name: Run Bee-Baked Syndicate
+
+      - name: Execute Syndicate Pipeline
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
