@@ -2,19 +2,10 @@ import os
 import requests
 import json
 from datetime import datetime
+from playwright.sync_api import sync_playwright
 
-# --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-# BetMGM's hidden API for NBA matches (Region: US-NJ)
-MGM_URL = "https://sports.co.betmgm.com/en/sports/api/v1/fixtures?filter[competitionId]=6004"
 TRACKER_FILE = "mgm_lines.json"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive"
-}
 
 def load_previous_lines():
     if not os.path.exists(TRACKER_FILE):
@@ -28,12 +19,37 @@ def save_current_lines(lines):
 
 def scrape_betmgm():
     try:
-        res = requests.get(MGM_URL, headers=HEADERS, timeout=15)
-        if res.status_code != 200:
-            print(f"Blocked by BetMGM! Status Code: {res.status_code}")
-            return
+        data = None
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+
+            def handle_response(response):
+                nonlocal data
+                if "api/v1/fixtures" in response.url and "competitionId=6004" in response.url:
+                    try:
+                        resp_json = response.json()
+                        if 'fixtures' in resp_json:
+                            data = resp_json
+                    except:
+                        pass
+
+            page.on("response", handle_response)
             
-        data = res.json()
+            print("Navigating to BetMGM NBA page...")
+            page.goto("https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004", wait_until="networkidle")
+            page.wait_for_timeout(5000)
+            
+            browser.close()
+
+        if not data:
+            print("Could not intercept BetMGM API data via Playwright.")
+            return
+
         current_lines = {}
         alerts = []
         previous_lines = load_previous_lines()
@@ -43,12 +59,10 @@ def scrape_betmgm():
             event_id = str(fixture.get('id'))
             
             for option in fixture.get('optionMarkets', []):
-                # BetMGM usually refers to the spread as "Spread" or "Handicap"
                 if 'Spread' in option.get('name', {}).get('value', ''):
                     for outcome in option.get('options', []):
                         team = outcome.get('name', {}).get('value')
                         
-                        # Extract the actual spread number from the string (e.g., "-5.5")
                         attr = outcome.get('attributes', {})
                         line = attr.get('spread') or attr.get('line')
                         
@@ -72,7 +86,7 @@ def scrape_betmgm():
         
         if alerts and DISCORD_WEBHOOK_URL:
             for msg in alerts:
-                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 13611036}]}) # MGM Gold
+                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 13611036}]})
                 print("BetMGM Alert sent.")
         else:
             print("BetMGM Scrape Complete: No major line movement.")

@@ -2,17 +2,10 @@ import os
 import requests
 import json
 from datetime import datetime
+from playwright.sync_api import sync_playwright
 
-# --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-# PrizePicks projections endpoint (League 7 is usually NBA)
-PRIZEPICKS_URL = "https://api.prizepicks.com/projections?league_id=7"
 TRACKER_FILE = "prizepicks_lines.json"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    "Accept": "application/json"
-}
 
 def load_previous_lines():
     if not os.path.exists(TRACKER_FILE):
@@ -26,31 +19,52 @@ def save_current_lines(lines):
 
 def scrape_prizepicks():
     try:
-        res = requests.get(PRIZEPICKS_URL, headers=HEADERS, timeout=15)
-        if res.status_code != 200:
-            print(f"Blocked by PrizePicks! Status Code: {res.status_code}")
+        data = None
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+
+            def handle_response(response):
+                nonlocal data
+                if "api.prizepicks.com/projections" in response.url and "league_id=7" in response.url:
+                    try:
+                        resp_json = response.json()
+                        if 'data' in resp_json:
+                            data = resp_json
+                    except:
+                        pass
+
+            page.on("response", handle_response)
+            
+            print("Navigating to PrizePicks Web App...")
+            page.goto("https://app.prizepicks.com/board", wait_until="networkidle")
+            page.wait_for_timeout(5000)
+            
+            browser.close()
+
+        if not data:
+            print("Could not intercept PrizePicks API data via Playwright.")
             return
             
-        data = res.json()
         current_lines = {}
         alerts = []
         previous_lines = load_previous_lines()
         
-        # PrizePicks splits data into 'data' (the lines) and 'included' (the player names)
-        # We need to map player IDs to their names first
         players = {}
         for item in data.get('included', []):
             if item.get('type') == 'new_player':
                 players[item['id']] = item.get('attributes', {}).get('name')
                 
-        # Now track the actual projections
         for proj in data.get('data', []):
             if proj.get('type') == 'projection':
                 attr = proj.get('attributes', {})
                 stat_type = attr.get('stat_type')
                 line = attr.get('line_score')
                 
-                # We link the projection back to the player ID
                 player_id = proj.get('relationships', {}).get('new_player', {}).get('data', {}).get('id')
                 player_name = players.get(player_id, "Unknown Player")
                 
@@ -61,7 +75,6 @@ def scrape_prizepicks():
                     if unique_key in previous_lines:
                         old_line = previous_lines[unique_key]['line']
                         
-                        # If a player's prop moves by 1 or more, the market is shifting
                         if old_line is not None and line is not None:
                             diff = abs(float(line) - float(old_line))
                             if diff >= 1.0:
@@ -74,9 +87,8 @@ def scrape_prizepicks():
         save_current_lines(current_lines)
         
         if alerts and DISCORD_WEBHOOK_URL:
-            # We will only send up to 5 alerts to avoid Discord spam if they bump a whole team at once
             for msg in alerts[:5]:
-                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 10181046}]}) # Purple
+                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 10181046}]})
                 print("PrizePicks Alert sent.")
         else:
             print("PrizePicks Scrape Complete: No major line movement.")

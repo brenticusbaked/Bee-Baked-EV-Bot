@@ -30,11 +30,12 @@ def get_best_f5_moneyline(target_team):
         with open("master_odds_cache.json", "r") as f:
             cache = json.load(f)
     except FileNotFoundError:
-        return None, None, None
+        return None, None, None, None
         
     best_price = 0.0
     best_book = "Unknown"
     best_book_title = "Unknown"
+    event_id = None
     
     for game in cache.get('baseball_mlb', []):
         if target_team in game['home_team'] or target_team in game['away_team']:
@@ -49,11 +50,12 @@ def get_best_f5_moneyline(target_team):
                                     best_price = price
                                     best_book = bm['key']
                                     best_book_title = bm['title']
+                                    event_id = game['id']
                                     
     if best_price > 0:
         link = get_dynamic_link(best_book, target_team)
-        return best_book_title, to_american(best_price), link
-    return None, None, None
+        return best_book_title, to_american(best_price), link, event_id
+    return None, None, None, None
 
 def get_advanced_pitcher_stats(pitcher_id):
     url = f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}?hydrate=stats(group=[pitching],type=[season])"
@@ -112,10 +114,10 @@ def run_mlb_model():
                         selection = better_team
                         
                         if not is_already_logged(matchup, market, selection):
-                            book, odds, link = get_best_f5_moneyline(better_team)
+                            book, odds, link, event_id = get_best_f5_moneyline(better_team)
                             
-                            if book:
-                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), odds, fip_diff, "1.00", "MODEL", "baseball_mlb", "MLB_MODEL_NO_ID")
+                            if book and event_id:
+                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), odds, fip_diff, "1.00", "MODEL", "baseball_mlb", event_id)
                                 alerts.append(
                                     f"⚾ **MLB ADVANCED METRIC MISMATCH** ⚾\n"
                                     f"**Game:** {matchup}\n━━━━━━━━━━━━━━━━━━━━\n"

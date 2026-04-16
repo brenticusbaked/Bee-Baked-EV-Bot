@@ -30,11 +30,12 @@ def get_best_puckline(target_team):
         with open("master_odds_cache.json", "r") as f:
             cache = json.load(f)
     except FileNotFoundError:
-        return None, None, None
+        return None, None, None, None
         
     best_price = 0.0
     best_book = "Unknown"
     best_book_title = "Unknown"
+    event_id = None
     
     for game in cache.get('icehockey_nhl', []):
         if target_team in game['home_team'] or target_team in game['away_team']:
@@ -49,11 +50,12 @@ def get_best_puckline(target_team):
                                     best_price = price
                                     best_book = bm['key']
                                     best_book_title = bm['title']
+                                    event_id = game['id']
                                     
     if best_price > 0:
         link = get_dynamic_link(best_book, target_team)
-        return best_book_title, to_american(best_price), link
-    return None, None, None
+        return best_book_title, to_american(best_price), link, event_id
+    return None, None, None, None
 
 def run_nhl_model():
     try:
@@ -87,11 +89,11 @@ def run_nhl_model():
                         selection = f"{better_team} -1.5"
 
                         if not is_already_logged(matchup, market, selection):
-                            best_book, best_odds, bet_link = get_best_puckline(better_team)
+                            best_book, best_odds, bet_link, event_id = get_best_puckline(better_team)
                             
-                            if best_book:
+                            if best_book and event_id:
                                 odds_text = f"\n💰 **Best Puck Line:** [{best_book}]({bet_link}) | **-1.5 ({best_odds})**"
-                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), best_odds, gd_diff, "1.00", "MODEL", "icehockey_nhl", "NHL_MODEL_NO_ID")
+                                log_bet_to_db(matchup.strip(), market.strip(), selection.strip(), best_odds, gd_diff, "1.00", "MODEL", "icehockey_nhl", event_id)
 
                                 alerts.append(
                                     f"🏒 **NHL MODEL MISMATCH DETECTED** 🏒\n"

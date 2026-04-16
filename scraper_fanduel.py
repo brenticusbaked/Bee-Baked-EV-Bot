@@ -2,20 +2,10 @@ import os
 import requests
 import json
 from datetime import datetime
+from playwright.sync_api import sync_playwright
 
-# --- CONFIG ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-# FanDuel's hidden frontend API for NBA events
-FD_URL = "https://sbapi.nj.sportsbook.fanduel.com/api/content-managed-page?page=SPORT&eventTypeId=7522&competitionId=10547864"
 TRACKER_FILE = "fd_lines.json"
-
-# Spoofed headers to bypass basic Cloudflare protection
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive"
-}
 
 def load_previous_lines():
     if not os.path.exists(TRACKER_FILE):
@@ -29,17 +19,41 @@ def save_current_lines(lines):
 
 def scrape_fanduel():
     try:
-        res = requests.get(FD_URL, headers=HEADERS, timeout=15)
-        if res.status_code != 200:
-            print(f"Blocked by FanDuel! Status Code: {res.status_code}")
-            return
+        data = None
+        
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+
+            def handle_response(response):
+                nonlocal data
+                if "api/content-managed-page" in response.url and "eventTypeId=7522" in response.url:
+                    try:
+                        resp_json = response.json()
+                        if 'attachments' in resp_json:
+                            data = resp_json
+                    except:
+                        pass
+
+            page.on("response", handle_response)
             
-        data = res.json()
+            print("Navigating to FanDuel NBA page...")
+            page.goto("https://sportsbook.fanduel.com/basketball/nba", wait_until="networkidle")
+            page.wait_for_timeout(5000)
+            
+            browser.close()
+
+        if not data:
+            print("Could not intercept FanDuel API data via Playwright.")
+            return
+
         current_lines = {}
         alerts = []
         previous_lines = load_previous_lines()
         
-        # FanDuel stores their odds in a massive dictionary called 'attachments'
         markets = data.get('attachments', {}).get('markets', {})
         events = data.get('attachments', {}).get('events', {})
         
@@ -56,7 +70,6 @@ def scrape_fanduel():
                         unique_key = f"{event_id}_{team}"
                         current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line}
                         
-                        # Compare against previous run to find STEAM
                         if unique_key in previous_lines:
                             old_line = previous_lines[unique_key]['line']
                             
@@ -73,7 +86,7 @@ def scrape_fanduel():
         
         if alerts and DISCORD_WEBHOOK_URL:
             for msg in alerts:
-                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 15615}]}) # FanDuel Blue
+                requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 15615}]})
                 print("FanDuel Alert sent.")
         else:
             print("FanDuel Scrape Complete: No major line movement.")
