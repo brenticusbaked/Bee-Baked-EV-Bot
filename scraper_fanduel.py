@@ -1,11 +1,20 @@
 import os
 import requests
 import json
+import random
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 TRACKER_FILE = "fd_lines.json"
+
+# 1. Pull all three secrets
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
+RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
+
+# 2. Convert the raw text secret into a clean Python array
+PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace('\n', ',').split(',') if ip.strip()]
 
 def load_previous_lines():
     if not os.path.exists(TRACKER_FILE):
@@ -22,7 +31,23 @@ def scrape_fanduel():
         data = None
         
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            proxy_settings = None
+            
+            # 3. Pick a random IP and build the credentials
+            if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
+                chosen_ip = random.choice(PROXY_IPS)
+                proxy_settings = {
+                    "server": f"http://{chosen_ip}",
+                    "username": PROXY_USERNAME,
+                    "password": PROXY_PASSWORD
+                }
+            
+            # 4. Launch the browser with the fully assembled proxy
+            browser = p.chromium.launch(
+                headless=True,
+                proxy=proxy_settings
+            )
+            
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
@@ -30,6 +55,7 @@ def scrape_fanduel():
 
             def handle_response(response):
                 nonlocal data
+                # Unique to FanDuel:
                 if "api/content-managed-page" in response.url and "eventTypeId=7522" in response.url:
                     try:
                         resp_json = response.json()
@@ -40,7 +66,7 @@ def scrape_fanduel():
 
             page.on("response", handle_response)
             
-            print("Navigating to FanDuel NBA page...")
+            print(f"Navigating to FanDuel via Webshare Proxy...")
             page.goto("https://sportsbook.fanduel.com/basketball/nba", wait_until="networkidle")
             page.wait_for_timeout(5000)
             

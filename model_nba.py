@@ -19,9 +19,12 @@ def get_dynamic_link(bookmaker, target_string):
     return links.get(book, f"https://www.google.com/search?q={bookmaker}+sportsbook")
 
 def get_best_spread(target_team):
-    try:
-        with open("master_odds_cache.json", "r") as f: cache = json.load(f)
-    except: return None, None, None, None, None
+    from db_manager import get_master_cache
+    
+    cache = get_master_cache()
+    if not cache:
+        print("Cloud cache is empty or failed to load.")
+        return
         
     best_price, best_point, best_book, best_title, event_id = 0.0, "", "Unknown", "Unknown", ""
     for game in cache.get('basketball_nba', []):

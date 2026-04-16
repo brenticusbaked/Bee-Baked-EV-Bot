@@ -26,11 +26,12 @@ def get_dynamic_link(bookmaker, target_string):
     return links.get(book, f"https://www.google.com/search?q={bookmaker}+sportsbook")
 
 def get_best_puckline(target_team):
-    try:
-        with open("master_odds_cache.json", "r") as f:
-            cache = json.load(f)
-    except FileNotFoundError:
-        return None, None, None, None
+    from db_manager import get_master_cache
+    
+    cache = get_master_cache()
+    if not cache:
+        print("Cloud cache is empty or failed to load.")
+        return
         
     best_price = 0.0
     best_book = "Unknown"

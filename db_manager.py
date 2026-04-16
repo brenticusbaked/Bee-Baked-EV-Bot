@@ -81,3 +81,33 @@ def get_all_bets():
     if not supabase: return []
     res = supabase.table("bets_log").select("*").execute()
     return res.data
+
+def save_master_cache(cache_data):
+    """Pushes the master odds dictionary to the Supabase JSONB column."""
+    if not supabase: 
+        print("Supabase client not initialized.")
+        return
+    
+    # We use 'upsert' with a hardcoded ID of 'master'. 
+    # This ensures we are always overwriting the same row rather than creating millions of rows.
+    try:
+        supabase.table("odds_cache").upsert({
+            "id": "master",
+            "data": cache_data,
+            "updated_at": datetime.utcnow().isoformat()
+        }).execute()
+    except Exception as e:
+        print(f"Error saving cache to Supabase: {e}")
+
+def get_master_cache():
+    """Pulls the live master odds dictionary from Supabase."""
+    if not supabase: return {}
+    
+    try:
+        res = supabase.table("odds_cache").select("data").eq("id", "master").execute()
+        if res.data:
+            return res.data[0]["data"]
+        return {}
+    except Exception as e:
+        print(f"Error loading cache from Supabase: {e}")
+        return {}

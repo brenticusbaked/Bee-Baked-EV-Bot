@@ -1,11 +1,20 @@
 import os
 import requests
 import json
+import random
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 TRACKER_FILE = "dk_lines.json"
+
+# Pull all three secrets
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
+RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
+
+# Convert the raw text secret into a clean Python array
+PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace('\n', ',').split(',') if ip.strip()]
 
 def load_previous_lines():
     if not os.path.exists(TRACKER_FILE):
@@ -22,7 +31,23 @@ def scrape_draftkings():
         data = None
         
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            proxy_settings = None
+            
+            # Pick a random IP and build the credentials
+            if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
+                chosen_ip = random.choice(PROXY_IPS)
+                proxy_settings = {
+                    "server": f"http://{chosen_ip}",
+                    "username": PROXY_USERNAME,
+                    "password": PROXY_PASSWORD
+                }
+            
+            # Launch the browser with the fully assembled proxy
+            browser = p.chromium.launch(
+                headless=True,
+                proxy=proxy_settings
+            )
+            
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
@@ -40,8 +65,7 @@ def scrape_draftkings():
 
             page.on("response", handle_response)
             
-            # Navigate to the frontend page to trigger the background API request naturally
-            print("Navigating to DraftKings NBA page...")
+            print("Navigating to DraftKings via Webshare Proxy...")
             page.goto("https://sportsbook.draftkings.com/leagues/basketball/nba", wait_until="networkidle")
             page.wait_for_timeout(5000)
             
@@ -68,32 +92,4 @@ def scrape_draftkings():
                         price = outcome.get('oddsAmerican')
                         
                         unique_key = f"{event_id}_{team}"
-                        current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line, "price": price}
-                        
-                        if unique_key in previous_lines:
-                            old_line = previous_lines[unique_key]['line']
-                            
-                            if old_line is not None and line is not None:
-                                diff = abs(float(line) - float(old_line))
-                                if diff >= 1.5:
-                                    alerts.append(
-                                        f"📈 **STEAM ALERT:** {matchup}\n"
-                                        f"**{team} Spread Moved!**\n"
-                                        f"Old Line: {old_line} ➡️ **New Line: {line}** ({price})"
-                                    )
-                                    
-        save_current_lines(current_lines)
-        
-        if alerts and DISCORD_WEBHOOK_URL:
-            for msg in alerts:
-                payload = {"embeds": [{"description": msg, "color": 16753920}]}
-                requests.post(DISCORD_WEBHOOK_URL, json=payload)
-                print("Alert sent for line movement.")
-        else:
-            print("DraftKings Scrape Complete: No major line movement detected.")
-
-    except Exception as e:
-        print(f"Error scraping DraftKings: {e}")
-
-if __name__ == "__main__":
-    scrape_draftkings()
+                        current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line

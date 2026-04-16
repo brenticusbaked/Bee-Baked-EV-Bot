@@ -55,11 +55,11 @@ def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None,
 
 def scan_markets():
     """Main scanning logic comparing master cache against Pinnacle."""
-    try:
-        with open("master_odds_cache.json", "r") as f:
-            cache = json.load(f)
-    except Exception as e:
-        print(f"Error loading cache: {e}")
+    from db_manager import get_master_cache
+    
+    cache = get_master_cache()
+    if not cache:
+        print("Cloud cache is empty or failed to load.")
         return
 
     alerts = []
