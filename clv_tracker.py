@@ -1,10 +1,5 @@
 import os
-import requests
-import json
-from db_manager import get_untracked_bets, update_bet_clv
-
-# Retrieve API Key for final closing line checks
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+from db_manager import get_untracked_bets, update_bet_clv, get_master_cache
 
 def to_decimal(price):
     try:
@@ -16,65 +11,66 @@ def to_decimal(price):
 
 def run_clv_tracker():
     """
-    Identifies bets in the database missing CLV data, fetches the sharpest 
-    closing price from Pinnacle, and calculates the final edge.
+    Identifies bets missing CLV data and audits them against the 
+    Supabase Master Cache, costing 0 API credits.
     """
-    # Fetch bets from DB that haven't been audited for CLV yet
     bets = get_untracked_bets()
     if not bets:
         print("No new bets requiring CLV tracking.")
         return
 
-    # Comprehensive list of monitored sources for Kentucky & Offshore
-    soft_books = [
-        'fanduel', 'draftkings', 'betmgm', 'bet365', 'espn', 'fanatics', 
-        'caesars', 'betrivers', 'bovada', 'betonline', 'bookmaker', 
-        'lowvig', 'betus', 'mybookie', 'prizepicks', 'pick6', 'novig', 'dabble'
-    ]
+    print(f"📊 Auditing CLV for {len(bets)} bets using Cloud Cache...")
+    
+    # Load the global cache from Supabase instead of calling The Odds API
+    cache = get_master_cache()
+    if not cache:
+        print("⚠️ Cloud cache is empty or unavailable.")
+        return
 
-    print(f"📊 Auditing CLV for {len(bets)} bets...")
+    tracked_count = 0
 
     for bet in bets:
-        # We use Pinnacle as the 'Gold Standard' for the true closing market price
         sport = bet.get('sport', 'basketball_nba')
         event_id = bet.get('event_id')
+        selection = bet.get('selection', '')
         
-        if not event_id: continue
+        if not event_id or sport not in cache: 
+            continue
 
-        url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds"
-        params = {
-            'apiKey': ODDS_API_KEY,
-            'regions': 'us,eu,us_dfs,us_ex',
-            'markets': 'h2h,spreads,totals',
-            'bookmakers': 'pinnacle'
-        }
-
-        try:
-            res = requests.get(url, params=params, timeout=15)
-            if res.status_code == 200:
-                data = res.json()
-                sharp_price = None
-                
-                # Extract Pinnacle's final price for the specific selection
-                for bm in data.get('bookmakers', []):
+        sharp_price = None
+        
+        # Search the cached JSON for the specific event and Pinnacle's line
+        for game in cache[sport]:
+            if game['id'] == event_id:
+                for bm in game.get('bookmakers', []):
                     if bm['key'] == 'pinnacle':
                         for mkt in bm.get('markets', []):
                             for outcome in mkt.get('outcomes', []):
-                                if outcome['name'] == bet['selection']:
+                                
+                                # FIX: Safely match H2H, Spreads, and Totals
+                                name = str(outcome.get('name', ''))
+                                point = str(outcome.get('point', ''))
+                                
+                                # Reconstruct the string to match how unified_bot logged it (e.g. "Lakers -5.5")
+                                reconstructed_selection = f"{name} {point}".strip()
+                                
+                                if selection in (reconstructed_selection, name):
                                     sharp_price = float(outcome['price'])
+                break # Game found, stop searching
                 
-                if sharp_price:
-                    # Calculate CLV: (Your Price / Sharp Price) - 1
-                    user_price = to_decimal(bet['odds'])
-                    clv_edge = (user_price / sharp_price) - 1
-                    
-                    # Update the database with the final audit results
-                    update_bet_clv(bet['id'], sharp_price, clv_edge)
-                    print(f"✅ CLV Updated for {bet['selection']}: {clv_edge*100:.2f}%")
-            else:
-                print(f"⚠️ Could not fetch closing lines for Event {event_id}")
-        except Exception as e:
-            print(f"❌ Error tracking CLV: {e}")
+        if sharp_price:
+            # Calculate CLV: (Your Price / Sharp Price) - 1
+            user_price = to_decimal(bet['odds'])
+            clv_edge = (user_price / sharp_price) - 1
+            
+            # Update the database so it is never audited again
+            update_bet_clv(bet['id'], sharp_price, clv_edge)
+            print(f"✅ CLV Updated for {selection}: {clv_edge*100:.2f}%")
+            tracked_count += 1
+        else:
+            print(f"⚠️ Pinnacle line not found in cache for {selection} (Game may have started).")
+
+    print(f"✅ CLV Audit Complete. Cost: 0 API Credits.")
 
 if __name__ == "__main__":
     run_clv_tracker()
