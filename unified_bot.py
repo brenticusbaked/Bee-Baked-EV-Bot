@@ -1,6 +1,5 @@
 import os
 import requests
-import urllib.parse
 from db_manager import is_already_logged, log_bet_to_db, get_master_cache
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -9,39 +8,15 @@ def to_american(dec):
     if dec >= 2.0: return f"+{int((dec - 1) * 100)}"
     return str(int(-100 / (dec - 1)))
 
-def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None, api_link=None):
-    if api_link: return api_link 
-    book = bookmaker.lower().replace(' ', '').replace('sportsbook', '')
-    query = urllib.parse.quote(target_string)
-    
-    if selection_id:
-        slip_links = {
-            'draftkings': f'https://sportsbook.draftkings.com/add-to-slip/{selection_id}',
-            'fanduel': f'https://sportsbook.fanduel.com/sports/event/{event_id}/selection/{selection_id}',
-            'caesars': f'https://sportsbook.caesars.com/us/ky/bet/selection/{selection_id}',
-            'betmgm': f'https://sports.betmgm.com/en/sports/event/{event_id}', 
-            'espn': f'espnbet://bet/{selection_id}'
-        }
-        if book in slip_links: return slip_links[book]
-
-    app_schemes = {
-        'draftkings': f'draftkings://sportsbook/search?q={query}',
-        'fanduel': f'fanduel://sportsbook/navigation/search?q={query}',
-        'betmgm': f'betmgm://sportsbook/search?q={query}',
-        'caesars': f'caesars://sportsbook/search?q={query}',
-        'bet365': f'bet365://sportsbook/search?q={query}',
-        'prizepicks': f'https://app.prizepicks.com/search/{query}'
-    }
-    return app_schemes.get(book, f"https://www.google.com/search?q={bookmaker}+{query}")
-
 def scan_markets():
+    # FIXED: Pulls direct from Supabase cloud cache
     cache = get_master_cache()
     if not cache:
-        print("Cloud cache is empty or failed to load.")
+        print("Cloud cache is empty. Run fetcher first.")
         return
 
     alerts = []
-    soft_books = ['fanduel', 'draftkings', 'betmgm', 'bet365', 'espn', 'fanatics', 'caesars', 'betrivers', 'bovada', 'prizepicks']
+    soft_books = ['fanduel', 'draftkings', 'betmgm', 'bet365', 'caesars', 'prizepicks']
 
     for sport, events in cache.items():
         for event in events:
@@ -49,7 +24,6 @@ def scan_markets():
             markets = {}
             
             for bm in event['bookmakers']:
-                api_link = bm.get('link') 
                 for mkt in bm['markets']:
                     mkt_key = mkt['key']
                     if mkt_key not in markets: 
@@ -61,28 +35,25 @@ def scan_markets():
                     elif bm['key'] in soft_books:
                         for outcome in mkt['outcomes']:
                             markets[mkt_key]['soft'].append({
-                                'book': bm['title'], 'book_key': bm['key'], 
-                                'name': outcome['name'], 'price': float(outcome['price']), 
-                                'point': outcome.get('point', ''), 'id': outcome.get('id'), 
-                                'api_link': api_link
+                                'book': bm['title'], 'name': outcome['name'], 
+                                'price': float(outcome['price']), 'point': outcome.get('point', '')
                             })
 
             for m_type, data in markets.items():
                 sharp = data['sharp']
-                if not sharp: continue
+                if not sharp: continue # Skips if Pinnacle baseline is missing
                 
                 for s_bet in data['soft']:
                     if s_bet['name'] in sharp:
                         p_price = sharp[s_bet['name']]
-                        if s_bet['price'] > p_price * 1.03:
+                        if s_bet['price'] > p_price * 1.03: # 3%+ Edge threshold
                             ev = (s_bet['price'] / p_price) - 1
                             selection = f"{s_bet['name']} {s_bet['point']}".strip()
                             
                             if not is_already_logged(matchup, m_type, selection):
                                 units = min((ev / (s_bet['price'] - 1)) / 4 * 100, 5.0) 
                                 log_bet_to_db(matchup, m_type, selection, to_american(s_bet['price']), ev, f"{units:.2f}", to_american(p_price), sport, event['id'])
-                                link = get_dynamic_link(s_bet['book_key'], s_bet['name'], s_bet['id'], event['id'], s_bet['api_link'])
-                                alerts.append(f"🟢 **+EV {m_type.upper()}**\n**Match:** {matchup}\n**Bet:** {selection}\n**Book:** [{s_bet['book']}]({link}) @ {to_american(s_bet['price'])}\n**Edge:** {ev*100:.2f}%\n**Suggested:** {units:.2f} Units")
+                                alerts.append(f"🟢 **+EV {m_type.upper()}**\n**Match:** {matchup}\n**Bet:** {selection}\n**Book:** {s_bet['book']} @ {to_american(s_bet['price'])}\n**Edge:** {ev*100:.2f}%\n**Suggested:** {units:.2f} Units")
 
     if alerts and DISCORD_WEBHOOK_URL:
         for a in alerts: requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": a, "color": 3066993}]})
