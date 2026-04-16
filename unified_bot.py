@@ -32,7 +32,6 @@ def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None,
             'caesars': f'https://sportsbook.caesars.com/us/ky/bet/selection/{selection_id}',
             'betmgm': f'https://sports.betmgm.com/en/sports/event/{event_id}', 
             'espn': f'espnbet://bet/{selection_id}'
-            # Novig uses the app scheme below
         }
         if book in slip_links:
              return slip_links[book]
@@ -47,7 +46,7 @@ def get_dynamic_link(bookmaker, target_string, selection_id=None, event_id=None,
         'espn': f'espnbet://search?q={query}',
         'fanatics': f'fanatics://search?q={query}',
         'betrivers': f'betrivers://search?q={query}',
-        'novig': f'novig://search?q={query}', # Native Novig app scheme
+        'novig': f'novig://search?q={query}', 
         'prizepicks': f'https://app.prizepicks.com/search/{query}'
     }
     
@@ -76,7 +75,7 @@ def scan_markets():
             markets = {}
             
             for bm in event['bookmakers']:
-                api_link = bm.get('link') # Capture direct link from API
+                api_link = bm.get('link') 
                 for mkt in bm['markets']:
                     mkt_key = mkt['key']
                     if mkt_key not in markets: 
@@ -111,13 +110,11 @@ def scan_markets():
                             
                             if not is_already_logged(matchup, m_type, selection):
                                 
-                                # --- DYNAMIC UNIT SIZING (Quarter Kelly Criterion) ---
+                                # Dynamic Unit Sizing (Quarter Kelly)
                                 fractional_odds = s_bet['price'] - 1
                                 calculated_units = (ev / fractional_odds) / 4 * 100
-                                units = min(calculated_units, 5.0) # Cap at 5 Units
-                                # ------------------------------------------------------
+                                units = min(calculated_units, 5.0) 
                                 
-                                # PASSING ALL 9 ARGUMENTS TO DB
                                 log_bet_to_db(
                                     matchup, m_type, selection, to_american(s_bet['price']), 
                                     ev, f"{units:.2f}", to_american(p_price), sport, event['id']

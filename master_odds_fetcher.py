@@ -41,4 +41,42 @@ def run_fetcher():
         }
         
         try:
-            res = requests.get(url, params=params, timeout=
+            res = requests.get(url, params=params, timeout=15)
+            if res.status_code == 200:
+                cache[sport] = res.json()
+                
+                # Accurately track billing across the loop
+                current_usage = int(res.headers.get('x-requests-used', 0))
+                credits_remaining = res.headers.get('x-requests-remaining', "Unknown")
+                
+                if start_usage is None: 
+                    start_usage = current_usage
+                end_usage = current_usage
+                
+                print(f"✅ Cached: {sport}")
+            else:
+                print(f"⚠️ Failed to fetch {sport}: HTTP {res.status_code}")
+        except Exception as e:
+            print(f"❌ Exception fetching {sport}: {e}")
+
+    # Calculate actual cost of this specific run rather than the monthly cumulative
+    actual_cost = (end_usage - start_usage) if (end_usage and start_usage) else 0
+
+    # Failsafe Save Method: Forces creation in the current working directory
+    file_path = os.path.join(os.getcwd(), "master_odds_cache.json")
+    
+    try:
+        # Using "w+" to force creation and read/write permissions
+        with open(file_path, "w+", encoding="utf-8") as f:
+            json.dump(cache, f, indent=4)
+        print(f"🚀 Master Cache Saved Successfully at: {file_path}")
+    except Exception as e:
+        print(f"❌ Failed to save JSON file. Check OS write permissions. Error: {e}")
+        
+    print(f"💰 Actual Credits Burned This Run: {actual_cost}")
+    print(f"🏦 API Balance Remaining: {credits_remaining}")
+
+if __name__ == "__main__":
+    # If testing locally, temporarily uncomment the line below and add your key
+    # ODDS_API_KEY = "your_key_here"
+    run_fetcher()
