@@ -1,8 +1,17 @@
 import os
 from db_manager import get_untracked_bets, update_bet_clv, get_master_cache
 
+def get_decimal(american_odds):
+    """Converts American string/int odds to Decimal float."""
+    try:
+        val = float(str(american_odds).replace('+', ''))
+        if val > 0:
+            return (val / 100) + 1
+        return (100 / abs(val)) + 1
+    except:
+        return 2.0 # Default fallback
+
 def run_clv_tracker():
-    # Pulls bets without closing lines and the fresh cloud cache
     untracked = get_untracked_bets()
     cache = get_master_cache()
     
@@ -14,29 +23,30 @@ def run_clv_tracker():
     
     for bet in untracked:
         sport = bet.get('sport')
-        if sport not in cache:
-            continue
+        if sport not in cache: continue
             
-        # Locate the specific game in the cache
         game_data = next((g for g in cache[sport] if str(g.get('id')) == str(bet.get('event_id'))), None)
         
         if game_data:
             pinnacle = next((bm for bm in game_data.get('bookmakers', []) if bm['key'] == 'pinnacle'), None)
             if pinnacle:
-                market_data = next((m for m in pinnacle.get('markets', []) if m['key'].upper() == bet['market'].upper()), None)
+                # Standardize market lookup
+                market_key = bet['market'].lower()
+                market_data = next((m for m in pinnacle.get('markets', []) if m['key'].lower() == market_key), None)
+                
                 if market_data:
-                    outcome = next((o for o in market_data.get('outcomes', []) if o['name'].lower() == bet['selection'].split(' ')[0].lower()), None)
+                    # Match selection (handle name stripping for 'Home', 'Away', or Player Names)
+                    target = bet['selection'].split(' ')[0].lower()
+                    outcome = next((o for o in market_data.get('outcomes', []) if o['name'].lower() == target), None)
                     
                     if outcome:
                         closing_price = float(outcome['price'])
-                        
-                        # FIXED: Prevents division by zero or extreme anomalous edges
-                        if closing_price <= 1.0:
-                            print(f"⚠️ Invalid price for {bet['selection']}. Skipping.")
-                            continue
+                        if closing_price <= 1.0: continue
                             
-                        # Calculation: (Placed Odds / Closing Odds) - 1
-                        clv_edge = (float(bet['odds_decimal']) / closing_price) - 1
+                        # FIXED: Use the helper to avoid KeyError: 'odds_decimal'
+                        placed_decimal = get_decimal(bet['odds'])
+                        clv_edge = (placed_decimal / closing_price) - 1
+                        
                         update_bet_clv(bet['id'], closing_price, clv_edge)
                         print(f"✅ CLV Updated for {bet['selection']}: {clv_edge*100:.2f}%")
                     else:
