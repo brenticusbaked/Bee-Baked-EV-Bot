@@ -4,11 +4,11 @@ from db_manager import save_master_cache
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
+# BUDGET UPDATE: Reduced to 3 sports and 2 primary markets
 FETCH_CONFIG = {
-    "basketball_nba": "h2h,spreads,totals",
-    "icehockey_nhl": "h2h,spreads,totals",
-    "baseball_mlb": "h2h,spreads,totals", 
-    "soccer_epl": "h2h,spreads,totals"
+    "basketball_nba": "h2h,spreads",
+    "icehockey_nhl": "h2h,spreads",
+    "baseball_mlb": "h2h,spreads"
 }
 
 def run_fetcher():
@@ -16,14 +16,13 @@ def run_fetcher():
         print("CRITICAL ERROR: ODDS_API_KEY missing.")
         return
 
-    # FIXED: Added 'eu' for Pinnacle baseline; limited books to save credits
-    regions = "us,us_ex,eu"
+    # REGIONAL OPTIMIZATION: 
+    # 'us' and 'eu' are essential for soft books and the Pinnacle baseline.
+    regions = "us,eu"
     target_books = "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks"
     
     cache = {}
-    start_usage = None
-    end_usage = None
-
+    
     print(f"📥 Fetching Master Cache for {len(FETCH_CONFIG)} sports...")
     
     for sport, markets in FETCH_CONFIG.items():
@@ -40,14 +39,14 @@ def run_fetcher():
             res = requests.get(url, params=params, timeout=15)
             if res.status_code == 200:
                 cache[sport] = res.json()
-                current_usage = int(res.headers.get('x-requests-used', 0))
-                if start_usage is None: start_usage = current_usage
-                end_usage = current_usage
-                print(f"✅ Cached: {sport}")
+                # Monitor usage in logs
+                remaining = res.headers.get('x-requests-remaining')
+                used = res.headers.get('x-requests-used')
+                print(f"✅ Cached: {sport} | Used: {used} | Remaining: {remaining}")
         except Exception as e:
             print(f"❌ Error fetching {sport}: {e}")
 
-    # CLOUD SAVE: Pushes directly to Supabase
+    # CLOUD SAVE
     try:
         save_master_cache(cache)
         print("🚀 Master Cache Saved to Supabase Cloud.")
