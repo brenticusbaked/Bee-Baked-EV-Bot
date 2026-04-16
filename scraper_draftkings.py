@@ -15,6 +15,7 @@ def scrape_draftkings():
 
             def handle_response(response):
                 nonlocal data
+                # Updated targeting for DK API
                 if "api/sportscontent/v1/events/42648" in response.url:
                     try: data = response.json()
                     except: pass
@@ -36,7 +37,7 @@ def scrape_draftkings():
                         team = outcome.get('label')
                         line = outcome.get('line')
                         price = outcome.get('oddsAmerican')
-                        # FIXED: Now appends found lines to alerts
+                        # FIXED: Generates detection alerts
                         alerts.append(f"📊 **DK Movement Detected**\n{matchup}: {team} {line} ({price})")
 
         if alerts and DISCORD_WEBHOOK_URL:
