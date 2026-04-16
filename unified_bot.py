@@ -23,7 +23,7 @@ def scan_markets():
         return
 
     alerts = []
-    soft_books = ['fanduel', 'draftkings', 'betmgm', 'bet365', 'caesars', 'prizepicks', 'bovada']
+    soft_books = ['fanduel', 'draftkings', 'betmgm', 'bet365', 'caesars', 'bovada']
 
     for sport, events in cache.items():
         for event in events:
