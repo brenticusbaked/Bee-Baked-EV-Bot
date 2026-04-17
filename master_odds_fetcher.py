@@ -17,7 +17,7 @@ BASE_CONFIG = {
 EXPANDED_CONFIG = {
     "basketball_nba": "spreads,h2h,totals",
     "icehockey_nhl": "spreads,h2h,totals",
-    "baseball_mlb": "h2h,spreads,h2h_1st_half,totals",
+    "baseball_mlb": "h2h,spreads,totals", # FIXED: Removed invalid 1st_half market
 }
 
 
