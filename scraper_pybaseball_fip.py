@@ -11,19 +11,16 @@ def run_fip_scraper():
     
     try:
         # Fetch pitching stats for the current 2026 season. 
-        # The HTTP_PROXY and HTTPS_PROXY environment variables we set in main.yml 
-        # will automatically route this through your Webshare proxy to bypass the 403 error.
         stats = pybaseball.pitching_stats(2026, qual=0)
         
-        # We only need specific columns for EV modeling to keep the database light
+        # Target specific columns for the EV model
         target_columns = ['Name', 'Team', 'FIP', 'ERA', 'IP']
         
-        # Ensure the columns actually exist in the fetched data
         if set(target_columns).issubset(stats.columns):
-            # Convert the Pandas DataFrame to a list of dictionaries (JSON friendly)
+            # Convert to a JSON-friendly format
             clean_data = stats[target_columns].dropna().to_dict(orient='records')
             
-            # Save it to the database under the 'fangraphs_fip' bookmaker label
+            # Save it directly to the database
             save_odds_to_db("fangraphs_fip", {"pitchers": clean_data})
             print("✅ FanGraphs FIP data successfully fetched and cached.")
         else:
@@ -33,5 +30,4 @@ def run_fip_scraper():
         print(f"❌ pybaseball scrape error: {e}")
 
 if __name__ == "__main__":
-    # Allows you to test this file locally/independently
     run_fip_scraper()
