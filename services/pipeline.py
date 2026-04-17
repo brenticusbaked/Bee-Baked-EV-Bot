@@ -1,179 +1,49 @@
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+import asyncio
 import os
-from time import perf_counter
-from typing import Dict, Iterable, List, Tuple
+from datetime import datetime
+from services.alerts import send_discord_alert
 
-from services.http_client import post_discord
-from db_manager import get_runtime_db_stats, log_workflow_run, reset_runtime_db_stats
-from services.tasks import (
-    PipelineTask,
-    get_audit_tasks,
-    get_parallel_tasks,
-    get_refresh_tasks,
-    get_scan_tasks,
-    get_scraper_tasks,
-)
+# Import your individual book scrapers
+from scraper_draftkings import scrape_dk
+from scraper_fanduel import scrape_fd
+from scraper_betmgm import scrape_mgm
+from scraper_prizepicks import scrape_pp
 
+DISCORD_STATUS_WEBHOOK_URL = os.getenv("DISCORD_STATUS_WEBHOOK_URL")
 
-TaskResult = Tuple[str, bool, str, float, int, str, Dict[str, str]]
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-DISCORD_STATUS_WEBHOOK_URL = os.getenv("DISCORD_STATUS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL
+async def run_scrapers_async():
+    """Runs all book scrapers in parallel with increased timeouts."""
+    print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {datetime.utcnow().isoformat()}")
+    
+    # We run these concurrently to save GitHub Action minutes
+    tasks = [
+        scrape_dk(),
+        scrape_fd(),
+        scrape_mgm(),
+        scrape_pp()
+    ]
+    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Process results for the status report
+    summary = []
+    for i, res in enumerate(results):
+        name = ["DraftKings", "FanDuel", "BetMGM", "PrizePicks"][i]
+        if isinstance(res, Exception):
+            summary.append(f"❌ {name}: {str(res)[:50]}...")
+        else:
+            summary.append(f"✅ {name}: Success")
+            
+    return summary
 
-
-def _normalize_task_output(output) -> Tuple[str, int, str, Dict[str, str]]:
-    if isinstance(output, dict):
-        detail = str(output.get("detail", "finished"))
-        count = int(output.get("count", 0))
-        label = str(output.get("label", "updates"))
-        meta = output.get("meta", {})
-        return detail, count, label, meta if isinstance(meta, dict) else {}
-    if isinstance(output, int):
-        return "finished", output, "updates", {}
-    return "finished", 0, "updates", {}
-
-
-def run_task(task: PipelineTask) -> TaskResult:
-    print(f"[start] {task.name}")
-    started = perf_counter()
-    try:
-        output = task.func()
-        detail, count, label, meta = _normalize_task_output(output)
-        return (task.name, True, detail, perf_counter() - started, count, label, meta)
-    except Exception as exc:
-        return (task.name, False, str(exc), perf_counter() - started, 0, "updates", {})
-
-
-def run_sequential(tasks: Iterable[PipelineTask]) -> List[TaskResult]:
-    return [run_task(task) for task in tasks]
-
-
-def run_parallel(tasks: Iterable[PipelineTask]) -> List[TaskResult]:
-    task_list = list(tasks)
-    if not task_list:
-        return []
-
-    results: List[TaskResult] = []
-    with ThreadPoolExecutor(max_workers=len(task_list)) as executor:
-        future_map = {executor.submit(run_task, task): task for task in task_list}
-        for future in as_completed(future_map):
-            task = future_map[future]
-            try:
-                results.append(future.result())
-            except Exception as exc:
-                results.append((task.name, False, str(exc), 0.0, 0, "updates", {}))
-    return results
-
-
-def print_results(results: Iterable[TaskResult]) -> None:
-    for name, ok, detail, seconds, count, label, meta in results:
-        status = "ok" if ok else "failed"
-        count_text = f" | {count} {label}" if count else ""
-        print(f"[{status}] {name}: {detail} ({seconds:.2f}s){count_text}")
-
-
-def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
-    result_list = list(results)
-    if not DISCORD_STATUS_WEBHOOK_URL:
-        return
-
-    total_seconds = sum(seconds for _, _, _, seconds, _, _, _ in result_list)
-    total_updates = sum(count for _, _, _, _, count, label, _ in result_list if label == "updates")
-    total_alerts = sum(count for _, _, _, _, count, label, _ in result_list if label == "alerts")
-    total_graded = sum(count for _, _, _, _, count, label, _ in result_list if label == "graded")
-    total_tracked = sum(count for _, _, _, _, count, label, _ in result_list if label == "tracked")
-    db_stats = get_runtime_db_stats()
-    task_lines = []
-    near_miss_lines = []
-    failed = 0
-    for name, ok, detail, seconds, count, label, meta in result_list:
-        status = "OK" if ok else "FAILED"
-        count_text = f" | {count} {label}" if count else ""
-        detail_text = f" - {detail}" if detail else ""
-        task_lines.append(f"`{status}` {name} ({seconds:.2f}s){count_text}{detail_text}")
-        if not ok:
-            failed += 1
-        near_miss_summary = meta.get("near_miss_summary")
-        if near_miss_summary:
-            near_miss_lines.append(f"`{name}` {near_miss_summary}")
-
-    if failed == 0 and total_alerts == 0:
-        outcome_line = "No bet updates found this run."
-    elif failed == 0:
-        outcome_line = f"{total_alerts} bet update(s) sent this run."
-    else:
-        outcome_line = "Run completed with failures. Review task details below."
-
-    description = (
-        f"**{title}**\n"
-        f"{outcome_line}\n"
-        f"\n**Counts**\n"
-        f"Tasks: {len(result_list)}\n"
-        f"Failures: {failed}\n"
-        f"Runtime: {total_seconds:.2f}s\n"
-        f"Alerts: {total_alerts}\n"
-        f"Updates: {total_updates}\n"
-        f"CLV Tracked: {total_tracked}\n"
-        f"Graded: {total_graded}\n"
-        f"Bet Log Writes: {db_stats.get('bet_log_success', 0)} success / {db_stats.get('bet_log_failure', 0)} failed\n\n"
-        f"**Task Timings**\n"
-        + "\n".join(task_lines)
-    )
-    if near_miss_lines:
-        description += "\n\n**Near Misses**\n" + "\n".join(near_miss_lines)
-    if db_stats.get("bet_log_failure", 0) > 0:
-        description += "\n\n**Warning:** Some bet alerts qualified but failed to write to `bets_log`."
-    log_workflow_run(
-        workflow_name=title,
-        status="failed" if failed else "ok",
-        runtime_seconds=total_seconds,
-        task_count=len(result_list),
-        failure_count=failed,
-        alert_count=total_alerts,
-        graded_count=total_graded,
-        tracked_count=total_tracked,
-        summary=description[:2000],
-    )
-    post_discord(
-        {"embeds": [{"description": description, "color": 5763719 if failed == 0 else 15158332}]},
-        webhook_url=DISCORD_STATUS_WEBHOOK_URL,
-    )
-
-
-def run_master_pipeline() -> None:
-    print(f"BEE-BAKED PIPELINE STARTING - {datetime.now().isoformat()}")
-    reset_runtime_db_stats()
-    all_results: List[TaskResult] = []
-
-    print("--- PHASE 1: REFRESHING CLOUD CACHE ---")
-    results = run_sequential(get_refresh_tasks())
-    all_results.extend(results)
-    print_results(results)
-
-    print("--- PHASE 2: EXECUTING MODELS & NEWS ---")
-    results = run_parallel(get_parallel_tasks())
-    all_results.extend(results)
-    print_results(results)
-
-    print("--- PHASE 3: UNIFIED MARKET SCAN ---")
-    results = run_sequential(get_scan_tasks())
-    all_results.extend(results)
-    print_results(results)
-
-    print("--- PHASE 4: POST-GAME AUDIT ---")
-    results = run_sequential(get_audit_tasks())
-    all_results.extend(results)
-    print_results(results)
-
-    send_pipeline_summary("BEE-BAKED CORE RUN COMPLETE", all_results)
-    print("BEE-BAKED PIPELINE COMPLETE.")
-
-
-def run_scraper_pipeline() -> None:
-    print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {datetime.now().isoformat()}")
-    reset_runtime_db_stats()
-    print("--- SCRAPER PHASE: EXECUTING BROWSER SCRAPERS ---")
-    results = run_parallel(get_scraper_tasks())
-    print_results(results)
-    send_pipeline_summary("BEE-BAKED SCRAPER RUN COMPLETE", results)
+def run_scraper_pipeline():
+    """Sync wrapper to execute the async pipeline."""
+    loop = asyncio.get_event_loop()
+    summary_list = loop.run_until_complete(run_scrapers_async())
+    
+    # Send a quick health check to your Discord Status channel
+    report = "**Scraper Pipeline Report**\n" + "\n".join(summary_list)
+    if DISCORD_STATUS_WEBHOOK_URL:
+        send_discord_alert({"content": report}, webhook_url=DISCORD_STATUS_WEBHOOK_URL)
+    
     print("BEE-BAKED SCRAPER PIPELINE COMPLETE.")
