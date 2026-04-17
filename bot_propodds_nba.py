@@ -59,7 +59,14 @@ def get_sgo_edges():
 
     try:
         data = request("GET", url, params=params, timeout=15).json()
-        for event in data:
+        
+        # FIXED: Extract events if the API returns a dictionary with pagination
+        if isinstance(data, dict):
+            events_list = data.get("events", [])
+        else:
+            events_list = data if isinstance(data, list) else []
+
+        for event in events_list:
             matchup = event.get("name", "Unknown Matchup")
             market_groups = {}
             for odd_key, odd_obj in event.get("odds", {}).items():
