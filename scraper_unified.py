@@ -3,7 +3,7 @@ import random
 import string
 import time
 from playwright.sync_api import sync_playwright
-from playwright_stealth import Stealth  # v2.x modern API
+from playwright_stealth import Stealth
 
 from db_manager import load_tracker_state, save_tracker_state
 from services.http_client import post_discord
@@ -60,12 +60,12 @@ def scrape_site(playwright_instance, site_id):
     conf = SITE_CONFIG[site_id]
     data = None
     
-    # Launch browser through the proxy
-    browser = playwright_instance.chromium.launch(headless=True, proxy=get_proxy_settings())
+    # Randomize viewport to mimic different users
+    viewports = [{'width': 1920, 'height': 1080}, {'width': 1366, 'height': 768}, {'width': 1536, 'height': 864}]
     
-    # Create context with a realistic viewport and User-Agent
+    browser = playwright_instance.chromium.launch(headless=True, proxy=get_proxy_settings())
     context = browser.new_context(
-        viewport={'width': 1920, 'height': 1080},
+        viewport=random.choice(viewports),
         ignore_https_errors=True,
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
@@ -74,25 +74,28 @@ def scrape_site(playwright_instance, site_id):
 
     def handle_response(response):
         nonlocal data
+        # Capture any JSON response containing the marker to avoid missing dynamic URLs
         if conf["api_marker"] in response.url:
             try:
                 data = response.json()
+                print(f"✅ Successfully intercepted data for {site_id}")
             except:
                 pass
 
     page.on("response", handle_response)
     
     try:
-        # Use domcontentloaded to capture API data as early as possible
-        page.goto(conf["url"], wait_until="domcontentloaded", timeout=60000)
-        time.sleep(random.uniform(5, 8)) # Dwell time for background APIs to fire
+        # Increase timeout to 90s for high-latency residential proxies
+        page.goto(conf["url"], wait_until="domcontentloaded", timeout=90000)
+        # Extra dwell time to ensure background XHR requests fire
+        time.sleep(random.uniform(10, 15)) 
     except Exception as e:
         print(f"⚠️ {site_id} timed out visually, checking for intercepted data...")
 
-    # If the page timed out, it might still have captured the background API!
     if not data:
+        # Final last-ditch wait for the specific API response
         try:
-            page.wait_for_response(lambda r: conf["api_marker"] in r.url, timeout=15000)
+            page.wait_for_response(lambda r: conf["api_marker"] in r.url, timeout=20000)
         except:
             print(f"❌ No data captured for {site_id}")
 
@@ -102,7 +105,6 @@ def scrape_site(playwright_instance, site_id):
 def send_status_report(results):
     status_webhook = os.getenv("DISCORD_STATUS_WEBHOOK_URL")
     if not status_webhook: return
-
     summary = "**📊 SCRAPER RUN STATUS REPORT**\n"
     for site, status in results.items():
         icon = "✅" if status == "success" else "❌"
@@ -111,19 +113,19 @@ def send_status_report(results):
 
 def run_pipeline():
     results = {}
-    # Apply stealth patches to every browser and context created in this block
     with Stealth().use_sync(sync_playwright()) as playwright:
         for sid in SITE_CONFIG.keys():
             try:
                 raw = scrape_site(playwright, sid)
                 if raw:
-                    # process_alerts(sid, raw) # Logic handled in process_alerts function
+                    # In your actual script, call your process_alerts logic here
                     results[sid] = "success"
                 else:
                     results[sid] = "failed (no data)"
             except Exception as e:
                 results[sid] = f"error ({str(e)[:50]})"
-            time.sleep(random.uniform(5, 12))
+            # Larger gap between sites to avoid IP rate-limiting
+            time.sleep(random.uniform(8, 15))
     
     send_status_report(results)
 
