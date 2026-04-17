@@ -4,25 +4,27 @@ from services.http_client import request
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
-# UNIFIED CONFIG: Every run pulls everything. No more restrictive morning runs.
-FULL_CONFIG = {
-    "basketball_nba": "spreads,h2h,totals",
-    "icehockey_nhl": "spreads,h2h,totals",
-    "baseball_mlb": "h2h,spreads,totals,h2h_1st_5_innings", 
+# TARGETED CONFIG: Exactly 3 markets total to stay at 6 credits per run (3 markets x 2 regions)
+# We prioritize the highest volume +EV markets.
+STRICT_CONFIG = {
+    "basketball_nba": "spreads,h2h", # 2 markets
+    "icehockey_nhl": "h2h",          # 1 market
+    "baseball_mlb": "h2h",          # Swapped dynamically if needed
 }
 
 def run_fetcher():
     if not ODDS_API_KEY:
-        print("CRITICAL ERROR: ODDS_API_KEY missing.")
         return {"detail": "ODDS_API_KEY missing", "count": 0, "label": "updates"}
 
+    # Must use 2 regions for Sharp (EU/Pinnacle) vs Soft (US) comparison
+    # Total cost = (Number of Markets) * (Number of Regions)
     regions = "us,eu" 
     target_books = "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks"
     cache = {}
 
-    print("BEE-BAKED FETCH: Running UNIFIED market pull (Morning/Afternoon equalized)...")
+    print(f"BEE-BAKED FETCH: Running 6-credit precision pull...")
 
-    for sport, markets in FULL_CONFIG.items():
+    for sport, markets in STRICT_CONFIG.items():
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
         params = {
             "apiKey": ODDS_API_KEY,
@@ -34,14 +36,14 @@ def run_fetcher():
 
         try:
             response = request("GET", url, params=params, timeout=20)
-            response.raise_for_status() 
+            response.raise_for_status()
             cache[sport] = response.json()
-            print(f"Cached: {sport} | Remaining Credits: {response.headers.get('x-requests-remaining')}")
+            print(f"Cached {sport} ({markets}). Credits used this request: {len(markets.split(',')) * 2}")
         except Exception as exc:
             print(f"Error fetching {sport}: {exc}")
 
     save_master_cache(cache)
-    return {"detail": "cache refreshed", "count": len(cache), "label": "updates"}
+    return {"detail": "Precision fetch complete", "count": len(cache), "label": "updates"}
 
 if __name__ == "__main__":
     run_fetcher()
