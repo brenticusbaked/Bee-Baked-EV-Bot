@@ -26,7 +26,10 @@ def scrape_draftkings():
 
             page.on("response", handle_response)
             page.goto("https://sportsbook.draftkings.com/leagues/basketball/nba", wait_until="networkidle")
-            page.wait_for_timeout(5000)
+            try:
+                page.wait_for_response(lambda response: "api/sportscontent/v1/events/42648" in response.url, timeout=6000)
+            except Exception:
+                pass
             browser.close()
 
         if not data:

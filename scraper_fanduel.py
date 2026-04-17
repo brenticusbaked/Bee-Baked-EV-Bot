@@ -59,7 +59,13 @@ def scrape_fanduel():
 
             page.on("response", handle_response)
             page.goto("https://sportsbook.fanduel.com/basketball/nba", wait_until="networkidle")
-            page.wait_for_timeout(5000)
+            try:
+                page.wait_for_response(
+                    lambda response: "api/content-managed-page" in response.url and "eventTypeId=7522" in response.url,
+                    timeout=6000,
+                )
+            except Exception:
+                pass
             browser.close()
 
         if not data:

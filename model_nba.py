@@ -112,6 +112,7 @@ def run_nba_model():
                 ]
             },
             webhook_url=DISCORD_WEBHOOK_URL,
+            add_bee_image=True,
         )
 
 

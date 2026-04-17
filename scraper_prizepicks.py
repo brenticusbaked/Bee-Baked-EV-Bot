@@ -59,7 +59,13 @@ def scrape_prizepicks():
 
             page.on("response", handle_response)
             page.goto("https://app.prizepicks.com/board", wait_until="networkidle")
-            page.wait_for_timeout(5000)
+            try:
+                page.wait_for_response(
+                    lambda response: "api.prizepicks.com/projections" in response.url and "league_id=7" in response.url,
+                    timeout=6000,
+                )
+            except Exception:
+                pass
             browser.close()
 
         if not data:

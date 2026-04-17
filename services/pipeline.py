@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from time import perf_counter
 from typing import Iterable, List, Tuple
 
 from services.tasks import (
@@ -8,19 +9,21 @@ from services.tasks import (
     get_parallel_tasks,
     get_refresh_tasks,
     get_scan_tasks,
+    get_scraper_tasks,
 )
 
 
-TaskResult = Tuple[str, bool, str]
+TaskResult = Tuple[str, bool, str, float]
 
 
 def run_task(task: PipelineTask) -> TaskResult:
     print(f"[start] {task.name}")
+    started = perf_counter()
     try:
         task.func()
-        return (task.name, True, "finished")
+        return (task.name, True, "finished", perf_counter() - started)
     except Exception as exc:
-        return (task.name, False, str(exc))
+        return (task.name, False, str(exc), perf_counter() - started)
 
 
 def run_sequential(tasks: Iterable[PipelineTask]) -> List[TaskResult]:
@@ -40,14 +43,14 @@ def run_parallel(tasks: Iterable[PipelineTask]) -> List[TaskResult]:
             try:
                 results.append(future.result())
             except Exception as exc:
-                results.append((task.name, False, str(exc)))
+                results.append((task.name, False, str(exc), 0.0))
     return results
 
 
 def print_results(results: Iterable[TaskResult]) -> None:
-    for name, ok, detail in results:
+    for name, ok, detail, seconds in results:
         status = "ok" if ok else "failed"
-        print(f"[{status}] {name}: {detail}")
+        print(f"[{status}] {name}: {detail} ({seconds:.2f}s)")
 
 
 def run_master_pipeline() -> None:
@@ -56,7 +59,7 @@ def run_master_pipeline() -> None:
     print("--- PHASE 1: REFRESHING CLOUD CACHE ---")
     print_results(run_sequential(get_refresh_tasks()))
 
-    print("--- PHASE 2: EXECUTING MODELS & SCRAPERS ---")
+    print("--- PHASE 2: EXECUTING MODELS & NEWS ---")
     print_results(run_parallel(get_parallel_tasks()))
 
     print("--- PHASE 3: UNIFIED MARKET SCAN ---")
@@ -66,3 +69,10 @@ def run_master_pipeline() -> None:
     print_results(run_sequential(get_audit_tasks()))
 
     print("BEE-BAKED PIPELINE COMPLETE.")
+
+
+def run_scraper_pipeline() -> None:
+    print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {datetime.now().isoformat()}")
+    print("--- SCRAPER PHASE: EXECUTING BROWSER SCRAPERS ---")
+    print_results(run_parallel(get_scraper_tasks()))
+    print("BEE-BAKED SCRAPER PIPELINE COMPLETE.")

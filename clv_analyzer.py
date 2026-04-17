@@ -6,7 +6,6 @@ from utils.odds import american_to_decimal, parse_float
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 
 def run_clv_analysis():
@@ -52,8 +51,9 @@ def run_clv_analysis():
         f"*Consistently beating the Pinnacle close is the best health check for the edge pipeline.*"
     )
     post_discord(
-        {"embeds": [{"description": message, "color": color, "image": {"url": FOOTER_IMG}}]},
+        {"embeds": [{"description": message, "color": color}]},
         webhook_url=DISCORD_WEBHOOK_URL,
+        add_bee_image=True,
     )
 
 

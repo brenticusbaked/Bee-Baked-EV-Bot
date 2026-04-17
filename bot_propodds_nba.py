@@ -8,7 +8,6 @@ from utils.odds import decimal_to_american, quarter_kelly_units
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 SGO_API_KEY = os.getenv("SGO_API_KEY")
-FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 TARGET_STATS = ["points", "assists", "rebounds"]
 
 
@@ -133,10 +132,11 @@ def get_sgo_edges():
 
 def main():
     picks = get_sgo_edges()
-    for pick in picks:
+    for index, pick in enumerate(picks):
         post_discord(
-            {"embeds": [{"description": pick["msg"], "color": 15158332, "image": {"url": FOOTER_IMG}}]},
+            {"embeds": [{"description": pick["msg"], "color": 15158332}]},
             webhook_url=DISCORD_WEBHOOK_URL,
+            add_bee_image=index == len(picks) - 1,
         )
 
 

@@ -7,7 +7,6 @@ from utils.odds import decimal_implied_probability, decimal_to_american, quarter
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-BEE_IMAGE = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 
 def get_mobile_app_link(book_key, selection_id, event_id, matchup):
@@ -132,19 +131,19 @@ def scan_markets():
                     }
                 )
 
-    for alert in alerts:
+    for index, alert in enumerate(alerts):
         post_discord(
             {
                 "embeds": [
                     {
                         "description": alert["description"],
                         "color": 3066993,
-                        "image": {"url": BEE_IMAGE},
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                 ]
             },
             webhook_url=DISCORD_WEBHOOK_URL,
+            add_bee_image=index == len(alerts) - 1,
         )
 
 

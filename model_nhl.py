@@ -8,7 +8,6 @@ from utils.time import get_local_now
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 
 def get_dynamic_link(bookmaker, target_string):
@@ -111,10 +110,11 @@ def run_nhl_model():
                 )
             )
 
-        for message in alerts:
+        for index, message in enumerate(alerts):
             post_discord(
-                {"embeds": [{"description": message, "color": 3447003, "image": {"url": FOOTER_IMG}}]},
+                {"embeds": [{"description": message, "color": 3447003}]},
                 webhook_url=DISCORD_WEBHOOK_URL,
+                add_bee_image=index == len(alerts) - 1,
             )
     except Exception as exc:
         print(f"Error running NHL model: {exc}")

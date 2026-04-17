@@ -5,9 +5,16 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from db_manager import load_tracker_state, save_tracker_state
+from utils.time import get_local_date_str
+
 
 DEFAULT_TIMEOUT = 20
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+BEE_IMAGE_URL = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
+BEE_IMAGE_STATE_KEY = "bee_image_daily_limit"
+BEE_IMAGE_STATE_FILE = "bee_image_state.json"
+MAX_BEE_IMAGES_PER_DAY = 2
 
 
 def build_session() -> requests.Session:
@@ -41,10 +48,43 @@ def get_json(url: str, **kwargs):
     return request("GET", url, **kwargs).json()
 
 
-def post_discord(payload: dict, webhook_url: Optional[str] = None) -> bool:
+def _load_bee_image_state() -> dict:
+    state = load_tracker_state(BEE_IMAGE_STATE_KEY, BEE_IMAGE_STATE_FILE)
+    if not isinstance(state, dict):
+        return {}
+    return state
+
+
+def _can_use_bee_image() -> bool:
+    today = get_local_date_str()
+    state = _load_bee_image_state()
+    if state.get("date") != today:
+        return True
+
+    count = int(state.get("count", 0))
+    return count < MAX_BEE_IMAGES_PER_DAY
+
+
+def _record_bee_image_use() -> None:
+    today = get_local_date_str()
+    state = _load_bee_image_state()
+    if state.get("date") != today:
+        state = {"date": today, "count": 0}
+
+    count = int(state.get("count", 0))
+    state["count"] = count + 1
+    save_tracker_state(BEE_IMAGE_STATE_KEY, state, BEE_IMAGE_STATE_FILE)
+
+
+def post_discord(payload: dict, webhook_url: Optional[str] = None, add_bee_image: bool = False) -> bool:
     target = webhook_url or DISCORD_WEBHOOK_URL
     if not target:
         return False
+
+    attached_bee_image = False
+    if add_bee_image and payload.get("embeds") and _can_use_bee_image():
+        payload["embeds"][-1]["image"] = {"url": BEE_IMAGE_URL}
+        attached_bee_image = True
 
     try:
         response = request("POST", target, json=payload, timeout=15)
@@ -55,4 +95,6 @@ def post_discord(payload: dict, webhook_url: Optional[str] = None) -> bool:
     if response.status_code >= 400:
         print(f"Discord post failed with status {response.status_code}: {response.text[:200]}")
         return False
+    if attached_bee_image:
+        _record_bee_image_use()
     return True

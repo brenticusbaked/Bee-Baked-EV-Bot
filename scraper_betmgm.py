@@ -59,7 +59,13 @@ def scrape_betmgm():
 
             page.on("response", handle_response)
             page.goto("https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004", wait_until="networkidle")
-            page.wait_for_timeout(5000)
+            try:
+                page.wait_for_response(
+                    lambda response: "api/v1/fixtures" in response.url and "competitionId=6004" in response.url,
+                    timeout=6000,
+                )
+            except Exception:
+                pass
             browser.close()
 
         if not data:

@@ -7,9 +7,9 @@ from services.http_client import request
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
 FETCH_CONFIG = {
-    "basketball_nba": "h2h,spreads",
-    "icehockey_nhl": "h2h,spreads",
-    "baseball_mlb": "h2h,spreads",
+    "basketball_nba": "spreads",
+    "icehockey_nhl": "spreads",
+    "baseball_mlb": "h2h",
 }
 
 

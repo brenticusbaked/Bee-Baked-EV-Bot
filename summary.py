@@ -9,7 +9,6 @@ from utils.time import get_local_now
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
 
 def calculate_clv_report():
@@ -53,8 +52,9 @@ def calculate_clv_report():
 def main():
     report_msg = calculate_clv_report()
     post_discord(
-        {"embeds": [{"title": "Weekly Market Performance", "description": report_msg, "color": 10181046, "image": {"url": FOOTER_IMG}}]},
+        {"embeds": [{"title": "Weekly Market Performance", "description": report_msg, "color": 10181046}]},
         webhook_url=DISCORD_WEBHOOK_URL,
+        add_bee_image=True,
     )
 
 

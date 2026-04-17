@@ -30,10 +30,6 @@ def get_refresh_tasks() -> List[PipelineTask]:
 
 def get_parallel_tasks() -> List[PipelineTask]:
     return [
-        PipelineTask(name="scraper_draftkings", func=scrape_draftkings),
-        PipelineTask(name="scraper_betmgm", func=scrape_betmgm),
-        PipelineTask(name="scraper_fanduel", func=scrape_fanduel),
-        PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks),
         PipelineTask(name="injury_news", func=scrape_news),
         PipelineTask(name="model_nba", func=run_nba_model),
         PipelineTask(name="model_nhl", func=run_nhl_model),
@@ -49,4 +45,13 @@ def get_audit_tasks() -> List[PipelineTask]:
     return [
         PipelineTask(name="clv_tracker", func=run_clv_tracker),
         PipelineTask(name="sgo_grader", func=run_grader),
+    ]
+
+
+def get_scraper_tasks() -> List[PipelineTask]:
+    return [
+        PipelineTask(name="scraper_draftkings", func=scrape_draftkings),
+        PipelineTask(name="scraper_betmgm", func=scrape_betmgm),
+        PipelineTask(name="scraper_fanduel", func=scrape_fanduel),
+        PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks),
     ]
