@@ -3,13 +3,14 @@ import random
 import string
 import time
 from playwright.sync_api import sync_playwright
-from playwright_stealth import Stealth  # Correct v2.x import
+from playwright_stealth import Stealth  # v2.x modern API
 
 from db_manager import load_tracker_state, save_tracker_state
 from services.http_client import post_discord
 
 # --- CONFIGURATION ---
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_STATUS_WEBHOOK_URL = os.getenv("DISCORD_STATUS_WEBHOOK_URL")
 PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
@@ -84,7 +85,7 @@ def scrape_site(playwright_instance, site_id):
     try:
         # Use domcontentloaded to capture API data as early as possible
         page.goto(conf["url"], wait_until="domcontentloaded", timeout=60000)
-        time.sleep(random.uniform(5, 8)) # Give extra time for heavy background APIs to fire
+        time.sleep(random.uniform(5, 8)) # Dwell time for background APIs to fire
     except Exception as e:
         print(f"⚠️ {site_id} timed out visually, checking for intercepted data...")
 
@@ -98,15 +99,33 @@ def scrape_site(playwright_instance, site_id):
     browser.close()
     return data
 
+def send_status_report(results):
+    status_webhook = os.getenv("DISCORD_STATUS_WEBHOOK_URL")
+    if not status_webhook: return
+
+    summary = "**📊 SCRAPER RUN STATUS REPORT**\n"
+    for site, status in results.items():
+        icon = "✅" if status == "success" else "❌"
+        summary += f"{icon} **{site.upper()}**: {status}\n"
+    post_discord({"content": summary}, webhook_url=status_webhook)
+
 def run_pipeline():
-    # Recommended v2.x usage: Wrap the entire execution in the Stealth context
+    results = {}
+    # Apply stealth patches to every browser and context created in this block
     with Stealth().use_sync(sync_playwright()) as playwright:
         for sid in SITE_CONFIG.keys():
-            raw = scrape_site(playwright, sid)
-            if raw: 
-                # [Invoke your process_alerts(sid, raw) logic here]
-                print(f"✅ Data successfully captured for {sid}")
+            try:
+                raw = scrape_site(playwright, sid)
+                if raw:
+                    # process_alerts(sid, raw) # Logic handled in process_alerts function
+                    results[sid] = "success"
+                else:
+                    results[sid] = "failed (no data)"
+            except Exception as e:
+                results[sid] = f"error ({str(e)[:50]})"
             time.sleep(random.uniform(5, 12))
+    
+    send_status_report(results)
 
 if __name__ == "__main__":
     run_pipeline()
