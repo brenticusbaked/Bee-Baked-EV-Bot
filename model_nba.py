@@ -2,7 +2,8 @@ import os
 from datetime import timedelta
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
-from services.http_client import get_json, post_discord
+from services.alerts import send_discord_alert
+from services.http_client import get_json
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
 from utils.time import get_local_now
@@ -88,7 +89,7 @@ def run_nba_model():
             "basketball_nba",
             event_id,
         )
-        post_discord(
+        send_discord_alert(
             {
                 "embeds": [
                     {
@@ -101,6 +102,9 @@ def run_nba_model():
                     }
                 ]
             },
+            source="model_nba",
+            alert_type="bet_alert",
+            dedupe_key=f"{away} @ {home}::{selection}",
             webhook_url=DISCORD_WEBHOOK_URL,
             add_bee_image=True,
         )

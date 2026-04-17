@@ -13,6 +13,7 @@ from scraper_fanduel import scrape_fanduel
 from scraper_prizepicks import scrape_prizepicks
 from sgo_grader import run_grader
 from unified_bot import scan_markets
+from utils.config import env_flag
 
 
 TaskFunc = Callable[[], None]
@@ -29,29 +30,41 @@ def get_refresh_tasks() -> List[PipelineTask]:
 
 
 def get_parallel_tasks() -> List[PipelineTask]:
-    return [
-        PipelineTask(name="injury_news", func=scrape_news),
-        PipelineTask(name="model_nba", func=run_nba_model),
-        PipelineTask(name="model_nhl", func=run_nhl_model),
-        PipelineTask(name="model_mlb", func=run_mlb_model),
-    ]
+    tasks: List[PipelineTask] = []
+    if env_flag("ENABLE_NEWS", True):
+        tasks.append(PipelineTask(name="injury_news", func=scrape_news))
+    if env_flag("ENABLE_NBA_MODEL", True):
+        tasks.append(PipelineTask(name="model_nba", func=run_nba_model))
+    if env_flag("ENABLE_NHL_MODEL", True):
+        tasks.append(PipelineTask(name="model_nhl", func=run_nhl_model))
+    if env_flag("ENABLE_MLB_MODEL", True):
+        tasks.append(PipelineTask(name="model_mlb", func=run_mlb_model))
+    return tasks
 
 
 def get_scan_tasks() -> List[PipelineTask]:
-    return [PipelineTask(name="unified_market_scan", func=scan_markets)]
+    if env_flag("ENABLE_UNIFIED_SCAN", True):
+        return [PipelineTask(name="unified_market_scan", func=scan_markets)]
+    return []
 
 
 def get_audit_tasks() -> List[PipelineTask]:
-    return [
-        PipelineTask(name="clv_tracker", func=run_clv_tracker),
-        PipelineTask(name="sgo_grader", func=run_grader),
-    ]
+    tasks: List[PipelineTask] = []
+    if env_flag("ENABLE_CLV_TRACKER", True):
+        tasks.append(PipelineTask(name="clv_tracker", func=run_clv_tracker))
+    if env_flag("ENABLE_SGO_GRADER", True):
+        tasks.append(PipelineTask(name="sgo_grader", func=run_grader))
+    return tasks
 
 
 def get_scraper_tasks() -> List[PipelineTask]:
-    return [
-        PipelineTask(name="scraper_draftkings", func=scrape_draftkings),
-        PipelineTask(name="scraper_betmgm", func=scrape_betmgm),
-        PipelineTask(name="scraper_fanduel", func=scrape_fanduel),
-        PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks),
-    ]
+    tasks: List[PipelineTask] = []
+    if env_flag("ENABLE_DRAFTKINGS_SCRAPER", True):
+        tasks.append(PipelineTask(name="scraper_draftkings", func=scrape_draftkings))
+    if env_flag("ENABLE_BETMGM_SCRAPER", True):
+        tasks.append(PipelineTask(name="scraper_betmgm", func=scrape_betmgm))
+    if env_flag("ENABLE_FANDUEL_SCRAPER", True):
+        tasks.append(PipelineTask(name="scraper_fanduel", func=scrape_fanduel))
+    if env_flag("ENABLE_PRIZEPICKS_SCRAPER", True):
+        tasks.append(PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks))
+    return tasks

@@ -2,7 +2,8 @@ import os
 import xml.etree.ElementTree as ET
 
 from db_manager import supabase
-from services.http_client import post_discord, request
+from services.alerts import send_discord_alert
+from services.http_client import request
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -61,8 +62,11 @@ def scrape_news():
                 f"*{alert['desc']}*\n"
                 f"[Link]({alert['link']})"
             )
-            if post_discord(
+            if send_discord_alert(
                 {"content": "@here", "embeds": [{"description": message, "color": 15158332}]},
+                source="scraper_bot",
+                alert_type="news_alert",
+                dedupe_key=alert["guid"],
                 webhook_url=DISCORD_WEBHOOK_URL,
             ):
                 mark_news_as_seen(alert["guid"])

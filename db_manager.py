@@ -257,3 +257,57 @@ def save_tracker_state(state_key: str, data, fallback_path: str) -> None:
         ).execute()
 
     _safe_execute(action, None)
+
+
+def log_alert_event(
+    source: str,
+    alert_type: str,
+    dedupe_key: Optional[str] = None,
+    count: int = 1,
+    payload_preview: Optional[str] = None,
+    status: str = "sent",
+):
+    def action():
+        supabase.table("alerts_sent").insert(
+            {
+                "source": source,
+                "alert_type": alert_type,
+                "dedupe_key": dedupe_key,
+                "count": count,
+                "payload_preview": payload_preview,
+                "status": status,
+                "sent_at": get_local_now().isoformat(),
+            }
+        ).execute()
+
+    _safe_execute(action, None)
+
+
+def log_workflow_run(
+    workflow_name: str,
+    status: str,
+    runtime_seconds: float,
+    task_count: int,
+    failure_count: int,
+    alert_count: int,
+    graded_count: int,
+    tracked_count: int,
+    summary: Optional[str] = None,
+):
+    def action():
+        supabase.table("workflow_runs").insert(
+            {
+                "workflow_name": workflow_name,
+                "status": status,
+                "runtime_seconds": runtime_seconds,
+                "task_count": task_count,
+                "failure_count": failure_count,
+                "alert_count": alert_count,
+                "graded_count": graded_count,
+                "tracked_count": tracked_count,
+                "summary": summary,
+                "run_at": get_local_now().isoformat(),
+            }
+        ).execute()
+
+    _safe_execute(action, None)

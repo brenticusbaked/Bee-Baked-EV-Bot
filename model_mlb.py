@@ -1,7 +1,8 @@
 import os
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
-from services.http_client import get_json, post_discord
+from services.alerts import send_discord_alert
+from services.http_client import get_json
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
 from utils.time import get_local_now
@@ -56,23 +57,28 @@ def get_best_f5_moneyline(target_team):
     return None, None, None, None, None
 
 
-def get_advanced_pitcher_stats(pitcher_id):
+def get_advanced_pitcher_stats(pitcher_id, cache):
+    if pitcher_id in cache:
+        return cache[pitcher_id]
     url = f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}?hydrate=stats(group=[pitching],type=[season])"
     try:
         person = get_json(url).get("people", [{}])[0]
         splits = person.get("stats", [{}])[0].get("splits", [{}])
         if not splits:
-            return None, None
+            cache[pitcher_id] = (None, None)
+            return cache[pitcher_id]
         stats = splits[0].get("stat", {})
         k9 = float(stats.get("strikeOutsPer9Inn", 0))
         bb9 = float(stats.get("walksPer9Inn", 0))
         hr9 = float(stats.get("homeRunsPer9", 0))
         era = float(stats.get("era", 9.99))
         est_fip = ((13 * hr9) + (3 * bb9) - (2 * k9)) / 9 + 3.20
-        return est_fip, era
+        cache[pitcher_id] = (est_fip, era)
+        return cache[pitcher_id]
     except Exception as exc:
         print(f"Error fetching stats for Pitcher ID {pitcher_id}: {exc}")
-        return None, None
+        cache[pitcher_id] = (None, None)
+        return cache[pitcher_id]
 
 
 def run_mlb_model():
@@ -87,6 +93,7 @@ def run_mlb_model():
             return {"detail": "no mlb games scheduled", "count": 0, "label": "alerts"}
 
         alerts = []
+        pitcher_stats_cache = {}
         for game in dates[0].get("games", []):
             away_team = game["teams"]["away"]["team"]["name"]
             home_team = game["teams"]["home"]["team"]["name"]
@@ -97,8 +104,8 @@ def run_mlb_model():
             if not away_pitcher or not home_pitcher:
                 continue
 
-            away_fip, away_era = get_advanced_pitcher_stats(away_pitcher["id"])
-            home_fip, home_era = get_advanced_pitcher_stats(home_pitcher["id"])
+            away_fip, away_era = get_advanced_pitcher_stats(away_pitcher["id"], pitcher_stats_cache)
+            home_fip, home_era = get_advanced_pitcher_stats(home_pitcher["id"], pitcher_stats_cache)
             if away_fip is None or home_fip is None:
                 continue
 
@@ -128,8 +135,11 @@ def run_mlb_model():
             )
 
         for index, message in enumerate(alerts):
-            post_discord(
+            send_discord_alert(
                 {"embeds": [{"description": message, "color": 3066993}]},
+                source="model_mlb",
+                alert_type="bet_alert",
+                dedupe_key=message[:200],
                 webhook_url=DISCORD_WEBHOOK_URL,
                 add_bee_image=index == len(alerts) - 1,
             )

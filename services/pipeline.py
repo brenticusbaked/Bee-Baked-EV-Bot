@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Iterable, List, Tuple
 
 from services.http_client import post_discord
+from db_manager import log_workflow_run
 from services.tasks import (
     PipelineTask,
     get_audit_tasks,
@@ -108,6 +109,17 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
         f"CLV Tracked: {total_tracked}\n"
         f"Graded: {total_graded}\n\n"
         + "\n".join(lines)
+    )
+    log_workflow_run(
+        workflow_name=title,
+        status="failed" if failed else "ok",
+        runtime_seconds=total_seconds,
+        task_count=len(result_list),
+        failure_count=failed,
+        alert_count=total_alerts,
+        graded_count=total_graded,
+        tracked_count=total_tracked,
+        summary=description[:2000],
     )
     post_discord(
         {"embeds": [{"description": description, "color": 5763719 if failed == 0 else 15158332}]},

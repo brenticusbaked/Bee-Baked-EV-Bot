@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timezone
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
-from services.http_client import post_discord
+from services.alerts import send_discord_alert
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_implied_probability, decimal_to_american, quarter_kelly_units
 
@@ -125,7 +125,7 @@ def scan_markets():
                 )
 
     for index, alert in enumerate(alerts):
-        post_discord(
+        send_discord_alert(
             {
                 "embeds": [
                     {
@@ -135,6 +135,9 @@ def scan_markets():
                     }
                 ]
             },
+            source="unified_bot",
+            alert_type="bet_alert",
+            dedupe_key=alert["description"][:200],
             webhook_url=DISCORD_WEBHOOK_URL,
             add_bee_image=index == len(alerts) - 1,
         )

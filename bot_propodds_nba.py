@@ -1,7 +1,8 @@
 import os
 
 from db_manager import is_already_logged, log_bet_to_db
-from services.http_client import post_discord, request
+from services.alerts import send_discord_alert
+from services.http_client import request
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american, quarter_kelly_units
 
@@ -124,8 +125,11 @@ def get_sgo_edges():
 def main():
     picks = get_sgo_edges()
     for index, pick in enumerate(picks):
-        post_discord(
+        send_discord_alert(
             {"embeds": [{"description": pick["msg"], "color": 15158332}]},
+            source="bot_propodds_nba",
+            alert_type="bet_alert",
+            dedupe_key=pick["msg"][:200],
             webhook_url=DISCORD_WEBHOOK_URL,
             add_bee_image=index == len(picks) - 1,
         )
