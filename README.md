@@ -42,4 +42,17 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `SUPABASE_URL`
 * `SUPABASE_KEY` (Use the `service_role` key to bypass Row-Level Security)
 
+**Optional Threshold Overrides:**
+* `UNIFIED_EV_THRESHOLD`
+* `UNIFIED_NEAR_MISS_THRESHOLD`
+* `LINE_MOVEMENT_MAX_BOOST`
+* `LINE_MOVEMENT_MAX_PENALTY`
+* `PROP_EV_THRESHOLD`
+* `PROP_NEAR_MISS_THRESHOLD`
+* `MLB_FIP_GAP_THRESHOLD`
+* `NHL_GD_GAP_THRESHOLD`
+
+**Optional Feature Flags:**
+* `ENABLE_PERFORMANCE_REPORT` (Default: `false`)
+
 **Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A Master Odds Cache is pulled at the beginning of each core run to ensure all predictive models utilize identical market data while limiting the footprint to just 6 API credits per execution (12 per day).

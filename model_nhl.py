@@ -4,11 +4,14 @@ from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.http_client import get_json
 from utils.links import sportsbook_search_link
+from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
 from utils.odds import decimal_to_american
+from utils.thresholds import env_float
 from utils.time import get_local_now
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+NHL_GD_GAP_THRESHOLD = env_float("NHL_GD_GAP_THRESHOLD", 40.0)
 
 
 def get_dynamic_link(bookmaker, target_string):
@@ -72,7 +75,7 @@ def run_nhl_model():
                 continue
 
             gd_diff = abs(away_gd - home_gd)
-            if gd_diff < 40:
+            if gd_diff < NHL_GD_GAP_THRESHOLD:
                 continue
 
             better_team = away if away_gd > home_gd else home
@@ -88,16 +91,23 @@ def run_nhl_model():
             if not best_book or not event_id:
                 continue
 
+            excess_gap = max(gd_diff - NHL_GD_GAP_THRESHOLD, 0.0)
+            model_probability = min(0.54 + (excess_gap * 0.0025), 0.62)
+            fair_price = fair_american_from_probability(model_probability)
+            edge = model_edge_from_probability(model_probability, best_odds)
+            units = model_units_from_probability(model_probability, best_odds)
+
             was_logged = log_bet_to_db(
                 matchup,
                 "MODEL_NHL_PUCKLINE",
                 selection,
                 best_odds,
-                gd_diff,
-                "1.00",
-                "MODEL",
+                edge,
+                f"{units:.2f}",
+                fair_price,
                 "icehockey_nhl",
                 event_id,
+                notes=f"book={best_book};model=nhl_goal_diff;probability={model_probability:.4f};gap={gd_diff}",
             )
             if not was_logged:
                 print(f"Skipping NHL model alert because DB log failed for {selection}.")
@@ -110,7 +120,10 @@ def run_nhl_model():
                     f"{better_team} GD: **{better_gd}**\n"
                     f"{worse_team} GD: **{worse_gd}**\n"
                     f"**Net Gap:** {gd_diff} Goals\n"
-                    f"**Best Puck Line:** [{best_book}]({bet_link}) | **-1.5 ({best_odds})**"
+                    f"**Best Puck Line:** [{best_book}]({bet_link}) | **-1.5 ({best_odds})**\n"
+                    f"**Fair Value:** {fair_price}\n"
+                    f"**Model Edge:** {edge * 100:.2f}%\n"
+                    f"**Suggested:** {units:.2f} Units"
                 )
             )
 

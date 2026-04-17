@@ -57,6 +57,10 @@ def _grade_player_prop(bet, player_data):
 
 
 def run_grader():
+    if not SGO_API_KEY:
+        print("SGO_API_KEY missing. Skipping grader.")
+        return {"detail": "SGO_API_KEY missing", "count": 0, "label": "graded"}
+
     ungraded_bets = get_ungraded_past_bets()
     if not ungraded_bets:
         return {"detail": "no bets to grade", "count": 0, "label": "graded"}

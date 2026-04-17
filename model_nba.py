@@ -6,6 +6,7 @@ from services.alerts import send_discord_alert
 from services.http_client import get_json
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
+from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
 from utils.time import get_local_now
 
 
@@ -78,16 +79,24 @@ def run_nba_model():
         if not book or is_already_logged(f"{away} @ {home}", "MODEL_NBA_SPREAD", selection):
             continue
 
+        # Baseline rested-home-vs-road-B2B edge with a small home spread bump.
+        spread_abs = abs(float(line)) if line not in (None, "") else 0.0
+        model_probability = min(0.54 + (spread_abs * 0.005), 0.60)
+        fair_price = fair_american_from_probability(model_probability)
+        edge = model_edge_from_probability(model_probability, odds)
+        units = model_units_from_probability(model_probability, odds)
+
         was_logged = log_bet_to_db(
             f"{away} @ {home}",
             "MODEL_NBA_SPREAD",
             selection,
             odds,
-            "FATIGUE",
-            "1.0",
-            "MODEL",
+            edge,
+            f"{units:.2f}",
+            fair_price,
             "basketball_nba",
             event_id,
+            notes=f"book={book};model=nba_fatigue;probability={model_probability:.4f}",
         )
         if not was_logged:
             print(f"Skipping NBA model alert because DB log failed for {selection}.")
@@ -99,7 +108,10 @@ def run_nba_model():
                         "description": (
                             f"**NBA FATIGUE ALERT**\n"
                             f"Advantage: **{home}** vs {away} (Road B2B)\n"
-                            f"Odds: [{book}]({link}) @ {odds}"
+                            f"Odds: [{book}]({link}) @ {odds}\n"
+                            f"**Fair Value:** {fair_price}\n"
+                            f"**Model Edge:** {edge * 100:.2f}%\n"
+                            f"**Suggested:** {units:.2f} Units"
                         ),
                         "color": 16734003,
                     }

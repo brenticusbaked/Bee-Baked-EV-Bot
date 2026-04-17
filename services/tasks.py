@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 from typing import Callable, List
 
+from bot_propodds_nba import main as run_nba_prop_bot
 from clv_tracker import run_clv_tracker
 from master_odds_fetcher import run_fetcher
 from model_mlb import run_mlb_model
 from model_nba import run_nba_model
 from model_nhl import run_nhl_model
+from performance_report import send_performance_report
 from scraper_betmgm import scrape_betmgm
 from scraper_bot import scrape_news
 from scraper_draftkings import scrape_draftkings
@@ -14,6 +16,9 @@ from scraper_prizepicks import scrape_prizepicks
 from sgo_grader import run_grader
 from unified_bot import scan_markets
 from utils.config import env_flag
+
+# --- NEW: Import the pybaseball FIP scraper ---
+from scraper_pybaseball_fip import scrape_fip
 
 
 TaskFunc = Callable[[], None]
@@ -26,13 +31,19 @@ class PipelineTask:
 
 
 def get_refresh_tasks() -> List[PipelineTask]:
-    return [PipelineTask(name="master_odds_fetcher", func=run_fetcher)]
+    # --- NEW: Added pybaseball_fip_scraper to run alongside the master fetcher ---
+    return [
+        PipelineTask(name="master_odds_fetcher", func=run_fetcher),
+        PipelineTask(name="pybaseball_fip_scraper", func=scrape_fip)
+    ]
 
 
 def get_parallel_tasks() -> List[PipelineTask]:
     tasks: List[PipelineTask] = []
     if env_flag("ENABLE_NEWS", True):
         tasks.append(PipelineTask(name="injury_news", func=scrape_news))
+    if env_flag("ENABLE_NBA_PROP_BOT", True):
+        tasks.append(PipelineTask(name="nba_prop_bot", func=run_nba_prop_bot))
     if env_flag("ENABLE_NBA_MODEL", True):
         tasks.append(PipelineTask(name="model_nba", func=run_nba_model))
     if env_flag("ENABLE_NHL_MODEL", True):
@@ -54,6 +65,8 @@ def get_audit_tasks() -> List[PipelineTask]:
         tasks.append(PipelineTask(name="clv_tracker", func=run_clv_tracker))
     if env_flag("ENABLE_SGO_GRADER", True):
         tasks.append(PipelineTask(name="sgo_grader", func=run_grader))
+    if env_flag("ENABLE_PERFORMANCE_REPORT", False):
+        tasks.append(PipelineTask(name="performance_report", func=send_performance_report))
     return tasks
 
 

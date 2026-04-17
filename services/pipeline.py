@@ -2,10 +2,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import os
 from time import perf_counter
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 from services.http_client import post_discord
-from db_manager import log_workflow_run
+from db_manager import get_runtime_db_stats, log_workflow_run, reset_runtime_db_stats
 from services.tasks import (
     PipelineTask,
     get_audit_tasks,
@@ -16,20 +16,21 @@ from services.tasks import (
 )
 
 
-TaskResult = Tuple[str, bool, str, float, int, str]
+TaskResult = Tuple[str, bool, str, float, int, str, Dict[str, str]]
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 DISCORD_STATUS_WEBHOOK_URL = os.getenv("DISCORD_STATUS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL
 
 
-def _normalize_task_output(output) -> Tuple[str, int, str]:
+def _normalize_task_output(output) -> Tuple[str, int, str, Dict[str, str]]:
     if isinstance(output, dict):
         detail = str(output.get("detail", "finished"))
         count = int(output.get("count", 0))
         label = str(output.get("label", "updates"))
-        return detail, count, label
+        meta = output.get("meta", {})
+        return detail, count, label, meta if isinstance(meta, dict) else {}
     if isinstance(output, int):
-        return "finished", output, "updates"
-    return "finished", 0, "updates"
+        return "finished", output, "updates", {}
+    return "finished", 0, "updates", {}
 
 
 def run_task(task: PipelineTask) -> TaskResult:
@@ -37,10 +38,10 @@ def run_task(task: PipelineTask) -> TaskResult:
     started = perf_counter()
     try:
         output = task.func()
-        detail, count, label = _normalize_task_output(output)
-        return (task.name, True, detail, perf_counter() - started, count, label)
+        detail, count, label, meta = _normalize_task_output(output)
+        return (task.name, True, detail, perf_counter() - started, count, label, meta)
     except Exception as exc:
-        return (task.name, False, str(exc), perf_counter() - started, 0, "updates")
+        return (task.name, False, str(exc), perf_counter() - started, 0, "updates", {})
 
 
 def run_sequential(tasks: Iterable[PipelineTask]) -> List[TaskResult]:
@@ -60,12 +61,12 @@ def run_parallel(tasks: Iterable[PipelineTask]) -> List[TaskResult]:
             try:
                 results.append(future.result())
             except Exception as exc:
-                results.append((task.name, False, str(exc), 0.0, 0, "updates"))
+                results.append((task.name, False, str(exc), 0.0, 0, "updates", {}))
     return results
 
 
 def print_results(results: Iterable[TaskResult]) -> None:
-    for name, ok, detail, seconds, count, label in results:
+    for name, ok, detail, seconds, count, label, meta in results:
         status = "ok" if ok else "failed"
         count_text = f" | {count} {label}" if count else ""
         print(f"[{status}] {name}: {detail} ({seconds:.2f}s){count_text}")
@@ -76,20 +77,25 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
     if not DISCORD_STATUS_WEBHOOK_URL:
         return
 
-    total_seconds = sum(seconds for _, _, _, seconds, _, _ in result_list)
-    total_updates = sum(count for _, _, _, _, count, label in result_list if label == "updates")
-    total_alerts = sum(count for _, _, _, _, count, label in result_list if label == "alerts")
-    total_graded = sum(count for _, _, _, _, count, label in result_list if label == "graded")
-    total_tracked = sum(count for _, _, _, _, count, label in result_list if label == "tracked")
-    lines = []
+    total_seconds = sum(seconds for _, _, _, seconds, _, _, _ in result_list)
+    total_updates = sum(count for _, _, _, _, count, label, _ in result_list if label == "updates")
+    total_alerts = sum(count for _, _, _, _, count, label, _ in result_list if label == "alerts")
+    total_graded = sum(count for _, _, _, _, count, label, _ in result_list if label == "graded")
+    total_tracked = sum(count for _, _, _, _, count, label, _ in result_list if label == "tracked")
+    db_stats = get_runtime_db_stats()
+    task_lines = []
+    near_miss_lines = []
     failed = 0
-    for name, ok, detail, seconds, count, label in result_list:
+    for name, ok, detail, seconds, count, label, meta in result_list:
         status = "OK" if ok else "FAILED"
         count_text = f" | {count} {label}" if count else ""
-        lines.append(f"`{status}` {name} ({seconds:.2f}s){count_text}")
+        detail_text = f" - {detail}" if detail else ""
+        task_lines.append(f"`{status}` {name} ({seconds:.2f}s){count_text}{detail_text}")
         if not ok:
             failed += 1
-            lines.append(f"`DETAIL` {detail}")
+        near_miss_summary = meta.get("near_miss_summary")
+        if near_miss_summary:
+            near_miss_lines.append(f"`{name}` {near_miss_summary}")
 
     if failed == 0 and total_alerts == 0:
         outcome_line = "No bet updates found this run."
@@ -101,15 +107,22 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
     description = (
         f"**{title}**\n"
         f"{outcome_line}\n"
+        f"\n**Counts**\n"
         f"Tasks: {len(result_list)}\n"
         f"Failures: {failed}\n"
-        f"Runtime: {total_seconds:.2f}s\n\n"
+        f"Runtime: {total_seconds:.2f}s\n"
         f"Alerts: {total_alerts}\n"
         f"Updates: {total_updates}\n"
         f"CLV Tracked: {total_tracked}\n"
-        f"Graded: {total_graded}\n\n"
-        + "\n".join(lines)
+        f"Graded: {total_graded}\n"
+        f"Bet Log Writes: {db_stats.get('bet_log_success', 0)} success / {db_stats.get('bet_log_failure', 0)} failed\n\n"
+        f"**Task Timings**\n"
+        + "\n".join(task_lines)
     )
+    if near_miss_lines:
+        description += "\n\n**Near Misses**\n" + "\n".join(near_miss_lines)
+    if db_stats.get("bet_log_failure", 0) > 0:
+        description += "\n\n**Warning:** Some bet alerts qualified but failed to write to `bets_log`."
     log_workflow_run(
         workflow_name=title,
         status="failed" if failed else "ok",
@@ -129,6 +142,7 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
 
 def run_master_pipeline() -> None:
     print(f"BEE-BAKED PIPELINE STARTING - {datetime.now().isoformat()}")
+    reset_runtime_db_stats()
     all_results: List[TaskResult] = []
 
     print("--- PHASE 1: REFRESHING CLOUD CACHE ---")
@@ -157,6 +171,7 @@ def run_master_pipeline() -> None:
 
 def run_scraper_pipeline() -> None:
     print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {datetime.now().isoformat()}")
+    reset_runtime_db_stats()
     print("--- SCRAPER PHASE: EXECUTING BROWSER SCRAPERS ---")
     results = run_parallel(get_scraper_tasks())
     print_results(results)

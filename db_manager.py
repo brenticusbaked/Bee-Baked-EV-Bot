@@ -12,6 +12,7 @@ from utils.time import get_local_date_str, get_local_now
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+RUNTIME_DB_STATS = {"bet_log_success": 0, "bet_log_failure": 0}
 
 
 def _safe_execute(action, fallback):
@@ -111,6 +112,15 @@ def is_already_logged(matchup, market, selection):
     return _safe_execute(action, False)
 
 
+def reset_runtime_db_stats():
+    RUNTIME_DB_STATS["bet_log_success"] = 0
+    RUNTIME_DB_STATS["bet_log_failure"] = 0
+
+
+def get_runtime_db_stats() -> Dict[str, int]:
+    return dict(RUNTIME_DB_STATS)
+
+
 def log_bet_to_db(
     matchup,
     market,
@@ -125,6 +135,7 @@ def log_bet_to_db(
     notes: Optional[str] = None,
 ):
     if not supabase:
+        RUNTIME_DB_STATS["bet_log_failure"] += 1
         return False
 
     edge_pct = _parse_edge_pct(edge_val)
@@ -155,7 +166,12 @@ def log_bet_to_db(
         supabase.table("bets_log").insert(payload).execute()
         return True
 
-    return _safe_execute(action, False)
+    success = _safe_execute(action, False)
+    if success:
+        RUNTIME_DB_STATS["bet_log_success"] += 1
+    else:
+        RUNTIME_DB_STATS["bet_log_failure"] += 1
+    return success
 
 
 def get_ungraded_past_bets() -> List[Dict[str, Any]]:
