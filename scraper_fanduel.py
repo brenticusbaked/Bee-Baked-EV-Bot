@@ -10,10 +10,8 @@ from services.http_client import post_discord
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 TRACKER_FILE = "fd_lines.json"
 STATE_KEY = "tracker_fanduel_nba"
-PROXY_USERNAME = os.getenv("PROXY_USERNAME")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
-PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
+PROXY_URLS = [url.strip() for url in RAW_PROXY_LIST.replace("\n", ",").split(",") if url.strip()]
 
 
 def load_previous_lines():
@@ -24,21 +22,40 @@ def save_current_lines(lines):
     save_tracker_state(STATE_KEY, lines, TRACKER_FILE)
 
 
+def get_proxy_settings():
+    """Get proxy settings in Playwright format or None for direct connection."""
+    if not PROXY_URLS:
+        return None
+    chosen_url = random.choice(PROXY_URLS)
+    try:
+        # URL format: http://username:password@host:port/
+        return {"server": chosen_url}
+    except Exception as exc:
+        print(f"Failed to parse proxy URL: {exc}")
+        return None
+
+
 def scrape_fanduel():
     try:
         data = None
 
         with sync_playwright() as playwright:
-            proxy_settings = None
-            if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
-                chosen_ip = random.choice(PROXY_IPS)
-                proxy_settings = {
-                    "server": f"http://{chosen_ip}",
-                    "username": PROXY_USERNAME,
-                    "password": PROXY_PASSWORD,
-                }
-
-            browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
+            # Try with proxy first
+            proxy_settings = get_proxy_settings()
+            browser = None
+            
+            if proxy_settings:
+                try:
+                    print(f"Attempting connection with proxy...")
+                    browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
+                except Exception as proxy_exc:
+                    print(f"Proxy connection failed ({proxy_exc}), falling back to direct connection...")
+                    browser = None
+            
+            # Fall back to direct connection if no proxy or proxy failed
+            if not browser:
+                browser = playwright.chromium.launch(headless=True)
+            
             context = browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
