@@ -31,10 +31,21 @@ def run_clv_tracker():
 
         market_key = str(bet["market"]).lower()
         candidate_keys = [market_key]
+        
+        # --- NEW: Expanded API Key Translations ---
+        # Map specific model markets
         if market_key in {"model_nba_spread", "model_nhl_puckline"}:
             candidate_keys.append("spreads")
         if market_key == "model_mlb_f5":
             candidate_keys.append("h2h_1st_half")
+            
+        # Map standard markets
+        if market_key in {"moneyline", "ml"}:
+            candidate_keys.append("h2h")
+        if market_key in {"spread", "runline", "puckline"}:
+            candidate_keys.append("spreads")
+        if market_key in {"total", "totals", "over/under", "o/u"}:
+            candidate_keys.append("totals")
 
         market_data = next(
             (market for market in pinnacle.get("markets", []) if market.get("key", "").lower() in candidate_keys),
