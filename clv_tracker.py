@@ -63,6 +63,10 @@ def run_clv_tracker():
             None,
         )
         if not market_data:
+            # FIXED: Silence the warning for MLB F5 since the Odds API doesn't support it
+            if market_key == "model_mlb_f5":
+                continue
+                
             available_keys = [m.get("key") for m in pinnacle.get("markets", [])]
             print(
                 f"CLV: Market not found for {bet['selection']} "
@@ -76,7 +80,6 @@ def run_clv_tracker():
             None,
         )
         if not outcome:
-            # Debug log showing what outcomes ARE available so you can diagnose mismatches
             available_outcomes = [
                 {"name": o.get("name"), "point": o.get("point")}
                 for o in market_data.get("outcomes", [])
