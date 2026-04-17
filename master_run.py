@@ -1,16 +1,16 @@
-from dotenv import load_dotenv
-
-# Load .env file for local development.
-# In GitHub Actions, secrets are injected as environment variables automatically
-# so this has no effect in CI — it only activates when a .env file is present locally.
-load_dotenv()
-
+import os
+import sys
+import asyncio # <--- 1. Add this import
 from services.pipeline import run_master_pipeline
 
-
-def master_pipeline():
-    run_master_pipeline()
-
+def main():
+    print("INITIALIZING BEE-BAKED MASTER RUN...")
+    try:
+        # 2. Use asyncio.run() to execute the coroutine
+        asyncio.run(run_master_pipeline()) 
+    except Exception as e:
+        print(f"CRITICAL SYSTEM ERROR: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    master_pipeline()
+    main()
