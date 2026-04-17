@@ -1,41 +1,31 @@
 import os
 import asyncio
 from playwright.async_api import async_playwright
+from db_manager import save_odds_to_db
 
-async def scrape_dk(): # FIXED: Named specifically for the pipeline import
-    url = "https://sportsbook.draftkings.com/leagues/basketball/nba"
-    
+async def scrape_fd():
+    url = "https://sportsbook.fanduel.com/basketball/nba"
     async with async_playwright() as p:
-        # Use existing proxy secrets
-        proxy_username = os.getenv("PROXY_USERNAME")
-        proxy_password = os.getenv("PROXY_PASSWORD")
-        proxy_server = "http://p.webshare.io:80"
-        
-        browser = await p.chromium.launch(
-            headless=True,
-            proxy={
-                "server": proxy_server,
-                "username": proxy_username,
-                "password": proxy_password,
-            }
-        )
-        
+        browser = await p.chromium.launch(headless=True, proxy={
+            "server": "http://p.webshare.io:80",
+            "username": os.getenv("PROXY_USERNAME"),
+            "password": os.getenv("PROXY_PASSWORD"),
+        })
         context = await browser.new_context(user_agent=os.getenv("USER_AGENT"))
         page = await context.new_page()
-        
+
+        async def handle_response(response):
+            if "SelectionHierarchy" in response.url or "initial-state" in response.url:
+                try:
+                    data = await response.json()
+                    save_odds_to_db("fanduel", data)
+                    print("✅ FanDuel: Market hierarchy captured.")
+                except:
+                    pass
+
+        page.on("response", handle_response)
+
         try:
-            print("DraftKings: Navigating to NBA lines...")
-            # BUMPED: Timeout to 60s to resolve previous timeout errors
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            
-            # Add your parsing logic here...
-            print("DraftKings: Data intercepted successfully.")
-            
-        except Exception as e:
-            print(f"DraftKings Scrape Error: {e}")
-            raise e
+            await page.goto(url, wait_until="networkidle", timeout=60000)
         finally:
             await browser.close()
-
-if __name__ == "__main__":
-    asyncio.run(scrape_dk())
