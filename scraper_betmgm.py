@@ -6,7 +6,6 @@ from playwright.sync_api import sync_playwright
 from db_manager import load_tracker_state, save_tracker_state
 from services.http_client import post_discord
 
-
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 TRACKER_FILE = "mgm_lines.json"
 STATE_KEY = "tracker_betmgm_nba"
@@ -29,7 +28,6 @@ def scrape_betmgm():
         data = None
 
         with sync_playwright() as playwright:
-            # 1. Setup the Proxy Settings Dictionary
             proxy_settings = None
             if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
                 chosen_ip = random.choice(PROXY_IPS)
@@ -39,16 +37,16 @@ def scrape_betmgm():
                     "password": PROXY_PASSWORD,
                 }
 
-            # 2. Launch the browser WITH the proxy settings
             browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
             
+            # --- FIX 1: Ignore HTTPS errors to bypass proxy SSL blocks ---
             context = browser.new_context(
-    ignore_https_errors=True,
-    user_agent=(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-)
+                ignore_https_errors=True,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
             page = context.new_page()
 
             def handle_response(response):
@@ -62,7 +60,9 @@ def scrape_betmgm():
                         pass
 
             page.on("response", handle_response)
-            page.goto("https://...", wait_until="domcontentloaded")
+            
+            # --- FIX 2: domcontentloaded to bypass infinite loops ---
+            page.goto("https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004", wait_until="domcontentloaded")
             
             try:
                 page.wait_for_response(
