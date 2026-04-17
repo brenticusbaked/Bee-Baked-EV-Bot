@@ -1,83 +1,106 @@
-from dataclasses import dataclass
-from typing import Callable, List
-
-from bot_propodds_nba import main as run_nba_prop_bot
-from clv_tracker import run_clv_tracker
-from master_odds_fetcher import run_fetcher
-from model_mlb import run_mlb_model
-from model_nba import run_nba_model
-from model_nhl import run_nhl_model
-from performance_report import send_performance_report
-from scraper_betmgm import scrape_betmgm
-from scraper_bot import scrape_news
-from scraper_draftkings import scrape_draftkings
-from scraper_fanduel import scrape_fanduel
-from scraper_prizepicks import scrape_prizepicks
-from sgo_grader import run_grader
-from unified_bot import scan_markets
-from utils.config import env_flag
-
-# --- NEW: Import the pybaseball FIP scraper ---
-from scraper_pybaseball_fip import scrape_fip
+from db_manager import get_master_cache, get_untracked_bets, update_bet_clv
+from services.bet_logic import outcome_matches, parse_selection
+from utils.odds import american_to_decimal, decimal_to_american, parse_float
 
 
-TaskFunc = Callable[[], None]
+def run_clv_tracker():
+    untracked = get_untracked_bets()
+    cache = get_master_cache()
+    tracked_count = 0
+
+    if not untracked or not cache:
+        print("CLV Audit: Nothing to track or cache empty.")
+        return {"detail": "nothing to track", "count": 0, "label": "tracked"}
+
+    print(f"Auditing CLV for {len(untracked)} bets using Cloud Cache...")
+
+    for bet in untracked:
+        sport = bet.get("sport")
+        events = cache.get(sport)
+        if not events:
+            print(f"CLV: No cached events for sport '{sport}' on bet {bet.get('id')}.")
+            continue
+
+        game_data = next(
+            (game for game in events if str(game.get("id")) == str(bet.get("event_id"))),
+            None,
+        )
+        if not game_data:
+            print(f"CLV: Event ID {bet.get('event_id')} not found in cache for {bet.get('selection')}.")
+            continue
+
+        pinnacle = next(
+            (book for book in game_data.get("bookmakers", []) if book.get("key") == "pinnacle"),
+            None,
+        )
+        if not pinnacle:
+            print(f"CLV: Pinnacle line not found in cache for {bet['selection']}.")
+            continue
+
+        market_key = str(bet["market"]).lower()
+        candidate_keys = [market_key]
+
+        # Expanded API key translations for model markets
+        if market_key in {"model_nba_spread", "model_nhl_puckline"}:
+            candidate_keys.append("spreads")
+        if market_key == "model_mlb_f5":
+            candidate_keys.append("h2h_1st_half")
+
+        # Standard market key aliases
+        if market_key in {"moneyline", "ml"}:
+            candidate_keys.append("h2h")
+        if market_key in {"spread", "runline", "puckline"}:
+            candidate_keys.append("spreads")
+        if market_key in {"total", "totals", "over/under", "o/u"}:
+            candidate_keys.append("totals")
+
+        market_data = next(
+            (
+                market
+                for market in pinnacle.get("markets", [])
+                if market.get("key", "").lower() in candidate_keys
+            ),
+            None,
+        )
+        if not market_data:
+            available_keys = [m.get("key") for m in pinnacle.get("markets", [])]
+            print(
+                f"CLV: Market not found for {bet['selection']} "
+                f"(tried {candidate_keys}, available: {available_keys})."
+            )
+            continue
+
+        selection_spec = parse_selection(bet["market"], bet["selection"])
+        outcome = next(
+            (item for item in market_data.get("outcomes", []) if outcome_matches(selection_spec, item)),
+            None,
+        )
+        if not outcome:
+            # Debug log showing what outcomes ARE available so you can diagnose mismatches
+            available_outcomes = [
+                {"name": o.get("name"), "point": o.get("point")}
+                for o in market_data.get("outcomes", [])
+            ]
+            print(
+                f"CLV: Outcome not found for '{bet['selection']}' "
+                f"(spec={selection_spec}, available={available_outcomes})."
+            )
+            continue
+
+        closing_price_decimal = float(outcome["price"])
+        if closing_price_decimal <= 1.0:
+            print(f"CLV: Invalid price {closing_price_decimal} for {bet['selection']}. Skipping.")
+            continue
+
+        placed_decimal = parse_float(bet.get("odds_decimal")) or american_to_decimal(bet.get("odds", 0))
+        clv_edge_pct = ((placed_decimal / closing_price_decimal) - 1.0) * 100.0
+        closing_price_american = decimal_to_american(closing_price_decimal)
+        update_bet_clv(bet["id"], closing_price_american, closing_price_decimal, round(clv_edge_pct, 4))
+        print(f"CLV Updated for {bet['selection']}: {clv_edge_pct:.2f}%")
+        tracked_count += 1
+
+    return {"detail": "clv audit complete", "count": tracked_count, "label": "tracked"}
 
 
-@dataclass(frozen=True)
-class PipelineTask:
-    name: str
-    func: TaskFunc
-
-
-def get_refresh_tasks() -> List[PipelineTask]:
-    # --- NEW: Added pybaseball_fip_scraper to run alongside the master fetcher ---
-    return [
-        PipelineTask(name="master_odds_fetcher", func=run_fetcher),
-        PipelineTask(name="pybaseball_fip_scraper", func=scrape_fip)
-    ]
-
-
-def get_parallel_tasks() -> List[PipelineTask]:
-    tasks: List[PipelineTask] = []
-    if env_flag("ENABLE_NEWS", True):
-        tasks.append(PipelineTask(name="injury_news", func=scrape_news))
-    if env_flag("ENABLE_NBA_PROP_BOT", True):
-        tasks.append(PipelineTask(name="nba_prop_bot", func=run_nba_prop_bot))
-    if env_flag("ENABLE_NBA_MODEL", True):
-        tasks.append(PipelineTask(name="model_nba", func=run_nba_model))
-    if env_flag("ENABLE_NHL_MODEL", True):
-        tasks.append(PipelineTask(name="model_nhl", func=run_nhl_model))
-    if env_flag("ENABLE_MLB_MODEL", True):
-        tasks.append(PipelineTask(name="model_mlb", func=run_mlb_model))
-    return tasks
-
-
-def get_scan_tasks() -> List[PipelineTask]:
-    if env_flag("ENABLE_UNIFIED_SCAN", True):
-        return [PipelineTask(name="unified_market_scan", func=scan_markets)]
-    return []
-
-
-def get_audit_tasks() -> List[PipelineTask]:
-    tasks: List[PipelineTask] = []
-    if env_flag("ENABLE_CLV_TRACKER", True):
-        tasks.append(PipelineTask(name="clv_tracker", func=run_clv_tracker))
-    if env_flag("ENABLE_SGO_GRADER", True):
-        tasks.append(PipelineTask(name="sgo_grader", func=run_grader))
-    if env_flag("ENABLE_PERFORMANCE_REPORT", False):
-        tasks.append(PipelineTask(name="performance_report", func=send_performance_report))
-    return tasks
-
-
-def get_scraper_tasks() -> List[PipelineTask]:
-    tasks: List[PipelineTask] = []
-    if env_flag("ENABLE_DRAFTKINGS_SCRAPER", True):
-        tasks.append(PipelineTask(name="scraper_draftkings", func=scrape_draftkings))
-    if env_flag("ENABLE_BETMGM_SCRAPER", True):
-        tasks.append(PipelineTask(name="scraper_betmgm", func=scrape_betmgm))
-    if env_flag("ENABLE_FANDUEL_SCRAPER", True):
-        tasks.append(PipelineTask(name="scraper_fanduel", func=scrape_fanduel))
-    if env_flag("ENABLE_PRIZEPICKS_SCRAPER", True):
-        tasks.append(PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks))
-    return tasks
+if __name__ == "__main__":
+    run_clv_tracker()
