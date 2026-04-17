@@ -2,6 +2,7 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
+    # Runs at 8:00 AM and 4:00 PM UTC
     - cron: '0 8,16 * * *'
   workflow_dispatch:
 
@@ -21,18 +22,29 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # Ensure Playwright browsers are installed for the scrapers
+          playwright install chromium
 
       - name: Run Master Pipeline
         env:
+          # --- Core API & Database Secrets ---
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
+          
+          # --- Discord Webhooks ---
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           
-          # FIXED: Proxy injection for pybaseball / FanGraphs bypass
-          HTTP_PROXY: ${{ secrets.PROXY_URL }}
-          HTTPS_PROXY: ${{ secrets.PROXY_URL }}
+          # --- Scraper Proxy Secrets (For Playwright) ---
+          PROXY_LIST: ${{ secrets.PROXY_LIST }}
+          PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
+          PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+          
+          # --- System Proxy Variables (For pybaseball/Requests) ---
+          # This forces standard Python libraries to route through your Webshare IP
+          HTTP_PROXY: http://${{ secrets.PROXY_USERNAME }}:${{ secrets.PROXY_PASSWORD }}@p.webshare.io:80
+          HTTPS_PROXY: http://${{ secrets.PROXY_USERNAME }}:${{ secrets.PROXY_PASSWORD }}@p.webshare.io:80
         run: |
           python master_run.py
