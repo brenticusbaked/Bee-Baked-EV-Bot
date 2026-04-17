@@ -58,7 +58,7 @@ def scrape_fanduel():
                         pass
 
             page.on("response", handle_response)
-            page.goto("https://sportsbook.fanduel.com/basketball/nba", wait_until="networkidle")
+            page.goto("https://...", wait_until="domcontentloaded")
             try:
                 page.wait_for_response(
                     lambda response: "api/content-managed-page" in response.url and "eventTypeId=7522" in response.url,
