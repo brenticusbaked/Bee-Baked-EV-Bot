@@ -36,4 +36,4 @@ jobs:
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
-        run: python scraper_run.py
+        run: python test_proxy.py
