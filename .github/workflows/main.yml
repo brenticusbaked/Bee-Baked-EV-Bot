@@ -36,5 +36,9 @@ jobs:
           # Discord Routing
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }} # Main Alerts
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }} # Moderator/Summary Routing
+
+          # Proxy Override to bypass FanGraphs 403 block for pybaseball
+          HTTP_PROXY: ${{ secrets.PROXY_URL }}
+          HTTPS_PROXY: ${{ secrets.PROXY_URL }}
         run: |
           python master_run.py
