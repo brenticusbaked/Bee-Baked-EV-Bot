@@ -44,10 +44,18 @@ def _normalize_point(value) -> str:
 
 
 def _find_opposite_outcome(market_type: str, outcomes: List[Dict], target: Dict) -> Optional[Dict]:
+    """
+    Find the opposing outcome for de-vigging.
+
+    For totals: find the outcome with same point but opposite side (over/under).
+    For h2h:    find any outcome that is not the target.
+    For spreads: find the outcome with the mirrored point (e.g. -4.5 vs +4.5).
+                 NOTE: spread opposites have MIRRORED points, not equal points.
+    """
     target_name = _normalize_name(target.get("name", ""))
-    target_point = _normalize_point(target.get("point"))
 
     if market_type == "totals":
+        target_point = _normalize_point(target.get("point"))
         for outcome in outcomes:
             if outcome is target:
                 continue
@@ -58,13 +66,37 @@ def _find_opposite_outcome(market_type: str, outcomes: List[Dict], target: Dict)
                 return outcome
         return None
 
-    if market_type in {"spreads", "h2h"}:
+    if market_type == "h2h":
         for outcome in outcomes:
             if outcome is target:
                 continue
-            if market_type == "spreads" and _normalize_point(outcome.get("point")) != target_point:
-                continue
             return outcome
+        return None
+
+    if market_type == "spreads":
+        # Spread opposites have mirrored points: -4.5 and +4.5
+        # We match on abs(point) equality, excluding the target itself
+        try:
+            target_abs = abs(float(target.get("point", 0)))
+        except (TypeError, ValueError):
+            return None
+
+        for outcome in outcomes:
+            if outcome is target:
+                continue
+            try:
+                outcome_abs = abs(float(outcome.get("point", 0)))
+            except (TypeError, ValueError):
+                continue
+            if abs(outcome_abs - target_abs) < 0.001:
+                return outcome
+        return None
+
+    # Fallback for unknown market types
+    for outcome in outcomes:
+        if outcome is target:
+            continue
+        return outcome
     return None
 
 
@@ -134,12 +166,17 @@ def scan_markets():
 
     for sport, events in cache.items():
         for event in events:
-            commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+            try:
+                commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+            except (KeyError, ValueError) as exc:
+                print(f"Bad commence_time on event {event.get('id')}: {exc}")
+                continue
+
             if now > commence_time:
                 continue
 
             matchup = f"{event['away_team']} @ {event['home_team']}"
-            markets = {}
+            markets: Dict[str, Dict] = {}
 
             for bookmaker in event.get("bookmakers", []):
                 for market in bookmaker.get("markets", []):
@@ -182,7 +219,9 @@ def scan_markets():
                     "movement_factor": 1.0,
                     "movement_note": "new snapshot",
                 }
+
                 for soft_bet in data["soft"]:
+                    # Find the matching Pinnacle outcome for this soft-book side
                     matching_sharp = next(
                         (
                             outcome
@@ -198,21 +237,31 @@ def scan_markets():
                     fair_probability = _de_vig_fair_probability(market_type, sharp_outcomes, matching_sharp)
                     if fair_probability <= 0 or fair_probability >= 1:
                         continue
+
                     fair_decimal = 1.0 / fair_probability
                     edge = (soft_bet["price"] * fair_probability) - 1.0
-                    book_weight = book_weights.get(soft_bet["book"], 1.0)
+                    book_weight = book_weights.get(soft_bet["book_key"], book_weights.get(soft_bet["book"], 1.0))
                     snapshot_key = _snapshot_key(event["id"], market_type, soft_bet)
                     previous_price = previous_snapshot.get(snapshot_key)
                     movement_factor = _line_movement_factor(previous_price, soft_bet["price"], fair_decimal)
                     current_snapshot[snapshot_key] = soft_bet["price"]
                     weighted_score = edge * book_weight * movement_factor
+
                     if previous_price is None:
                         movement_note = "new market snapshot"
                     else:
-                        direction = "toward fair" if movement_factor > 1.01 else "away from fair" if movement_factor < 0.99 else "flat"
-                        movement_note = (
-                            f"{decimal_to_american(previous_price)} -> {decimal_to_american(soft_bet['price'])} ({direction})"
+                        direction = (
+                            "toward fair"
+                            if movement_factor > 1.01
+                            else "away from fair"
+                            if movement_factor < 0.99
+                            else "flat"
                         )
+                        movement_note = (
+                            f"{decimal_to_american(previous_price)} -> "
+                            f"{decimal_to_american(soft_bet['price'])} ({direction})"
+                        )
+
                     if UNIFIED_NEAR_MISS_THRESHOLD <= edge < UNIFIED_EV_THRESHOLD:
                         near_misses.append(
                             {
@@ -224,6 +273,7 @@ def scan_markets():
                                 "movement_factor": movement_factor,
                             }
                         )
+
                     if edge >= UNIFIED_EV_THRESHOLD and weighted_score > best_edge["score"]:
                         best_edge = {
                             "edge": edge,
@@ -311,7 +361,8 @@ def scan_markets():
         total_near_misses = len(near_misses)
         near_misses = sorted(near_misses, key=lambda item: item["edge"], reverse=True)[:3]
         samples = " | ".join(
-            f"{item['matchup']} - {item['selection']} @ {item['book']} ({item['edge'] * 100:.2f}%, {item['weight']:.2f}x, move {item['movement_factor']:.2f}x)"
+            f"{item['matchup']} - {item['selection']} @ {item['book']} "
+            f"({item['edge'] * 100:.2f}%, {item['weight']:.2f}x, move {item['movement_factor']:.2f}x)"
             for item in near_misses
         )
         near_miss_text = f"; near misses: {total_near_misses} total, top {len(near_misses)} -> {samples}"
