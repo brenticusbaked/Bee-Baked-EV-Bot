@@ -1,5 +1,6 @@
 import os
 import random
+import string
 
 from playwright.sync_api import sync_playwright
 from db_manager import load_tracker_state, save_tracker_state
@@ -26,15 +27,20 @@ def scrape_prizepicks():
             proxy_settings = None
             if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
                 chosen_ip = random.choice(PROXY_IPS)
+                
+                # Dynamic Session ID to force a fresh IP
+                random_session = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+                dynamic_username = f"{PROXY_USERNAME}-session-{random_session}"
+                
                 proxy_settings = {
                     "server": f"http://{chosen_ip}",
-                    "username": PROXY_USERNAME,
+                    "username": dynamic_username,
                     "password": PROXY_PASSWORD,
                 }
 
             browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
             
-            # --- FIX 1: Ignore HTTPS errors to bypass proxy SSL blocks ---
+            # Ignore HTTPS errors to bypass proxy SSL blocks
             context = browser.new_context(
                 ignore_https_errors=True,
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -53,7 +59,7 @@ def scrape_prizepicks():
 
             page.on("response", handle_response)
             
-            # --- FIX 2: domcontentloaded to bypass infinite loops ---
+            # domcontentloaded to bypass infinite loops
             page.goto("https://app.prizepicks.com/board", wait_until="domcontentloaded")
             
             try:
