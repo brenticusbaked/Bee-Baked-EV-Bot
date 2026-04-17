@@ -2,7 +2,7 @@ name: Syndicate Scrapers
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # Every 30 minutes
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -21,12 +21,13 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-          pip install -U playwright-stealth  # Ensures v2.x is installed
+          pip install -U playwright-stealth  # Force upgrade to v2.x
           playwright install chromium
 
       - name: Run Unified Scraper
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
