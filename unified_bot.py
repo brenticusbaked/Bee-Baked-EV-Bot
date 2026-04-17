@@ -97,7 +97,7 @@ def scan_markets():
                 units = quarter_kelly_units(edge, offered_price)
                 fair_price_american = decimal_to_american(fair_price)
 
-                log_bet_to_db(
+                was_logged = log_bet_to_db(
                     matchup,
                     market_type,
                     selection,
@@ -108,6 +108,9 @@ def scan_markets():
                     sport,
                     event["id"],
                 )
+                if not was_logged:
+                    print(f"Skipping alert because DB log failed for {selection}.")
+                    continue
 
                 app_link = get_mobile_app_link(final["book_key"], final["id"], event["id"], matchup)
                 alerts.append(

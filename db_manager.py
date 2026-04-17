@@ -97,16 +97,16 @@ def _infer_bet_source(market: str, sport: str) -> str:
 
 def is_already_logged(matchup, market, selection):
     def action():
-        response = (
+        rows = (
             supabase.table("bets_log")
-            .select("id")
+            .select("id,result")
             .ilike("matchup", matchup.strip())
             .eq("market", market.strip().upper())
             .ilike("selection", selection.strip())
-            .eq("result", "")
             .execute()
+            .data
         )
-        return len(response.data) > 0
+        return any(not row.get("result") for row in rows)
 
     return _safe_execute(action, False)
 
@@ -125,7 +125,7 @@ def log_bet_to_db(
     notes: Optional[str] = None,
 ):
     if not supabase:
-        return
+        return False
 
     edge_pct = _parse_edge_pct(edge_val)
     odds_decimal = _parse_decimal_odds(odds)
@@ -153,8 +153,9 @@ def log_bet_to_db(
 
     def action():
         supabase.table("bets_log").insert(payload).execute()
+        return True
 
-    _safe_execute(action, None)
+    return _safe_execute(action, False)
 
 
 def get_ungraded_past_bets() -> List[Dict[str, Any]]:
