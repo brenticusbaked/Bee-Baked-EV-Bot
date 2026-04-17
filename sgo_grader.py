@@ -1,71 +1,125 @@
 import os
-import requests
+
 from db_manager import get_ungraded_past_bets, update_result
+from services.bet_logic import grade_game_bet, normalize_text, parse_selection
+from services.http_client import post_discord, request
+from utils.odds import profit_for_result
+
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 SGO_API_KEY = os.getenv("SGO_API_KEY")
 
+
 def get_sgo_results(league_id, date_str):
+    if not SGO_API_KEY:
+        return {"players": {}, "events": []}
+
     url = "https://api.sportsgameodds.com/v2/events"
-    params = {'apiKey': SGO_API_KEY, 'leagueID': league_id, 'date': date_str}
+    params = {"apiKey": SGO_API_KEY, "leagueID": league_id, "date": date_str}
     try:
-        res = requests.get(url, params=params, timeout=15)
-        if res.status_code == 200:
-            events = res.json()
-            stats = {'players': {}, 'games': {}}
-            for ev in events:
-                for p_name, p_stats in ev.get('boxscore', {}).items():
-                    stats['players'][p_name.lower().strip()] = p_stats
-                stats['games'][ev.get('name', '').lower().strip()] = ev.get('scores', {})
-            return stats
-    except: return {'players': {}, 'games': {}}
+        response = request("GET", url, params=params, timeout=15)
+        events = response.json()
+        players = {}
+        for event in events:
+            for player_name, player_stats in event.get("boxscore", {}).items():
+                players[normalize_text(player_name)] = player_stats
+        return {"players": players, "events": events}
+    except Exception as exc:
+        print(f"SGO fetch failed for {league_id} on {date_str}: {exc}")
+        return {"players": {}, "events": []}
+
+
+def _match_event_by_name(events, matchup: str):
+    matchup_norm = normalize_text(matchup)
+    for event in events:
+        event_name = normalize_text(event.get("name", ""))
+        if matchup_norm and (matchup_norm == event_name or matchup_norm in event_name or event_name in matchup_norm):
+            return event
+    return None
+
+
+def _grade_player_prop(bet, player_data):
+    spec = parse_selection(bet["market"], bet["selection"])
+    if spec.get("type") != "player_prop":
+        return None
+
+    stat = spec.get("stat")
+    actual = player_data.get(stat, 0)
+    line = spec.get("line")
+    side = spec.get("side")
+    if line is None or side not in {"over", "under"}:
+        return None
+    if actual == line:
+        return "PUSH"
+    if side == "over":
+        return "WIN" if actual > line else "LOSS"
+    return "WIN" if actual < line else "LOSS"
+
 
 def run_grader():
     ungraded_bets = get_ungraded_past_bets()
-    if not ungraded_bets: return
-        
+    if not ungraded_bets:
+        return
+
     results_found = 0
     profit = 0.0
     cache = {}
-    league_map = {'basketball_nba': 'NBA', 'icehockey_nhl': 'NHL', 'baseball_mlb': 'MLB'}
+    league_map = {"basketball_nba": "NBA", "icehockey_nhl": "NHL", "baseball_mlb": "MLB"}
 
-    print(f"🔍 Grading {len(ungraded_bets)} bets...")
+    print(f"Grading {len(ungraded_bets)} bets...")
 
     for bet in ungraded_bets:
-        league = league_map.get(bet.get('sport'), 'NBA')
-        ckey = f"{league}_{bet['date']}"
-        if ckey not in cache: cache[ckey] = get_sgo_results(league, bet['date'])
-        
-        data = cache[ckey]
-        
-        # FIXED: Bridge 'PLAYER_POINTS' -> 'points' case mismatch
-        market = bet['market'].lower().replace('player_', '').strip()
-        selection = bet['selection'].lower().strip()
-        
-        if market in ['points', 'assists', 'rebounds', 'goals']:
-            is_over = "over" in selection
-            split_word = " over " if is_over else " under "
-            if split_word in selection:
-                parts = selection.split(split_word)
-                try:
-                    p_name, line = parts[0].strip(), float(parts[1].strip())
-                    if p_name in data['players']:
-                        actual = data['players'][p_name].get(market, 0)
-                        if actual == line:
-                            update_result(bet['id'], "PUSH")
-                        else:
-                            win = (actual > line) if is_over else (actual < line)
-                            update_result(bet['id'], "WIN" if win else "LOSS")
-                            
-                            # American Odds P/L
-                            odds = float(bet['odds'].replace('+', ''))
-                            units = float(bet['units'])
-                            profit += (units * (odds/100)) if win else -units
-                        results_found += 1
-                except: continue
+        league = league_map.get(bet.get("sport"))
+        if not league:
+            continue
 
-    if results_found > 0 and DISCORD_WEBHOOK_URL:
-        msg = f"📊 **SGO GRADER REPORT**\n✅ Graded: {results_found}\n💰 Net P/L: **{profit:+.2f} Units**"
-        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": 5763719 if profit >= 0 else 15158332}]})
+        cache_key = f"{league}_{bet['date']}"
+        if cache_key not in cache:
+            cache[cache_key] = get_sgo_results(league, bet["date"])
 
-if __name__ == "__main__": run_grader()
+        data = cache[cache_key]
+        graded_result = None
+        spec = parse_selection(bet["market"], bet["selection"])
+
+        if spec.get("type") == "player_prop":
+            player_key = normalize_text(spec.get("player", ""))
+            player_data = data["players"].get(player_key)
+            if player_data:
+                graded_result = _grade_player_prop(bet, player_data)
+        else:
+            event = _match_event_by_name(data["events"], bet.get("matchup", ""))
+            if event:
+                graded_result = grade_game_bet(
+                    bet["market"],
+                    bet["selection"],
+                    bet.get("matchup", ""),
+                    event.get("scores", {}),
+                )
+
+        if not graded_result:
+            continue
+
+        update_result(bet["id"], graded_result)
+        profit += profit_for_result(bet.get("odds", 0), bet.get("units", 0), graded_result)
+        results_found += 1
+
+    if results_found > 0:
+        post_discord(
+            {
+                "embeds": [
+                    {
+                        "description": (
+                            f"**SGO GRADER REPORT**\n"
+                            f"Graded: {results_found}\n"
+                            f"Net P/L: **{profit:+.2f} Units**"
+                        ),
+                        "color": 5763719 if profit >= 0 else 15158332,
+                    }
+                ]
+            },
+            webhook_url=DISCORD_WEBHOOK_URL,
+        )
+
+
+if __name__ == "__main__":
+    run_grader()

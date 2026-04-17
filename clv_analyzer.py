@@ -1,47 +1,52 @@
 import os
-import requests
+
 from db_manager import get_all_clv_bets
+from services.http_client import post_discord
+from utils.odds import american_to_decimal
+
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 FOOTER_IMG = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 
-def american_to_decimal(american_str):
-    try:
-        american = float(american_str.replace('+', '').strip())
-        if american > 0: return (american / 100.0) + 1.0
-        elif american < 0: return (100.0 / abs(american)) + 1.0
-        return 1.0
-    except ValueError: return 0.0
 
 def run_clv_analysis():
     bets = get_all_clv_bets()
-    if not bets: return
+    if not bets:
+        return
 
     total_bets_with_clv = len(bets)
     clv_beaten = 0
     total_clv_value = 0.0
 
     for bet in bets:
-        taken_dec = american_to_decimal(bet['odds'])
-        closing_dec = american_to_decimal(bet['closing_line_pinnacle'])
-        
-        if taken_dec > 0 and closing_dec > 0:
-            if taken_dec > closing_dec: clv_beaten += 1
-            total_clv_value += (taken_dec / closing_dec) - 1
+        try:
+            taken_decimal = american_to_decimal(bet["odds"])
+            closing_decimal = american_to_decimal(bet["closing_line_pinnacle"])
+        except Exception:
+            continue
 
-    if total_bets_with_clv > 0:
-        win_rate = (clv_beaten / total_bets_with_clv) * 100
-        avg_clv_edge = (total_clv_value / total_bets_with_clv) * 100
-        
-        if DISCORD_WEBHOOK_URL:
-            color = 5763719 if win_rate >= 50 else 15158332
-            msg = (
-                f"📈 **$BEE BAKED SHARP METRICS** 📈\n━━━━━━━━━━━━━━━━━━━━\n"
-                f"**Total Bets Tracked:** {total_bets_with_clv}\n"
-                f"**CLV Beaten Rate:** {win_rate:.1f}%\n"
-                f"**Avg Edge vs Close:** {avg_clv_edge:+.2f}%\n\n"
-                f"*Note: Consistently beating the Pinnacle close > 50% guarantees a long-term mathematical advantage.*"
-            )
-            requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [{"description": msg, "color": color, "image": {"url": FOOTER_IMG}}]})
+        if taken_decimal > closing_decimal:
+            clv_beaten += 1
+        total_clv_value += (taken_decimal / closing_decimal) - 1
 
-if __name__ == "__main__": run_clv_analysis()
+    if total_bets_with_clv <= 0:
+        return
+
+    win_rate = (clv_beaten / total_bets_with_clv) * 100
+    avg_clv_edge = (total_clv_value / total_bets_with_clv) * 100
+    color = 5763719 if win_rate >= 50 else 15158332
+    message = (
+        f"**$BEE BAKED SHARP METRICS**\n"
+        f"**Total Bets Tracked:** {total_bets_with_clv}\n"
+        f"**CLV Beaten Rate:** {win_rate:.1f}%\n"
+        f"**Avg Edge vs Close:** {avg_clv_edge:+.2f}%\n\n"
+        f"*Consistently beating the Pinnacle close is the best health check for the edge pipeline.*"
+    )
+    post_discord(
+        {"embeds": [{"description": message, "color": color, "image": {"url": FOOTER_IMG}}]},
+        webhook_url=DISCORD_WEBHOOK_URL,
+    )
+
+
+if __name__ == "__main__":
+    run_clv_analysis()
