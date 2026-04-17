@@ -9,7 +9,8 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 FETCH_CONFIG = {
     "basketball_nba": "spreads",
     "icehockey_nhl": "spreads",
-    "baseball_mlb": "h2h",
+    # Added First 5 Innings market to the fetch string
+    "baseball_mlb": "h2h,h2h_1st_half",
 }
 
 
