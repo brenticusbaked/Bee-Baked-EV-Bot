@@ -3,15 +3,13 @@ from services.pipeline import run_scraper_pipeline
 
 def run_pipeline():
     """
-    Executes the unified web scraper pipeline for soft books.
-    This triggers DraftKings, BetMGM, FanDuel, and PrizePicks in parallel
-    using the master pipeline configuration.
+    Triggers the parallel execution of all browser-based scrapers.
     """
-    print("Starting Unified Scraper Pipeline...")
+    print("Starting Bee-Baked Unified Scraper...")
     try:
         run_scraper_pipeline()
     except Exception as exc:
-        print(f"CRITICAL ERROR: Unified Scraper Pipeline failed to execute: {exc}")
+        print(f"Scraper Pipeline Failed: {exc}")
         sys.exit(1)
 
 if __name__ == "__main__":
