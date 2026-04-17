@@ -1,3 +1,5 @@
+import os
+import random
 import pandas as pd
 import pybaseball
 from datetime import datetime
@@ -5,6 +7,11 @@ from db_manager import save_tracker_state
 
 STATE_KEY = "mlb_fip_cache"
 CACHE_FILE = "fip_cache.json"
+
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
+RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
+PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 
 def scrape_fip():
     """
@@ -14,6 +21,18 @@ def scrape_fip():
     print("Initializing pybaseball FIP scraper...")
     season = datetime.now().year
     
+    # Setup proxy environment variables for the 'requests' library
+    original_http = os.environ.get("HTTP_PROXY")
+    original_https = os.environ.get("HTTPS_PROXY")
+    
+    if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
+        chosen_ip = random.choice(PROXY_IPS)
+        # Format the URL for the requests library: http://user:pass@ip:port
+        proxy_url = f"http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{chosen_ip}"
+        os.environ["HTTP_PROXY"] = proxy_url
+        os.environ["HTTPS_PROXY"] = proxy_url
+        print(f"Routing FanGraphs request through residential proxy to bypass 403...")
+
     try:
         # 1. Fetch current season pitching stats from FanGraphs
         # qual=0 ensures we get all pitchers, not just qualified starters
@@ -32,7 +51,6 @@ def scrape_fip():
             fip = row.get('FIP')
             era = row.get('ERA')
             
-            # Ensure data is valid before caching
             if pd.notna(mlbam_id) and pd.notna(fip):
                 fip_cache[str(int(mlbam_id))] = {
                     "fip": float(fip),
@@ -48,6 +66,18 @@ def scrape_fip():
     except Exception as exc:
         print(f"Error scraping FIP via pybaseball: {exc}")
         return {"detail": f"pybaseball scrape error: {exc}", "count": 0, "label": "updates"}
+        
+    finally:
+        # CLEANUP: Remove the proxy from the environment so Supabase/Discord aren't routed through it
+        if original_http:
+            os.environ["HTTP_PROXY"] = original_http
+        elif "HTTP_PROXY" in os.environ:
+            del os.environ["HTTP_PROXY"]
+
+        if original_https:
+            os.environ["HTTPS_PROXY"] = original_https
+        elif "HTTPS_PROXY" in os.environ:
+            del os.environ["HTTPS_PROXY"]
 
 if __name__ == "__main__":
     scrape_fip()
