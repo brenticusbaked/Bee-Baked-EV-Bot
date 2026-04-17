@@ -1,83 +1,122 @@
-from db_manager import get_master_cache, get_untracked_bets, update_bet_clv
-from services.bet_logic import outcome_matches, parse_selection
-from utils.odds import american_to_decimal, decimal_to_american, parse_float
+import os
+import random
+
+from playwright.sync_api import sync_playwright
+
+from db_manager import load_tracker_state, save_tracker_state
+from services.http_client import post_discord
 
 
-def run_clv_tracker():
-    untracked = get_untracked_bets()
-    cache = get_master_cache()
-    tracked_count = 0
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+TRACKER_FILE = "mgm_lines.json"
+STATE_KEY = "tracker_betmgm_nba"
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
+RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
+PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 
-    if not untracked or not cache:
-        print("CLV Audit: Nothing to track or cache empty.")
-        return {"detail": "nothing to track", "count": 0, "label": "tracked"}
 
-    print(f"Auditing CLV for {len(untracked)} bets using Cloud Cache...")
+def load_previous_lines():
+    return load_tracker_state(STATE_KEY, TRACKER_FILE)
 
-    for bet in untracked:
-        sport = bet.get("sport")
-        events = cache.get(sport)
-        if not events:
-            continue
 
-        game_data = next((game for game in events if str(game.get("id")) == str(bet.get("event_id"))), None)
-        if not game_data:
-            continue
+def save_current_lines(lines):
+    save_tracker_state(STATE_KEY, lines, TRACKER_FILE)
 
-        pinnacle = next((book for book in game_data.get("bookmakers", []) if book.get("key") == "pinnacle"), None)
-        if not pinnacle:
-            print(f"Pinnacle line not found in cache for {bet['selection']}.")
-            continue
 
-        market_key = str(bet["market"]).lower()
-        candidate_keys = [market_key]
-        
-        # --- NEW: Expanded API Key Translations ---
-        # Map specific model markets
-        if market_key in {"model_nba_spread", "model_nhl_puckline"}:
-            candidate_keys.append("spreads")
-        if market_key == "model_mlb_f5":
-            candidate_keys.append("h2h_1st_half")
+def scrape_betmgm():
+    try:
+        data = None
+
+        with sync_playwright() as playwright:
+            # 1. Setup the Proxy Settings Dictionary
+            proxy_settings = None
+            if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
+                chosen_ip = random.choice(PROXY_IPS)
+                proxy_settings = {
+                    "server": f"http://{chosen_ip}",
+                    "username": PROXY_USERNAME,
+                    "password": PROXY_PASSWORD,
+                }
+
+            # 2. Launch the browser WITH the proxy settings
+            browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
             
-        # Map standard markets
-        if market_key in {"moneyline", "ml"}:
-            candidate_keys.append("h2h")
-        if market_key in {"spread", "runline", "puckline"}:
-            candidate_keys.append("spreads")
-        if market_key in {"total", "totals", "over/under", "o/u"}:
-            candidate_keys.append("totals")
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+            page = context.new_page()
 
-        market_data = next(
-            (market for market in pinnacle.get("markets", []) if market.get("key", "").lower() in candidate_keys),
-            None,
-        )
-        if not market_data:
-            print(f"Market not found for {bet['selection']}.")
-            continue
+            def handle_response(response):
+                nonlocal data
+                if "api/v1/fixtures" in response.url and "competitionId=6004" in response.url:
+                    try:
+                        response_json = response.json()
+                        if "fixtures" in response_json:
+                            data = response_json
+                    except Exception:
+                        pass
 
-        selection_spec = parse_selection(bet["market"], bet["selection"])
-        outcome = next(
-            (item for item in market_data.get("outcomes", []) if outcome_matches(selection_spec, item)),
-            None,
-        )
-        if not outcome:
-            print(f"Outcome not found for {bet['selection']}.")
-            continue
+            page.on("response", handle_response)
+            page.goto("https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004", wait_until="networkidle")
+            
+            try:
+                page.wait_for_response(
+                    lambda response: "api/v1/fixtures" in response.url and "competitionId=6004" in response.url,
+                    timeout=6000,
+                )
+            except Exception:
+                pass
+                
+            browser.close()
 
-        closing_price_decimal = float(outcome["price"])
-        if closing_price_decimal <= 1.0:
-            print(f"Invalid price for {bet['selection']}. Skipping.")
-            continue
+        if not data:
+            print("Could not intercept BetMGM API data via Playwright.")
+            return
 
-        placed_decimal = parse_float(bet.get("odds_decimal")) or american_to_decimal(bet.get("odds", 0))
-        clv_edge_pct = ((placed_decimal / closing_price_decimal) - 1.0) * 100.0
-        closing_price_american = decimal_to_american(closing_price_decimal)
-        update_bet_clv(bet["id"], closing_price_american, closing_price_decimal, round(clv_edge_pct, 4))
-        print(f"CLV Updated for {bet['selection']}: {clv_edge_pct:.2f}%")
-        tracked_count += 1
+        current_lines = {}
+        alerts = []
+        previous_lines = load_previous_lines()
 
-    return {"detail": "clv audit complete", "count": tracked_count, "label": "tracked"}
+        for fixture in data.get("fixtures", []):
+            matchup = fixture.get("name", {"value": "Unknown Matchup"}).get("value")
+            event_id = str(fixture.get("id"))
 
+            for option_market in fixture.get("optionMarkets", []):
+                if "Spread" not in option_market.get("name", {}).get("value", ""):
+                    continue
+                for outcome in option_market.get("options", []):
+                    team = outcome.get("name", {}).get("value")
+                    attributes = outcome.get("attributes", {})
+                    line = attributes.get("spread") or attributes.get("line")
+                    if line is None:
+                        continue
+
+                    unique_key = f"{event_id}_{team}"
+                    current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line}
+                    if unique_key not in previous_lines:
+                        continue
+
+                    old_line = previous_lines[unique_key]["line"]
+                    diff = abs(float(line) - float(old_line))
+                    if diff >= 1.5:
+                        alerts.append(
+                            f"**MGM STEAM ALERT:** {matchup}\n"
+                            f"**{team} Spread Moved!**\n"
+                            f"Old Line: {old_line} -> **New Line: {line}**"
+                        )
+
+        save_current_lines(current_lines)
+        for message in alerts:
+            post_discord({"embeds": [{"description": message, "color": 13611036}]}, webhook_url=DISCORD_WEBHOOK_URL)
+        return {"detail": "betmgm scrape complete", "count": len(alerts), "label": "alerts"}
+        
+    except Exception as exc:
+        print(f"Error scraping BetMGM: {exc}")
+        return {"detail": f"betmgm scrape error: {exc}", "count": 0, "label": "alerts"}
 
 if __name__ == "__main__":
-    run_clv_tracker()
+    scrape_betmgm()
