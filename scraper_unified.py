@@ -3,7 +3,7 @@ import random
 import string
 import time
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync  # Added Stealth support
+from playwright_stealth import Stealth  # Correct v2.x import
 
 from db_manager import load_tracker_state, save_tracker_state
 from services.http_client import post_discord
@@ -18,7 +18,7 @@ PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") i
 SITE_CONFIG = {
     "draftkings": {
         "url": "https://sportsbook.draftkings.com/leagues/basketball/nba",
-        "api_marker": "api/sportscontent/v1/events",  # Broader marker
+        "api_marker": "api/sportscontent/v1/events",
         "state_key": "tracker_draftkings_nba",
         "cache_file": "dk_lines.json",
         "color": 5763719 
@@ -39,14 +39,14 @@ SITE_CONFIG = {
     },
     "prizepicks": {
         "url": "https://app.prizepicks.com/board",
-        "api_marker": "prizepicks.com/projections", # Broader marker
+        "api_marker": "prizepicks.com/projections",
         "state_key": "tracker_prizepicks_nba",
         "cache_file": "prizepicks_lines.json",
         "color": 10181046 
     }
 }
 
-def get_proxy():
+def get_proxy_settings():
     if not PROXY_IPS or not PROXY_USERNAME: return None
     session = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
     return {
@@ -55,26 +55,26 @@ def get_proxy():
         "password": PROXY_PASSWORD,
     }
 
-def scrape_site(playwright, site_id):
+def scrape_site(playwright_instance, site_id):
     conf = SITE_CONFIG[site_id]
     data = None
     
-    # Launch browser with specific viewport and proxy
-    browser = playwright.chromium.launch(headless=True, proxy=get_proxy())
+    # Launch browser through the proxy
+    browser = playwright_instance.chromium.launch(headless=True, proxy=get_proxy_settings())
+    
+    # Create context with a realistic viewport and User-Agent
     context = browser.new_context(
         viewport={'width': 1920, 'height': 1080},
         ignore_https_errors=True,
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
     
     page = context.new_page()
-    stealth_sync(page) # Apply stealth patches to bypass navigator.webdriver detection
 
     def handle_response(response):
         nonlocal data
         if conf["api_marker"] in response.url:
             try:
-                # Intercepting JSON responses directly from the network
                 data = response.json()
             except:
                 pass
@@ -82,34 +82,31 @@ def scrape_site(playwright, site_id):
     page.on("response", handle_response)
     
     try:
-        # Increase timeout and use domcontentloaded for heavy sites
         page.goto(conf["url"], wait_until="domcontentloaded", timeout=60000)
-        # Small random delay to mimic human behavior
-        time.sleep(random.uniform(2, 5)) 
+        # Random human-like delay
+        time.sleep(random.uniform(3, 7)) 
     except Exception as e:
-        print(f"⚠️ {site_id} navigation timeout: {e}")
+        print(f"⚠️ {site_id} timed out: {e}")
 
-    # Final check for data with a short buffer
     if not data:
         try:
             page.wait_for_response(lambda r: conf["api_marker"] in r.url, timeout=10000)
         except:
-            print(f"❌ Failed to intercept {site_id} data.")
+            print(f"❌ No data captured for {site_id}")
 
     browser.close()
     return data
 
-# ... [Include your process_alerts function from the previous version] ...
+# ... [Include process_alerts function here] ...
 
 def run_pipeline():
-    with sync_playwright() as p:
+    # Use the new Stealth context manager for version 2.0+
+    with Stealth().use_sync(sync_playwright()) as playwright:
         for sid in SITE_CONFIG.keys():
-            raw = scrape_site(p, sid)
+            raw = scrape_site(playwright, sid)
             if raw: 
                 process_alerts(sid, raw)
-            else:
-                print(f"⏭️ Skipping {sid} alert processing (no data).")
-            time.sleep(random.uniform(5, 10)) # Variable delay between books
+            time.sleep(random.uniform(5, 12))
 
 if __name__ == "__main__":
     run_pipeline()
