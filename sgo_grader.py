@@ -18,11 +18,15 @@ def get_sgo_results(league_id, date_str):
     params = {"apiKey": SGO_API_KEY, "leagueID": league_id, "date": date_str}
     try:
         response = request("GET", url, params=params, timeout=15)
-        events = response.json()
+        data = response.json()
         
-        # --- NEW FIX: Prevent crash if API returns an error dictionary/string instead of a list ---
-        if not isinstance(events, list):
-            print(f"SGO API returned unexpected format for {league_id} on {date_str} (likely no games or error): {events}")
+        # FIXED: Extract events if SGO returns a dictionary instead of a list
+        if isinstance(data, dict):
+            events = data.get("events", [])
+        elif isinstance(data, list):
+            events = data
+        else:
+            print(f"SGO API returned unexpected format for {league_id} on {date_str}: {data}")
             return {"players": {}, "events": []}
 
         players = {}
