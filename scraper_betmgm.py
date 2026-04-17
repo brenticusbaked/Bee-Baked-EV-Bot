@@ -61,7 +61,7 @@ def scrape_betmgm():
                         pass
 
             page.on("response", handle_response)
-            page.goto("https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004", wait_until="networkidle")
+            page.goto("https://...", wait_until="domcontentloaded")
             
             try:
                 page.wait_for_response(
