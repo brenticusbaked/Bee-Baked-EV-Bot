@@ -1,34 +1,125 @@
+import os
+import random
+import string
+
+from playwright.sync_api import sync_playwright
+from db_manager import load_tracker_state, save_tracker_state
+from services.http_client import post_discord
+
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+TRACKER_FILE = "mgm_lines.json"
+STATE_KEY = "tracker_betmgm_nba"
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
-PROXY_URLS = [url.strip() for url in RAW_PROXY_LIST.replace("\n", ",").split(",") if url.strip()]
+PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 
+def load_previous_lines():
+    return load_tracker_state(STATE_KEY, TRACKER_FILE)
 
-def get_proxy_settings():
-    """Get proxy settings in Playwright format or None for direct connection."""
-    if not PROXY_URLS:
-        return None
-    chosen_url = random.choice(PROXY_URLS)
-    try:
-        return {"server": chosen_url}
-    except Exception as exc:
-        print(f"Failed to parse proxy URL: {exc}")
-        return None
-
+def save_current_lines(lines):
+    save_tracker_state(STATE_KEY, lines, TRACKER_FILE)
 
 def scrape_betmgm():
     try:
         data = None
 
         with sync_playwright() as playwright:
-            proxy_settings = get_proxy_settings()
-            browser = None
+            proxy_settings = None
+            if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
+                chosen_ip = random.choice(PROXY_IPS)
+                
+                # Dynamic Session ID to force a fresh IP
+                random_session = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+                dynamic_username = f"{PROXY_USERNAME}-session-{random_session}"
+                
+                proxy_settings = {
+                    "server": f"http://{chosen_ip}",
+                    "username": dynamic_username,
+                    "password": PROXY_PASSWORD,
+                }
+
+            browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
             
-            if proxy_settings:
-                try:
-                    print(f"Attempting connection with proxy...")
-                    browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
-                except Exception as proxy_exc:
-                    print(f"Proxy connection failed ({proxy_exc}), falling back to direct connection...")
-                    browser = None
+            # Ignore HTTPS errors to bypass proxy SSL blocks
+            context = browser.new_context(
+                ignore_https_errors=True,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+            page = context.new_page()
+
+            def handle_response(response):
+                nonlocal data
+                if "api/v1/fixtures" in response.url and "competitionId=6004" in response.url:
+                    try:
+                        response_json = response.json()
+                        if "fixtures" in response_json:
+                            data = response_json
+                    except Exception:
+                        pass
+
+            page.on("response", handle_response)
             
-            if not browser:
-                browser = playwright.chromium.launch(headless=True)
+            # domcontentloaded to bypass infinite loops
+            page.goto("https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004", wait_until="domcontentloaded")
+            
+            try:
+                page.wait_for_response(
+                    lambda response: "api/v1/fixtures" in response.url and "competitionId=6004" in response.url,
+                    timeout=6000,
+                )
+            except Exception:
+                pass
+                
+            browser.close()
+
+        if not data:
+            print("Could not intercept BetMGM API data via Playwright.")
+            return
+
+        current_lines = {}
+        alerts = []
+        previous_lines = load_previous_lines()
+
+        for fixture in data.get("fixtures", []):
+            matchup = fixture.get("name", {"value": "Unknown Matchup"}).get("value")
+            event_id = str(fixture.get("id"))
+
+            for option_market in fixture.get("optionMarkets", []):
+                if "Spread" not in option_market.get("name", {}).get("value", ""):
+                    continue
+                for outcome in option_market.get("options", []):
+                    team = outcome.get("name", {}).get("value")
+                    attributes = outcome.get("attributes", {})
+                    line = attributes.get("spread") or attributes.get("line")
+                    if line is None:
+                        continue
+
+                    unique_key = f"{event_id}_{team}"
+                    current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line}
+                    if unique_key not in previous_lines:
+                        continue
+
+                    old_line = previous_lines[unique_key]["line"]
+                    diff = abs(float(line) - float(old_line))
+                    if diff >= 1.5:
+                        alerts.append(
+                            f"**MGM STEAM ALERT:** {matchup}\n"
+                            f"**{team} Spread Moved!**\n"
+                            f"Old Line: {old_line} -> **New Line: {line}**"
+                        )
+
+        save_current_lines(current_lines)
+        for message in alerts:
+            post_discord({"embeds": [{"description": message, "color": 13611036}]}, webhook_url=DISCORD_WEBHOOK_URL)
+        return {"detail": "betmgm scrape complete", "count": len(alerts), "label": "alerts"}
+        
+    except Exception as exc:
+        print(f"Error scraping BetMGM: {exc}")
+        return {"detail": f"betmgm scrape error: {exc}", "count": 0, "label": "alerts"}
+
+if __name__ == "__main__":
+    scrape_betmgm()

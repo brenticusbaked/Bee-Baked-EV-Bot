@@ -18,7 +18,8 @@ def run_fetcher():
         print("CRITICAL ERROR: ODDS_API_KEY missing.")
         return {"detail": "ODDS_API_KEY missing", "count": 0, "label": "updates"}
 
-    regions = "us,eu"
+    # FIXED: Changed from "us,eu" to "us" to prevent double-billing on API credits
+    regions = "us"
     target_books = "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks"
     cache = {}
 

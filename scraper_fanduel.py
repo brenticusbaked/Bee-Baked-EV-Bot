@@ -1,62 +1,48 @@
 import os
 import random
+import string
 
 from playwright.sync_api import sync_playwright
-
 from db_manager import load_tracker_state, save_tracker_state
 from services.http_client import post_discord
-
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 TRACKER_FILE = "fd_lines.json"
 STATE_KEY = "tracker_fanduel_nba"
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
-PROXY_URLS = [url.strip() for url in RAW_PROXY_LIST.replace("\n", ",").split(",") if url.strip()]
-
+PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 
 def load_previous_lines():
     return load_tracker_state(STATE_KEY, TRACKER_FILE)
 
-
 def save_current_lines(lines):
     save_tracker_state(STATE_KEY, lines, TRACKER_FILE)
-
-
-def get_proxy_settings():
-    """Get proxy settings in Playwright format or None for direct connection."""
-    if not PROXY_URLS:
-        return None
-    chosen_url = random.choice(PROXY_URLS)
-    try:
-        # URL format: http://username:password@host:port/
-        return {"server": chosen_url}
-    except Exception as exc:
-        print(f"Failed to parse proxy URL: {exc}")
-        return None
-
 
 def scrape_fanduel():
     try:
         data = None
-
         with sync_playwright() as playwright:
-            # Try with proxy first
-            proxy_settings = get_proxy_settings()
-            browser = None
+            proxy_settings = None
+            if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
+                chosen_ip = random.choice(PROXY_IPS)
+                
+                # --- FIX 3: Dynamic Session ID to force a fresh IP ---
+                random_session = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+                dynamic_username = f"{PROXY_USERNAME}-session-{random_session}"
+                
+                proxy_settings = {
+                    "server": f"http://{chosen_ip}",
+                    "username": dynamic_username,
+                    "password": PROXY_PASSWORD,
+                }
+
+            browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
             
-            if proxy_settings:
-                try:
-                    print(f"Attempting connection with proxy...")
-                    browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
-                except Exception as proxy_exc:
-                    print(f"Proxy connection failed ({proxy_exc}), falling back to direct connection...")
-                    browser = None
-            
-            # Fall back to direct connection if no proxy or proxy failed
-            if not browser:
-                browser = playwright.chromium.launch(headless=True)
-            
+            # --- FIX 1: Ignore HTTPS errors ---
             context = browser.new_context(
+                ignore_https_errors=True,
                 user_agent=(
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -75,7 +61,10 @@ def scrape_fanduel():
                         pass
 
             page.on("response", handle_response)
-            page.goto("https://sportsbook.fanduel.com/basketball/nba", wait_until="networkidle")
+            
+            # --- FIX 2: domcontentloaded ---
+            page.goto("https://sportsbook.fanduel.com/basketball/nba", wait_until="domcontentloaded")
+            
             try:
                 page.wait_for_response(
                     lambda response: "api/content-managed-page" in response.url and "eventTypeId=7522" in response.url,
@@ -125,10 +114,10 @@ def scrape_fanduel():
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 15615}]}, webhook_url=DISCORD_WEBHOOK_URL)
         return {"detail": "fanduel scrape complete", "count": len(alerts), "label": "alerts"}
+        
     except Exception as exc:
         print(f"Error scraping FanDuel: {exc}")
         return {"detail": f"fanduel scrape error: {exc}", "count": 0, "label": "alerts"}
-
 
 if __name__ == "__main__":
     scrape_fanduel()

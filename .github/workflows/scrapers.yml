@@ -2,11 +2,11 @@ name: Syndicate Scrapers
 
 on:
   schedule:
-    - cron: '30 8,16 * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
-  run-scrapers:
+  scrape-books:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -21,13 +21,10 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-          playwright install chromium --with-deps --force
+          pip install -U playwright-stealth  # Force upgrade to v2.x
+          playwright install chromium
 
-      - name: Verify Playwright Installation
-        run: |
-          python -c "from playwright.sync_api import sync_playwright; print('Playwright OK')"
-
-      - name: Run Scraper Script
+      - name: Run Unified Scraper
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
@@ -36,4 +33,4 @@ jobs:
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
-        run: python scraper_run.py
+        run: python scraper_unified.py

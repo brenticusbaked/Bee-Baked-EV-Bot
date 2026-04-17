@@ -19,6 +19,12 @@ def get_sgo_results(league_id, date_str):
     try:
         response = request("GET", url, params=params, timeout=15)
         events = response.json()
+        
+        # --- NEW FIX: Prevent crash if API returns an error dictionary/string instead of a list ---
+        if not isinstance(events, list):
+            print(f"SGO API returned unexpected format for {league_id} on {date_str} (likely no games or error): {events}")
+            return {"players": {}, "events": []}
+
         players = {}
         for event in events:
             for player_name, player_stats in event.get("boxscore", {}).items():

@@ -1,12 +1,14 @@
-name: Syndicate Automation
+name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
+    # FIXED: The leading '0' ensures this runs exactly twice a day (8:00 and 16:00 UTC)
+    # If this is set to '*', it will run 60 times an hour.
     - cron: '0 8,16 * * *'
   workflow_dispatch:
 
 jobs:
-  run-core:
+  run-pipeline:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -16,17 +18,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
 
       - name: Install Dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Run Master Script
+      - name: Run Master Pipeline
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python master_run.py
+        run: |
+          python master_run.py
