@@ -1,8 +1,8 @@
 import os
-import urllib.parse
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.http_client import get_json, post_discord
+from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
 from utils.time import get_local_now
 
@@ -11,29 +11,20 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 
 def get_dynamic_link(bookmaker, target_string):
-    query = urllib.parse.quote(target_string)
-    book = bookmaker.lower().replace(" ", "")
-    links = {
-        "draftkings": f"https://sportsbook.draftkings.com/search?q={query}",
-        "fanduel": f"https://sportsbook.fanduel.com/navigation/search?q={query}",
-        "betmgm": f"https://sports.betmgm.com/en/sports/search?q={query}",
-        "bet365": f"https://www.bet365.com/#/search?q={query}",
-        "espn": f"https://espnbet.com/search?q={query}",
-        "fanatics": f"https://sportsbook.fanatics.com/search?q={query}",
-    }
-    return links.get(book, f"https://www.google.com/search?q={bookmaker}+sportsbook")
+    return sportsbook_search_link(bookmaker, target_string)
 
 
 def get_best_f5_moneyline(target_team):
     cache = get_master_cache()
     if not cache:
         print("Cloud cache is empty or failed to load.")
-        return None, None, None, None
+        return None, None, None, None, None
 
     best_price = 0.0
     best_book = "Unknown"
     best_book_title = "Unknown"
     event_id = None
+    selected_market = None
 
     for game in cache.get("baseball_mlb", []):
         if target_team not in game["home_team"] and target_team not in game["away_team"]:
@@ -42,7 +33,7 @@ def get_best_f5_moneyline(target_team):
             if bookmaker["key"] == "pinnacle":
                 continue
             for market in bookmaker.get("markets", []):
-                if market["key"] != "h2h_1st_half":
+                if market["key"] not in {"h2h_1st_half", "h2h"}:
                     continue
                 for outcome in market["outcomes"]:
                     if target_team in outcome["name"]:
@@ -52,10 +43,17 @@ def get_best_f5_moneyline(target_team):
                             best_book = bookmaker["key"]
                             best_book_title = bookmaker["title"]
                             event_id = game["id"]
+                            selected_market = market["key"]
 
     if best_price > 0:
-        return best_book_title, decimal_to_american(best_price), get_dynamic_link(best_book, target_team), event_id
-    return None, None, None, None
+        return (
+            best_book_title,
+            decimal_to_american(best_price),
+            get_dynamic_link(best_book, target_team),
+            event_id,
+            selected_market,
+        )
+    return None, None, None, None, None
 
 
 def get_advanced_pitcher_stats(pitcher_id):
@@ -86,7 +84,7 @@ def run_mlb_model():
         dates = data.get("dates", [])
         if not dates:
             print(f"No MLB games scheduled for {today}.")
-            return
+            return {"detail": "no mlb games scheduled", "count": 0, "label": "alerts"}
 
         alerts = []
         for game in dates[0].get("games", []):
@@ -112,11 +110,12 @@ def run_mlb_model():
             if is_already_logged(matchup, "MODEL_MLB_F5", better_team):
                 continue
 
-            book, odds, link, event_id = get_best_f5_moneyline(better_team)
+            book, odds, link, event_id, selected_market = get_best_f5_moneyline(better_team)
             if not book or not event_id:
                 continue
 
             log_bet_to_db(matchup, "MODEL_MLB_F5", better_team, odds, fip_diff, "1.00", "MODEL", "baseball_mlb", event_id)
+            market_label = "Best F5 ML" if selected_market == "h2h_1st_half" else "Best ML"
             alerts.append(
                 (
                     f"**MLB ADVANCED METRIC MISMATCH**\n"
@@ -124,7 +123,7 @@ def run_mlb_model():
                     f"**Advantage:** {better_team} (First 5 Innings)\n"
                     f"{away_pitcher['fullName']} FIP: **{away_fip:.2f}** (ERA: {away_era:.2f})\n"
                     f"{home_pitcher['fullName']} FIP: **{home_fip:.2f}** (ERA: {home_era:.2f})\n"
-                    f"**Best F5 ML:** [{book}]({link}) @ {odds}"
+                    f"**{market_label}:** [{book}]({link}) @ {odds}"
                 )
             )
 
@@ -134,8 +133,10 @@ def run_mlb_model():
                 webhook_url=DISCORD_WEBHOOK_URL,
                 add_bee_image=index == len(alerts) - 1,
             )
+        return {"detail": "mlb model complete", "count": len(alerts), "label": "alerts"}
     except Exception as exc:
         print(f"Error running MLB model: {exc}")
+        return {"detail": f"mlb model error: {exc}", "count": 0, "label": "alerts"}
 
 
 if __name__ == "__main__":

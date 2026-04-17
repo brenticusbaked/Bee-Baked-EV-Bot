@@ -107,8 +107,10 @@ def scrape_betmgm():
         save_current_lines(current_lines)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 13611036}]}, webhook_url=DISCORD_WEBHOOK_URL)
+        return {"detail": "betmgm scrape complete", "count": len(alerts), "label": "alerts"}
     except Exception as exc:
         print(f"Error scraping BetMGM: {exc}")
+        return {"detail": f"betmgm scrape error: {exc}", "count": 0, "label": "alerts"}
 
 
 if __name__ == "__main__":

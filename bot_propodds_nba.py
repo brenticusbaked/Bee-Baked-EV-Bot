@@ -1,8 +1,8 @@
 import os
-import urllib.parse
 
 from db_manager import is_already_logged, log_bet_to_db
 from services.http_client import post_discord, request
+from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american, quarter_kelly_units
 
 
@@ -24,16 +24,7 @@ def to_decimal(price):
 
 
 def get_dynamic_link(bookmaker, target_string):
-    query = urllib.parse.quote(target_string)
-    book = bookmaker.lower().replace(" ", "").replace("sportsbook", "")
-    app_schemes = {
-        "draftkings": f"draftkings://sportsbook/search?q={query}",
-        "fanduel": f"fanduel://sportsbook/navigation/search?q={query}",
-        "betmgm": f"betmgm://sportsbook/search?q={query}",
-        "caesars": f"caesars://sportsbook/search?q={query}",
-        "prizepicks": f"https://app.prizepicks.com/search/{query}",
-    }
-    return app_schemes.get(book, f"https://www.google.com/search?q={bookmaker}+{query}")
+    return sportsbook_search_link(bookmaker, target_string)
 
 
 def get_sgo_edges():

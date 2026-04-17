@@ -109,8 +109,10 @@ def scrape_prizepicks():
         save_current_lines(current_lines)
         for message in alerts[:5]:
             post_discord({"embeds": [{"description": message, "color": 10181046}]}, webhook_url=DISCORD_WEBHOOK_URL)
+        return {"detail": "prizepicks scrape complete", "count": min(len(alerts), 5), "label": "alerts"}
     except Exception as exc:
         print(f"Error scraping PrizePicks: {exc}")
+        return {"detail": f"prizepicks scrape error: {exc}", "count": 0, "label": "alerts"}
 
 
 if __name__ == "__main__":

@@ -49,8 +49,10 @@ def scrape_draftkings():
 
         if alerts:
             post_discord({"content": "\n".join(alerts)}, webhook_url=DISCORD_WEBHOOK_URL)
+        return {"detail": "draftkings scrape complete", "count": len(alerts), "label": "alerts"}
     except Exception as exc:
         print(f"Error: {exc}")
+        return {"detail": f"draftkings scrape error: {exc}", "count": 0, "label": "alerts"}
 
 
 if __name__ == "__main__":

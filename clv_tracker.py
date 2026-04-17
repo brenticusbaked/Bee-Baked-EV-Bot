@@ -6,10 +6,11 @@ from utils.odds import american_to_decimal, decimal_to_american, parse_float
 def run_clv_tracker():
     untracked = get_untracked_bets()
     cache = get_master_cache()
+    tracked_count = 0
 
     if not untracked or not cache:
         print("CLV Audit: Nothing to track or cache empty.")
-        return
+        return {"detail": "nothing to track", "count": 0, "label": "tracked"}
 
     print(f"Auditing CLV for {len(untracked)} bets using Cloud Cache...")
 
@@ -62,6 +63,9 @@ def run_clv_tracker():
         closing_price_american = decimal_to_american(closing_price_decimal)
         update_bet_clv(bet["id"], closing_price_american, closing_price_decimal, round(clv_edge_pct, 4))
         print(f"CLV Updated for {bet['selection']}: {clv_edge_pct:.2f}%")
+        tracked_count += 1
+
+    return {"detail": "clv audit complete", "count": tracked_count, "label": "tracked"}
 
 
 if __name__ == "__main__":

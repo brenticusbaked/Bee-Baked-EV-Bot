@@ -16,7 +16,7 @@ FETCH_CONFIG = {
 def run_fetcher():
     if not ODDS_API_KEY:
         print("CRITICAL ERROR: ODDS_API_KEY missing.")
-        return
+        return {"detail": "ODDS_API_KEY missing", "count": 0, "label": "updates"}
 
     regions = "us,eu"
     target_books = "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks"
@@ -48,6 +48,8 @@ def run_fetcher():
         print("Master Cache Saved to Supabase Cloud.")
     except Exception as exc:
         print(f"Supabase Save Failed: {exc}")
+
+    return {"detail": "cache refreshed", "count": len(cache), "label": "updates"}
 
 
 if __name__ == "__main__":

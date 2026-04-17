@@ -1,9 +1,9 @@
 import os
-import urllib.parse
 from datetime import timedelta
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.http_client import get_json, post_discord
+from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
 from utils.time import get_local_now
 
@@ -12,18 +12,7 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 
 def get_dynamic_link(bookmaker, target_string):
-    query = urllib.parse.quote(target_string)
-    book = bookmaker.lower().replace(" ", "").replace("sportsbook", "")
-    links = {
-        "draftkings": f"https://sportsbook.draftkings.com/search?q={query}",
-        "fanduel": f"https://sportsbook.fanduel.com/navigation/search?q={query}",
-        "betmgm": f"https://sports.betmgm.com/en/sports/search?q={query}",
-        "bet365": f"https://www.bet365.com/#/search?q={query}",
-        "caesars": f"https://sportsbook.caesars.com/us/ky/bet/search?q={query}",
-        "betrivers": f"https://betrivers.com/?page=search&q={query}",
-        "bovada": f"https://www.bovada.lv/sports?search={query}",
-    }
-    return links.get(book, f"https://www.google.com/search?q={bookmaker}+sportsbook")
+    return sportsbook_search_link(bookmaker, target_string)
 
 
 def get_best_spread(target_team):
@@ -68,6 +57,7 @@ def run_nba_model():
     today = get_local_now()
     today_str = today.strftime("%Y%m%d")
     yesterday_str = (today - timedelta(days=1)).strftime("%Y%m%d")
+    alerts_sent = 0
 
     teams_yesterday = {}
     for game in get_espn_schedule(yesterday_str):
@@ -114,6 +104,9 @@ def run_nba_model():
             webhook_url=DISCORD_WEBHOOK_URL,
             add_bee_image=True,
         )
+        alerts_sent += 1
+
+    return {"detail": "nba model complete", "count": alerts_sent, "label": "alerts"}
 
 
 if __name__ == "__main__":

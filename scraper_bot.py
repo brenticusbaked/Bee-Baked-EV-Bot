@@ -66,8 +66,10 @@ def scrape_news():
                 webhook_url=DISCORD_WEBHOOK_URL,
             ):
                 mark_news_as_seen(alert["guid"])
+        return {"detail": "news scrape complete", "count": len(alerts), "label": "alerts"}
     except Exception as exc:
         print(f"An error occurred: {exc}")
+        return {"detail": f"news scrape error: {exc}", "count": 0, "label": "alerts"}
 
 
 if __name__ == "__main__":

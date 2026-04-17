@@ -59,7 +59,7 @@ def _grade_player_prop(bet, player_data):
 def run_grader():
     ungraded_bets = get_ungraded_past_bets()
     if not ungraded_bets:
-        return
+        return {"detail": "no bets to grade", "count": 0, "label": "graded"}
 
     results_found = 0
     profit = 0.0
@@ -119,6 +119,8 @@ def run_grader():
             },
             webhook_url=DISCORD_WEBHOOK_URL,
         )
+
+    return {"detail": "grading complete", "count": results_found, "label": "graded"}
 
 
 if __name__ == "__main__":

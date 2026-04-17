@@ -38,7 +38,8 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ODDS_API_KEY`
 * `SGO_API_KEY`
 * `DISCORD_WEBHOOK_URL`
+* `DISCORD_STATUS_WEBHOOK_URL` (Optional: sends workflow-complete status updates to a separate Discord channel)
 * `SUPABASE_URL`
 * `SUPABASE_KEY` (Use the `service_role` key to bypass Row-Level Security)
 
-**Automation:** The `.github/workflows/main.yml` file contains a pre-configured cron schedule (`0 8,16 * * *`) that executes the `master_run.py` script twice daily (8:00 AM & 4:00 PM UTC). A Master Odds Cache is pulled at the beginning of each run to ensure all predictive models utilize identical market data while limiting the footprint to just 6 API credits per execution.
+**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A Master Odds Cache is pulled at the beginning of each core run to ensure all predictive models utilize identical market data while limiting the footprint to just 6 API credits per execution (12 per day).

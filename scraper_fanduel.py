@@ -107,8 +107,10 @@ def scrape_fanduel():
         save_current_lines(current_lines)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 15615}]}, webhook_url=DISCORD_WEBHOOK_URL)
+        return {"detail": "fanduel scrape complete", "count": len(alerts), "label": "alerts"}
     except Exception as exc:
         print(f"Error scraping FanDuel: {exc}")
+        return {"detail": f"fanduel scrape error: {exc}", "count": 0, "label": "alerts"}
 
 
 if __name__ == "__main__":

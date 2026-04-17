@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.http_client import post_discord
+from utils.links import sportsbook_search_link
 from utils.odds import decimal_implied_probability, decimal_to_american, quarter_kelly_units
 
 
@@ -10,16 +11,8 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 
 def get_mobile_app_link(book_key, selection_id, event_id, matchup):
-    query = matchup.replace(" ", "%20")
-    links = {
-        "draftkings": f"draftkings://sportsbook/event/{event_id}?selectionId={selection_id}",
-        "fanduel": f"fanduel://sportsbook/navigation/event/{event_id}/selection/{selection_id}",
-        "betmgm": f"betmgm://sportsbook/event/{event_id}",
-        "caesars": f"caesars://sportsbook/search?q={query}",
-        "bet365": f"bet365://sportsbook/event/{event_id}",
-        "prizepicks": f"https://app.prizepicks.com/search/{query}",
-    }
-    return links.get(book_key, f"https://www.google.com/search?q={book_key}+{query}")
+    del selection_id, event_id
+    return sportsbook_search_link(book_key, matchup)
 
 
 def calculate_edge(offered_price: float, sharp_price: float) -> float:
@@ -31,7 +24,7 @@ def scan_markets():
     cache = get_master_cache()
     if not cache:
         print("Cloud cache is empty. Run fetcher first.")
-        return
+        return {"detail": "cache empty", "count": 0, "label": "alerts"}
 
     alerts = []
     soft_books = ["fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"]
@@ -145,6 +138,8 @@ def scan_markets():
             webhook_url=DISCORD_WEBHOOK_URL,
             add_bee_image=index == len(alerts) - 1,
         )
+
+    return {"detail": "scan complete", "count": len(alerts), "label": "alerts"}
 
 
 if __name__ == "__main__":
