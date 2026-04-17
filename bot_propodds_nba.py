@@ -12,8 +12,10 @@ from utils.thresholds import env_float
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 SGO_API_KEY = os.getenv("SGO_API_KEY")
 TARGET_STATS = ["points", "assists", "rebounds"]
-PROP_EV_THRESHOLD = env_float("PROP_EV_THRESHOLD", 0.02)
-PROP_NEAR_MISS_THRESHOLD = env_float("PROP_NEAR_MISS_THRESHOLD", 0.01)
+
+# UPDATED: Lowered to 1.25% for NBA Player Props
+PROP_EV_THRESHOLD = env_float("PROP_EV_THRESHOLD", 0.0125)
+PROP_NEAR_MISS_THRESHOLD = env_float("PROP_NEAR_MISS_THRESHOLD", 0.0075)
 
 
 def to_decimal(price):
@@ -37,19 +39,9 @@ def get_sgo_edges():
         return [], []
 
     soft_list = [
-        "fanduel",
-        "draftkings",
-        "betmgm",
-        "espn",
-        "fanatics",
-        "bet365",
-        "caesars",
-        "betrivers",
-        "bovada",
-        "prizepicks",
-        "pick6",
-        "novig",
-        "dabble",
+        "fanduel", "draftkings", "betmgm", "espn", "fanatics", 
+        "bet365", "caesars", "betrivers", "bovada", "prizepicks", 
+        "pick6", "novig", "dabble",
     ]
     picks = []
     near_misses = []
@@ -101,6 +93,7 @@ def get_sgo_edges():
                     player_name, stat_type, line_value = uid.split("_")
                     book_weight = book_weights.get(soft[side]["book"], 1.0)
                     weighted_score = edge * book_weight
+                    
                     if PROP_NEAR_MISS_THRESHOLD <= edge < PROP_EV_THRESHOLD:
                         near_misses.append(
                             {
@@ -113,6 +106,7 @@ def get_sgo_edges():
                         )
                     if edge < PROP_EV_THRESHOLD:
                         continue
+                        
                     market = stat_type.upper()
                     selection = f"{player_name} {side.upper()} {line_value}"
                     if is_already_logged(matchup, market, selection):
@@ -132,7 +126,6 @@ def get_sgo_edges():
                         notes=f"book={soft[side]['book']};market=prop",
                     )
                     if not was_logged:
-                        print(f"Skipping prop alert because DB log failed for {selection}.")
                         continue
                     link = soft[side].get("prop_link") or get_dynamic_link(soft[side]["book"], player_name)
                     picks.append(
@@ -169,23 +162,12 @@ def main():
             webhook_url=DISCORD_WEBHOOK_URL,
             add_bee_image=index == len(picks) - 1,
         )
-    near_miss_text = ""
-    if near_misses:
-        total_near_misses = len(near_misses)
-        near_misses = sorted(near_misses, key=lambda item: item["edge"], reverse=True)[:3]
-        samples = " | ".join(
-            f"{item['matchup']} - {item['selection']} @ {item['book']} ({item['edge'] * 100:.2f}%, {item['weight']:.2f}x)"
-            for item in near_misses
-        )
-        near_miss_text = f"; near misses: {total_near_misses} total, top {len(near_misses)} -> {samples}"
     return {
-        "detail": f"prop bot complete{near_miss_text}",
+        "detail": f"prop bot complete",
         "count": len(picks),
         "label": "alerts",
-        "meta": {"near_miss_summary": near_miss_text.lstrip("; ").strip()} if near_miss_text else {},
+        "meta": {"near_miss_summary": f"{len(near_misses)} near misses found"} if near_misses else {},
     }
-    
-
 
 if __name__ == "__main__":
     main()
