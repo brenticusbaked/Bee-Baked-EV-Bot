@@ -2,7 +2,7 @@ name: Syndicate Scrapers
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # Runs every 30 minutes
+    - cron: '*/30 * * * *' # Every 30 minutes
   workflow_dispatch:
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-          pip install playwright-stealth  # <--- ADD THIS LINE HERE
+          pip install -U playwright-stealth  # Ensures v2.x is installed
           playwright install chromium
 
       - name: Run Unified Scraper
