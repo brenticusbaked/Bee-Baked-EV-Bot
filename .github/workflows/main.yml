@@ -2,7 +2,6 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # Runs exactly twice a day: 8:00 AM and 4:00 PM UTC
     - cron: '0 8,16 * * *'
   workflow_dispatch:
 
@@ -25,19 +24,14 @@ jobs:
 
       - name: Run Master Pipeline
         env:
-          # Core DB and Odds connections
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          
-          # Prop model key
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           
-          # Discord Routing
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }} # Main Alerts
-          DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }} # Moderator/Summary Routing
-
-          # Proxy Override to bypass FanGraphs 403 block for pybaseball
+          # FIXED: Proxy injection for pybaseball / FanGraphs bypass
           HTTP_PROXY: ${{ secrets.PROXY_URL }}
           HTTPS_PROXY: ${{ secrets.PROXY_URL }}
         run: |
