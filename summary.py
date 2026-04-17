@@ -4,6 +4,7 @@ import pandas as pd
 
 from db_manager import get_all_bets
 from services.http_client import post_discord
+from utils.odds import american_to_decimal
 from utils.time import get_local_now
 
 
@@ -19,12 +20,22 @@ def calculate_clv_report():
     try:
         df = pd.DataFrame(data)
         total_bets = len(df)
-        df["edge_val"] = pd.to_numeric(df["edge"].astype(str).str.replace("%", ""), errors="coerce")
+
+        if "edge_pct" in df.columns:
+            df["edge_val"] = pd.to_numeric(df["edge_pct"], errors="coerce")
+        else:
+            df["edge_val"] = pd.to_numeric(df["edge"].astype(str).str.replace("%", ""), errors="coerce")
         avg_ev = df["edge_val"].dropna().mean()
 
-        df["Odds_Num"] = pd.to_numeric(df["odds"].astype(str).str.replace("+", ""), errors="coerce")
-        df["CLV_Num"] = pd.to_numeric(df["closing_line_pinnacle"].astype(str).str.replace("+", ""), errors="coerce")
-        beat_clv_count = len(df.dropna(subset=["Odds_Num", "CLV_Num"])[df["Odds_Num"] > df["CLV_Num"]])
+        if "odds_decimal" not in df.columns:
+            df["odds_decimal"] = df["odds"].apply(lambda x: american_to_decimal(x) if isinstance(x, str) else None)
+        if "closing_line_decimal" not in df.columns:
+            df["closing_line_decimal"] = df["closing_line_pinnacle"].apply(
+                lambda x: american_to_decimal(x) if isinstance(x, str) and x else None
+            )
+
+        beat_clv_mask = (pd.to_numeric(df["odds_decimal"], errors="coerce") > pd.to_numeric(df["closing_line_decimal"], errors="coerce"))
+        beat_clv_count = int(beat_clv_mask.fillna(False).sum())
         clv_pct = (beat_clv_count / total_bets) * 100 if total_bets > 0 else 0
 
         return (

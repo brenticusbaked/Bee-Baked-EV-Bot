@@ -1,6 +1,6 @@
 from db_manager import get_master_cache, get_untracked_bets, update_bet_clv
 from services.bet_logic import outcome_matches, parse_selection
-from utils.odds import american_to_decimal, decimal_to_american
+from utils.odds import american_to_decimal, decimal_to_american, parse_float
 
 
 def run_clv_tracker():
@@ -30,7 +30,7 @@ def run_clv_tracker():
 
         market_key = str(bet["market"]).lower()
         candidate_keys = [market_key]
-        if market_key == "model_nba_spread" or market_key == "model_nhl_puckline":
+        if market_key in {"model_nba_spread", "model_nhl_puckline"}:
             candidate_keys.append("spreads")
         if market_key == "model_mlb_f5":
             candidate_keys.append("h2h_1st_half")
@@ -52,15 +52,16 @@ def run_clv_tracker():
             print(f"Outcome not found for {bet['selection']}.")
             continue
 
-        closing_price = float(outcome["price"])
-        if closing_price <= 1.0:
+        closing_price_decimal = float(outcome["price"])
+        if closing_price_decimal <= 1.0:
             print(f"Invalid price for {bet['selection']}. Skipping.")
             continue
 
-        placed_decimal = american_to_decimal(bet.get("odds", 0))
-        clv_edge = (placed_decimal / closing_price) - 1.0
-        update_bet_clv(bet["id"], decimal_to_american(closing_price))
-        print(f"CLV Updated for {bet['selection']}: {clv_edge * 100:.2f}%")
+        placed_decimal = parse_float(bet.get("odds_decimal")) or american_to_decimal(bet.get("odds", 0))
+        clv_edge_pct = ((placed_decimal / closing_price_decimal) - 1.0) * 100.0
+        closing_price_american = decimal_to_american(closing_price_decimal)
+        update_bet_clv(bet["id"], closing_price_american, closing_price_decimal, round(clv_edge_pct, 4))
+        print(f"CLV Updated for {bet['selection']}: {clv_edge_pct:.2f}%")
 
 
 if __name__ == "__main__":

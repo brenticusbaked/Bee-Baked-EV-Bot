@@ -2,7 +2,7 @@ import os
 
 from db_manager import get_all_clv_bets
 from services.http_client import post_discord
-from utils.odds import american_to_decimal
+from utils.odds import american_to_decimal, parse_float
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -14,17 +14,26 @@ def run_clv_analysis():
     if not bets:
         return
 
-    total_bets_with_clv = len(bets)
+    total_bets_with_clv = 0
     clv_beaten = 0
     total_clv_value = 0.0
 
     for bet in bets:
-        try:
-            taken_decimal = american_to_decimal(bet["odds"])
-            closing_decimal = american_to_decimal(bet["closing_line_pinnacle"])
-        except Exception:
-            continue
+        taken_decimal = parse_float(bet.get("odds_decimal"))
+        if taken_decimal is None:
+            try:
+                taken_decimal = american_to_decimal(bet["odds"])
+            except Exception:
+                continue
 
+        closing_decimal = parse_float(bet.get("closing_line_decimal"))
+        if closing_decimal is None:
+            try:
+                closing_decimal = american_to_decimal(bet["closing_line_pinnacle"])
+            except Exception:
+                continue
+
+        total_bets_with_clv += 1
         if taken_decimal > closing_decimal:
             clv_beaten += 1
         total_clv_value += (taken_decimal / closing_decimal) - 1

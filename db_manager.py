@@ -1,11 +1,12 @@
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from supabase import Client, create_client
 
-from utils.time import get_local_date_str
+from utils.odds import american_to_decimal, parse_float
+from utils.time import get_local_date_str, get_local_now
 
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -44,6 +45,56 @@ def _save_local_json(path: str, data) -> None:
         print(f"Local JSON save failed for {path}: {exc}")
 
 
+def _parse_decimal_odds(value) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        text = str(value).strip()
+        if text.startswith("+") or text.startswith("-"):
+            return american_to_decimal(text)
+        numeric = float(text)
+        return numeric if numeric > 1.0 else None
+    except Exception:
+        return None
+
+
+def _parse_edge_pct(edge_val) -> Optional[float]:
+    if edge_val is None or edge_val == "":
+        return None
+    if isinstance(edge_val, str):
+        cleaned = edge_val.replace("%", "").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    try:
+        return float(edge_val) * 100.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_market_type(market: str) -> str:
+    market_key = str(market).strip().lower()
+    if market_key in {"h2h", "moneyline", "model_mlb_f5"}:
+        return "moneyline"
+    if market_key in {"spread", "spreads", "model_nba_spread", "model_nhl_puckline", "puckline"}:
+        return "spread"
+    if market_key in {"total", "totals"}:
+        return "total"
+    if market_key.startswith("player_") or market_key in {"points", "assists", "rebounds", "goals"}:
+        return "player_prop"
+    return "other"
+
+
+def _infer_bet_source(market: str, sport: str) -> str:
+    market_key = str(market).strip().upper()
+    if market_key.startswith("MODEL_"):
+        return "model"
+    if sport == "unknown_scraped":
+        return "scraper"
+    return "market_scan"
+
+
 def is_already_logged(matchup, market, selection):
     def action():
         response = (
@@ -60,24 +111,44 @@ def is_already_logged(matchup, market, selection):
     return _safe_execute(action, False)
 
 
-def log_bet_to_db(matchup, market, selection, odds, edge_val, units, fair_price, sport, event_id):
+def log_bet_to_db(
+    matchup,
+    market,
+    selection,
+    odds,
+    edge_val,
+    units,
+    fair_price,
+    sport,
+    event_id,
+    bet_source: Optional[str] = None,
+    notes: Optional[str] = None,
+):
     if not supabase:
         return
 
-    edge_text = edge_val if isinstance(edge_val, str) else f"{float(edge_val) * 100:.2f}%"
+    edge_pct = _parse_edge_pct(edge_val)
+    odds_decimal = _parse_decimal_odds(odds)
+    fair_price_decimal = _parse_decimal_odds(fair_price)
     payload = {
         "date": get_local_date_str(),
         "matchup": matchup.strip(),
         "market": market.upper().strip(),
         "selection": selection.strip(),
         "odds": str(odds),
-        "edge": str(edge_text),
+        "edge": str(edge_val if isinstance(edge_val, str) else f"{float(edge_val) * 100:.2f}%"),
         "units": str(units),
         "fair_price": str(fair_price),
         "sport": sport,
         "event_id": str(event_id),
         "closing_line_pinnacle": "",
         "result": "",
+        "edge_pct": edge_pct,
+        "odds_decimal": odds_decimal,
+        "fair_price_decimal": fair_price_decimal,
+        "bet_source": bet_source or _infer_bet_source(market, sport),
+        "market_type": _infer_market_type(market),
+        "notes": notes,
     }
 
     def action():
@@ -97,7 +168,8 @@ def get_ungraded_past_bets() -> List[Dict[str, Any]]:
 
 def get_untracked_bets() -> List[Dict[str, Any]]:
     def action():
-        return supabase.table("bets_log").select("*").eq("closing_line_pinnacle", "").execute().data
+        rows = supabase.table("bets_log").select("*").execute().data
+        return [row for row in rows if not row.get("closing_line_pinnacle")]
 
     return _safe_execute(action, [])
 
@@ -118,21 +190,33 @@ def get_all_graded_bets() -> List[Dict[str, Any]]:
 
 def get_all_clv_bets() -> List[Dict[str, Any]]:
     def action():
-        return supabase.table("bets_log").select("*").neq("closing_line_pinnacle", "").execute().data
+        rows = supabase.table("bets_log").select("*").execute().data
+        return [row for row in rows if row.get("closing_line_decimal") or row.get("closing_line_pinnacle")]
 
     return _safe_execute(action, [])
 
 
 def update_result(bet_id, result):
     def action():
-        supabase.table("bets_log").update({"result": result}).eq("id", bet_id).execute()
+        supabase.table("bets_log").update(
+            {"result": result, "graded_at": get_local_now().isoformat()}
+        ).eq("id", bet_id).execute()
 
     _safe_execute(action, None)
 
 
-def update_bet_clv(bet_id, closing_price):
+def update_bet_clv(bet_id, closing_price_american, closing_price_decimal, clv_edge_pct: Optional[float] = None):
+    update_payload = {
+        "closing_line_pinnacle": str(closing_price_american),
+        "closing_line_american": str(closing_price_american),
+        "closing_line_decimal": closing_price_decimal,
+        "clv_tracked_at": get_local_now().isoformat(),
+    }
+    if clv_edge_pct is not None:
+        update_payload["clv_edge_pct"] = clv_edge_pct
+
     def action():
-        supabase.table("bets_log").update({"closing_line_pinnacle": str(closing_price)}).eq("id", bet_id).execute()
+        supabase.table("bets_log").update(update_payload).eq("id", bet_id).execute()
 
     _safe_execute(action, None)
 
