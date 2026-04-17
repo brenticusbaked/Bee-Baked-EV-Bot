@@ -94,7 +94,7 @@ def get_sgo_edges():
                         continue
 
                     units = quarter_kelly_units(edge, soft[side]["price"])
-                    log_bet_to_db(
+                    was_logged = log_bet_to_db(
                         matchup.strip(),
                         market,
                         selection,
@@ -105,6 +105,9 @@ def get_sgo_edges():
                         "basketball_nba",
                         str(event.get("id", "")),
                     )
+                    if not was_logged:
+                        print(f"Skipping prop alert because DB log failed for {selection}.")
+                        continue
                     link = soft[side].get("prop_link") or get_dynamic_link(soft[side]["book"], player_name)
                     picks.append(
                         {

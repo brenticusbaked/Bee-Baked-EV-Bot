@@ -88,7 +88,20 @@ def run_nhl_model():
             if not best_book or not event_id:
                 continue
 
-            log_bet_to_db(matchup, "MODEL_NHL_PUCKLINE", selection, best_odds, gd_diff, "1.00", "MODEL", "icehockey_nhl", event_id)
+            was_logged = log_bet_to_db(
+                matchup,
+                "MODEL_NHL_PUCKLINE",
+                selection,
+                best_odds,
+                gd_diff,
+                "1.00",
+                "MODEL",
+                "icehockey_nhl",
+                event_id,
+            )
+            if not was_logged:
+                print(f"Skipping NHL model alert because DB log failed for {selection}.")
+                continue
             alerts.append(
                 (
                     f"**NHL MODEL MISMATCH DETECTED**\n"

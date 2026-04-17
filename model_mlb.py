@@ -121,7 +121,20 @@ def run_mlb_model():
             if not book or not event_id:
                 continue
 
-            log_bet_to_db(matchup, "MODEL_MLB_F5", better_team, odds, fip_diff, "1.00", "MODEL", "baseball_mlb", event_id)
+            was_logged = log_bet_to_db(
+                matchup,
+                "MODEL_MLB_F5",
+                better_team,
+                odds,
+                fip_diff,
+                "1.00",
+                "MODEL",
+                "baseball_mlb",
+                event_id,
+            )
+            if not was_logged:
+                print(f"Skipping MLB model alert because DB log failed for {better_team}.")
+                continue
             market_label = "Best F5 ML" if selected_market == "h2h_1st_half" else "Best ML"
             alerts.append(
                 (

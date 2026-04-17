@@ -78,7 +78,7 @@ def run_nba_model():
         if not book or is_already_logged(f"{away} @ {home}", "MODEL_NBA_SPREAD", selection):
             continue
 
-        log_bet_to_db(
+        was_logged = log_bet_to_db(
             f"{away} @ {home}",
             "MODEL_NBA_SPREAD",
             selection,
@@ -89,6 +89,9 @@ def run_nba_model():
             "basketball_nba",
             event_id,
         )
+        if not was_logged:
+            print(f"Skipping NBA model alert because DB log failed for {selection}.")
+            continue
         send_discord_alert(
             {
                 "embeds": [
