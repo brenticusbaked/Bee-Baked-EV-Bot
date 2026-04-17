@@ -58,7 +58,7 @@ def scrape_prizepicks():
                         pass
 
             page.on("response", handle_response)
-            page.goto("https://app.prizepicks.com/board", wait_until="networkidle")
+            page.goto("https://...", wait_until="domcontentloaded")
             try:
                 page.wait_for_response(
                     lambda response: "api.prizepicks.com/projections" in response.url and "league_id=7" in response.url,
