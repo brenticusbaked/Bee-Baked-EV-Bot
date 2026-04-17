@@ -18,28 +18,35 @@ def run_clv_tracker():
         sport = bet.get("sport")
         events = cache.get(sport)
         if not events:
+            print(f"CLV: No cached events for sport '{sport}' on bet {bet.get('id')}.")
             continue
 
-        game_data = next((game for game in events if str(game.get("id")) == str(bet.get("event_id"))), None)
+        game_data = next(
+            (game for game in events if str(game.get("id")) == str(bet.get("event_id"))),
+            None,
+        )
         if not game_data:
+            print(f"CLV: Event ID {bet.get('event_id')} not found in cache for {bet.get('selection')}.")
             continue
 
-        pinnacle = next((book for book in game_data.get("bookmakers", []) if book.get("key") == "pinnacle"), None)
+        pinnacle = next(
+            (book for book in game_data.get("bookmakers", []) if book.get("key") == "pinnacle"),
+            None,
+        )
         if not pinnacle:
-            print(f"Pinnacle line not found in cache for {bet['selection']}.")
+            print(f"CLV: Pinnacle line not found in cache for {bet['selection']}.")
             continue
 
         market_key = str(bet["market"]).lower()
         candidate_keys = [market_key]
-        
-        # --- NEW: Expanded API Key Translations ---
-        # Map specific model markets
+
+        # Expanded API key translations for model markets
         if market_key in {"model_nba_spread", "model_nhl_puckline"}:
             candidate_keys.append("spreads")
         if market_key == "model_mlb_f5":
             candidate_keys.append("h2h_1st_half")
-            
-        # Map standard markets
+
+        # Standard market key aliases
         if market_key in {"moneyline", "ml"}:
             candidate_keys.append("h2h")
         if market_key in {"spread", "runline", "puckline"}:
@@ -48,11 +55,19 @@ def run_clv_tracker():
             candidate_keys.append("totals")
 
         market_data = next(
-            (market for market in pinnacle.get("markets", []) if market.get("key", "").lower() in candidate_keys),
+            (
+                market
+                for market in pinnacle.get("markets", [])
+                if market.get("key", "").lower() in candidate_keys
+            ),
             None,
         )
         if not market_data:
-            print(f"Market not found for {bet['selection']}.")
+            available_keys = [m.get("key") for m in pinnacle.get("markets", [])]
+            print(
+                f"CLV: Market not found for {bet['selection']} "
+                f"(tried {candidate_keys}, available: {available_keys})."
+            )
             continue
 
         selection_spec = parse_selection(bet["market"], bet["selection"])
@@ -61,12 +76,20 @@ def run_clv_tracker():
             None,
         )
         if not outcome:
-            print(f"Outcome not found for {bet['selection']}.")
+            # Debug log showing what outcomes ARE available so you can diagnose mismatches
+            available_outcomes = [
+                {"name": o.get("name"), "point": o.get("point")}
+                for o in market_data.get("outcomes", [])
+            ]
+            print(
+                f"CLV: Outcome not found for '{bet['selection']}' "
+                f"(spec={selection_spec}, available={available_outcomes})."
+            )
             continue
 
         closing_price_decimal = float(outcome["price"])
         if closing_price_decimal <= 1.0:
-            print(f"Invalid price for {bet['selection']}. Skipping.")
+            print(f"CLV: Invalid price {closing_price_decimal} for {bet['selection']}. Skipping.")
             continue
 
         placed_decimal = parse_float(bet.get("odds_decimal")) or american_to_decimal(bet.get("odds", 0))
