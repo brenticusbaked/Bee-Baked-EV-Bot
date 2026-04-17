@@ -82,30 +82,30 @@ def scrape_site(playwright_instance, site_id):
     page.on("response", handle_response)
     
     try:
+        # Use domcontentloaded to capture API data as early as possible
         page.goto(conf["url"], wait_until="domcontentloaded", timeout=60000)
-        # Random human-like delay
-        time.sleep(random.uniform(3, 7)) 
+        time.sleep(random.uniform(5, 8)) # Give extra time for heavy background APIs to fire
     except Exception as e:
-        print(f"⚠️ {site_id} timed out: {e}")
+        print(f"⚠️ {site_id} timed out visually, checking for intercepted data...")
 
+    # If the page timed out, it might still have captured the background API!
     if not data:
         try:
-            page.wait_for_response(lambda r: conf["api_marker"] in r.url, timeout=10000)
+            page.wait_for_response(lambda r: conf["api_marker"] in r.url, timeout=15000)
         except:
             print(f"❌ No data captured for {site_id}")
 
     browser.close()
     return data
 
-# ... [Include process_alerts function here] ...
-
 def run_pipeline():
-    # Use the new Stealth context manager for version 2.0+
+    # Recommended v2.x usage: Wrap the entire execution in the Stealth context
     with Stealth().use_sync(sync_playwright()) as playwright:
         for sid in SITE_CONFIG.keys():
             raw = scrape_site(playwright, sid)
             if raw: 
-                process_alerts(sid, raw)
+                # [Invoke your process_alerts(sid, raw) logic here]
+                print(f"✅ Data successfully captured for {sid}")
             time.sleep(random.uniform(5, 12))
 
 if __name__ == "__main__":
