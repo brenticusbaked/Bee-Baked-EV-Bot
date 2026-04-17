@@ -21,6 +21,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          # Required for browser scrapers
           playwright install chromium
 
       - name: Run Master Pipeline
@@ -32,14 +33,15 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           
-          # Pass raw components to prevent "Failed to resolve" errors
+          # --- PROXY AUTHENTICATION ---
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
           
-          # Standard Proxy strings - Use the exact format below
-          # Ensure there are NO spaces inside the curly braces
+          # --- FANGRAPHS / REQUESTS BYPASS ---
+          # We use quotes and strict formatting to prevent DNS resolution errors
           HTTP_PROXY: "http://${{ secrets.PROXY_USERNAME }}:${{ secrets.PROXY_PASSWORD }}@p.webshare.io:80"
           HTTPS_PROXY: "http://${{ secrets.PROXY_USERNAME }}:${{ secrets.PROXY_PASSWORD }}@p.webshare.io:80"
+          USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         run: |
           python master_run.py
