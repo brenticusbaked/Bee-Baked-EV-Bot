@@ -43,11 +43,12 @@ def scrape_betmgm():
             browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
             
             context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-            )
+    ignore_https_errors=True,
+    user_agent=(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+)
             page = context.new_page()
 
             def handle_response(response):
