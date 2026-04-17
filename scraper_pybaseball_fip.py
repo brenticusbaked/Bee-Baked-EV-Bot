@@ -1,83 +1,37 @@
 import os
-import random
-import pandas as pd
 import pybaseball
-from datetime import datetime
-from db_manager import save_tracker_state
+from db_manager import save_odds_to_db
 
-STATE_KEY = "mlb_fip_cache"
-CACHE_FILE = "fip_cache.json"
-
-PROXY_USERNAME = os.getenv("PROXY_USERNAME")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
-RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
-PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
-
-def scrape_fip():
+def run_fip_scraper():
     """
-    Pulls actual FIP from FanGraphs via pybaseball, maps it to MLBAM IDs,
-    and saves it to the bot's cloud state so the MLB model can use it.
+    Fetches pitcher FIP and ERA data from FanGraphs using pybaseball.
+    Saves the data to Supabase for the MLB model to use.
     """
-    print("Initializing pybaseball FIP scraper...")
-    season = datetime.now().year
+    print("Starting FanGraphs/pybaseball FIP Scraper...")
     
-    # Setup proxy environment variables for the 'requests' library
-    original_http = os.environ.get("HTTP_PROXY")
-    original_https = os.environ.get("HTTPS_PROXY")
-    
-    if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
-        chosen_ip = random.choice(PROXY_IPS)
-        # Format the URL for the requests library: http://user:pass@ip:port
-        proxy_url = f"http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{chosen_ip}"
-        os.environ["HTTP_PROXY"] = proxy_url
-        os.environ["HTTPS_PROXY"] = proxy_url
-        print(f"Routing FanGraphs request through residential proxy to bypass 403...")
-
     try:
-        # 1. Fetch current season pitching stats from FanGraphs
-        # qual=0 ensures we get all pitchers, not just qualified starters
-        stats = pybaseball.pitching_stats(season, qual=0)
+        # Fetch pitching stats for the current 2026 season. 
+        # The HTTP_PROXY and HTTPS_PROXY environment variables we set in main.yml 
+        # will automatically route this through your Webshare proxy to bypass the 403 error.
+        stats = pybaseball.pitching_stats(2026, qual=0)
         
-        # 2. Fetch Chadwick Bureau registry to map FanGraphs IDs to MLBAM IDs
-        chadwick = pybaseball.chadwick_register()
+        # We only need specific columns for EV modeling to keep the database light
+        target_columns = ['Name', 'Team', 'FIP', 'ERA', 'IP']
         
-        # 3. Merge DataFrames on the FanGraphs ID
-        merged = stats.merge(chadwick, left_on='IDfg', right_on='key_fangraphs', how='inner')
-        
-        # 4. Build a dictionary mapping MLBAM ID -> Actual FIP and ERA
-        fip_cache = {}
-        for _, row in merged.iterrows():
-            mlbam_id = row.get('key_mlbam')
-            fip = row.get('FIP')
-            era = row.get('ERA')
+        # Ensure the columns actually exist in the fetched data
+        if set(target_columns).issubset(stats.columns):
+            # Convert the Pandas DataFrame to a list of dictionaries (JSON friendly)
+            clean_data = stats[target_columns].dropna().to_dict(orient='records')
             
-            if pd.notna(mlbam_id) and pd.notna(fip):
-                fip_cache[str(int(mlbam_id))] = {
-                    "fip": float(fip),
-                    "era": float(era) if pd.notna(era) else 9.99
-                }
-                
-        # 5. Save to cloud cache using the Bee-Baked db_manager
-        save_tracker_state(STATE_KEY, fip_cache, CACHE_FILE)
-        print(f"Successfully scraped and cached Actual FIP for {len(fip_cache)} MLB pitchers.")
-        
-        return {"detail": "pybaseball fip scrape complete", "count": len(fip_cache), "label": "updates"}
-        
-    except Exception as exc:
-        print(f"Error scraping FIP via pybaseball: {exc}")
-        return {"detail": f"pybaseball scrape error: {exc}", "count": 0, "label": "updates"}
-        
-    finally:
-        # CLEANUP: Remove the proxy from the environment so Supabase/Discord aren't routed through it
-        if original_http:
-            os.environ["HTTP_PROXY"] = original_http
-        elif "HTTP_PROXY" in os.environ:
-            del os.environ["HTTP_PROXY"]
+            # Save it to the database under the 'fangraphs_fip' bookmaker label
+            save_odds_to_db("fangraphs_fip", {"pitchers": clean_data})
+            print("✅ FanGraphs FIP data successfully fetched and cached.")
+        else:
+            print("❌ FanGraphs Scraper: Expected columns (like FIP) were missing.")
 
-        if original_https:
-            os.environ["HTTPS_PROXY"] = original_https
-        elif "HTTPS_PROXY" in os.environ:
-            del os.environ["HTTPS_PROXY"]
+    except Exception as e:
+        print(f"❌ pybaseball scrape error: {e}")
 
 if __name__ == "__main__":
-    scrape_fip()
+    # Allows you to test this file locally/independently
+    run_fip_scraper()
