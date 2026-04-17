@@ -1,8 +1,8 @@
 import os
 import random
+import string
 
 from playwright.sync_api import sync_playwright
-
 from db_manager import load_tracker_state, save_tracker_state
 from services.http_client import post_discord
 
@@ -14,14 +14,11 @@ PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 
-
 def load_previous_lines():
     return load_tracker_state(STATE_KEY, TRACKER_FILE)
 
-
 def save_current_lines(lines):
     save_tracker_state(STATE_KEY, lines, TRACKER_FILE)
-
 
 def scrape_betmgm():
     try:
@@ -31,15 +28,20 @@ def scrape_betmgm():
             proxy_settings = None
             if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
                 chosen_ip = random.choice(PROXY_IPS)
+                
+                # Dynamic Session ID to force a fresh IP
+                random_session = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+                dynamic_username = f"{PROXY_USERNAME}-session-{random_session}"
+                
                 proxy_settings = {
                     "server": f"http://{chosen_ip}",
-                    "username": PROXY_USERNAME,
+                    "username": dynamic_username,
                     "password": PROXY_PASSWORD,
                 }
 
             browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
             
-            # --- FIX 1: Ignore HTTPS errors to bypass proxy SSL blocks ---
+            # Ignore HTTPS errors to bypass proxy SSL blocks
             context = browser.new_context(
                 ignore_https_errors=True,
                 user_agent=(
@@ -61,7 +63,7 @@ def scrape_betmgm():
 
             page.on("response", handle_response)
             
-            # --- FIX 2: domcontentloaded to bypass infinite loops ---
+            # domcontentloaded to bypass infinite loops
             page.goto("https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004", wait_until="domcontentloaded")
             
             try:
