@@ -1,38 +1,11 @@
 import os
+import random
+import pandas as pd
 import pybaseball
-from db_manager import save_odds_to_db
+from playwright.sync_api import sync_playwright
+from datetime import datetime
+from db_manager import save_tracker_state
 
-<<<<<<< Updated upstream
-def run_fip_scraper():
-    """
-    Fetches pitcher FIP and ERA data from FanGraphs using pybaseball.
-    Saves the data to Supabase for the MLB model to use.
-    """
-    print("Starting FanGraphs/pybaseball FIP Scraper...")
-    
-    try:
-        # Fetch pitching stats for the current 2026 season. 
-        stats = pybaseball.pitching_stats(2026, qual=0)
-        
-        # Target specific columns for the EV model
-        target_columns = ['Name', 'Team', 'FIP', 'ERA', 'IP']
-        
-        if set(target_columns).issubset(stats.columns):
-            # Convert to a JSON-friendly format
-            clean_data = stats[target_columns].dropna().to_dict(orient='records')
-            
-            # Save it directly to the database
-            save_odds_to_db("fangraphs_fip", {"pitchers": clean_data})
-            print("✅ FanGraphs FIP data successfully fetched and cached.")
-        else:
-            print("❌ FanGraphs Scraper: Expected columns (like FIP) were missing.")
-
-    except Exception as e:
-        print(f"❌ pybaseball scrape error: {e}")
-
-if __name__ == "__main__":
-    run_fip_scraper()
-=======
 STATE_KEY = "mlb_fip_cache"
 CACHE_FILE = "fip_cache.json"
 
@@ -41,21 +14,67 @@ PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 
-def scrape_fip():
-    print("Initializing pybaseball FIP scraper...")
+def run_fip_scraper():
+    print("Initializing Playwright FanGraphs Scraper (Bypassing pybaseball 403)...")
     season = datetime.now().year
     
-    if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
-        chosen_ip = random.choice(PROXY_IPS)
-        proxy_url = f"http://{PROXY_USERNAME}:{PROXY_PASSWORD}@{chosen_ip}"
-        os.environ["HTTP_PROXY"] = proxy_url
-        os.environ["HTTPS_PROXY"] = proxy_url
-        print("Routing FanGraphs request through residential proxy...")
+    fg_data = None
+    
+    with sync_playwright() as p:
+        proxy_settings = None
+        if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
+            chosen_ip = random.choice(PROXY_IPS)
+            proxy_settings = {
+                "server": f"http://{chosen_ip}",
+                "username": PROXY_USERNAME,
+                "password": PROXY_PASSWORD,
+            }
+
+        browser = p.chromium.launch(headless=True, proxy=proxy_settings)
+        context = browser.new_context(
+            ignore_https_errors=True,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
+        
+        def handle_response(response):
+            nonlocal fg_data
+            if "api/leaders/major-league/data" in response.url:
+                try:
+                    json_response = response.json()
+                    if "data" in json_response:
+                        fg_data = json_response["data"]
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
+        
+        try:
+            url = f"https://www.fangraphs.com/leaders/major-league?pos=all&stats=pit&lg=all&qual=0&type=8&season={season}&month=0"
+            page.goto(url, wait_until="domcontentloaded", timeout=25000)
+        except Exception as e:
+            print(f"FanGraphs DOM timeout caught gracefully. Checking for intercepted API data...")
+            
+        try:
+            if not fg_data:
+                page.wait_for_response(lambda res: "api/leaders/major-league/data" in res.url, timeout=5000)
+        except Exception:
+            pass
+            
+        browser.close()
+
+    if not fg_data:
+        print("Error: Could not intercept FanGraphs API data via Playwright.")
+        return {"detail": "fangraphs scrape error: no data", "count": 0, "label": "updates"}
 
     try:
-        stats = pybaseball.pitching_stats(season, qual=0)
+        stats = pd.DataFrame(fg_data)
         chadwick = pybaseball.chadwick_register()
-        merged = stats.merge(chadwick, left_on='IDfg', right_on='key_fangraphs', how='inner')
+        
+        stats['PlayerId'] = stats['PlayerId'].astype(str)
+        chadwick['key_fangraphs'] = chadwick['key_fangraphs'].astype(str)
+        
+        merged = stats.merge(chadwick, left_on='PlayerId', right_on='key_fangraphs', how='inner')
         
         fip_cache = {}
         for _, row in merged.iterrows():
@@ -71,15 +90,12 @@ def scrape_fip():
                 
         save_tracker_state(STATE_KEY, fip_cache, CACHE_FILE)
         print(f"Successfully scraped and cached Actual FIP for {len(fip_cache)} MLB pitchers.")
-        return {"detail": "pybaseball fip scrape complete", "count": len(fip_cache), "label": "updates"}
+        
+        return {"detail": "playwright fip scrape complete", "count": len(fip_cache), "label": "updates"}
         
     except Exception as exc:
-        print(f"Error scraping FIP via pybaseball: {exc}")
-        return {"detail": f"pybaseball scrape error: {exc}", "count": 0, "label": "updates"}
-    finally:
-        if "HTTP_PROXY" in os.environ: del os.environ["HTTP_PROXY"]
-        if "HTTPS_PROXY" in os.environ: del os.environ["HTTPS_PROXY"]
+        print(f"Error processing FanGraphs data: {exc}")
+        return {"detail": f"fangraphs processing error: {exc}", "count": 0, "label": "updates"}
 
 if __name__ == "__main__":
-    scrape_fip()
->>>>>>> Stashed changes
+    run_fip_scraper()
