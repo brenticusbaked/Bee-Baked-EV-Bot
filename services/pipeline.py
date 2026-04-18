@@ -2,11 +2,11 @@ import asyncio
 import os
 from datetime import datetime
 
-# 1. FIXED IMPORTS: Matching the exact names in your scraper files
+# 1. FIXED IMPORTS: Matching the exact names defined in your scraper files
 from scraper_draftkings import scrape_dk
-from scraper_fanduel import scrape_fd
+from scraper_fanduel import scrape_fanduel
 from scraper_betmgm import scrape_betmgm
-from scraper_prizepicks import scrape_pp
+from scraper_prizepicks import scrape_prizepicks
 from scraper_pybaseball_fip import run_fip_scraper
 
 async def run_master_pipeline():
@@ -16,18 +16,20 @@ async def run_master_pipeline():
     
     print("--- PHASE 1: REFRESHING API DATA ---")
     try:
-        await run_fip_scraper()
+        # FIXED: run_fip_scraper uses sync_playwright, so it must run in an executor
+        # to prevent it from crashing the asyncio loop.
+        await loop.run_in_executor(None, run_fip_scraper)
     except Exception as e:
         print(f"[ERROR] FanGraphs FIP failed: {e}")
 
     print("--- PHASE 2: EXECUTING BROWSER SCRAPERS ---")
     
-    # 2. FIXED EXECUTORS: This prevents the synchronous Playwright bots from crashing the loop
+    # 2. FIXED EXECUTORS: DraftKings is async, but the rest are sync Playwright bots.
     tasks = [
         asyncio.create_task(scrape_dk()),  
-        loop.run_in_executor(None, scrape_fd),
+        loop.run_in_executor(None, scrape_fanduel),
         loop.run_in_executor(None, scrape_betmgm),
-        loop.run_in_executor(None, scrape_pp)
+        loop.run_in_executor(None, scrape_prizepicks)
     ]
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -39,7 +41,6 @@ async def run_master_pipeline():
         else:
             print(f"[OK] {names[i]} completed.")
 
-# 3. FIXED EXPORTS: Restoring the function that scraper_unified.py is looking for
 def run_scraper_pipeline():
     asyncio.run(run_master_pipeline())
 
