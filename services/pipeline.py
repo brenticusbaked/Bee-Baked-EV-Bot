@@ -4,7 +4,7 @@ from datetime import datetime
 
 from scraper_draftkings import scrape_dk
 from scraper_fanduel import scrape_fd
-from scraper_betmgm import scrape_betmgm as scrape_mgm  
+from scraper_betmgm import scrape_mgm  
 from scraper_prizepicks import scrape_pp
 from scraper_pybaseball_fip import run_fip_scraper
 
