@@ -1,118 +1,338 @@
-import os
 import json
-from supabase import create_client, Client
+import os
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-# --- Supabase Configuration ---
-url = os.environ.get("SUPABASE_URL")
-key = os.environ.get("SUPABASE_KEY")
+from supabase import Client, create_client
 
-# Graceful fallback if keys aren't loaded properly
-if url and key:
-    supabase: Client = create_client(url, key)
-else:
-    supabase = None
-    print("WARNING: Supabase URL or Key missing. DB writes will be bypassed.")
+from utils.odds import american_to_decimal, parse_float
+from utils.time import get_local_date_str, get_local_now
 
-# ==========================================
-# 1. SCRAPER FUNCTIONS (For Browser Data)
-# ==========================================
-def save_odds_to_db(bookmaker: str, raw_json: dict):
-    if not supabase: return
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+RUNTIME_DB_STATS = {"bet_log_success": 0, "bet_log_failure": 0}
+
+
+def _safe_execute(action, fallback):
+    if not supabase:
+        return fallback
     try:
-        data = {"bookmaker": bookmaker, "payload": raw_json, "is_prop": False, "fetched_at": "now()"}
-        supabase.table("raw_scraper_data").insert(data).execute()
-        print(f"DB: {bookmaker.upper()} odds saved.")
-    except Exception as e:
-        print(f"DB ERROR saving {bookmaker}: {e}")
+        return action()
+    except Exception as exc:
+        print(f"Supabase operation failed: {exc}")
+        return fallback
 
-def save_props_to_db(bookmaker: str, raw_json: dict):
-    if not supabase: return
-    try:
-        data = {"bookmaker": bookmaker, "payload": raw_json, "is_prop": True, "fetched_at": "now()"}
-        supabase.table("raw_scraper_data").insert(data).execute()
-        print(f"DB: {bookmaker.upper()} props saved.")
-    except Exception as e:
-        print(f"DB ERROR saving {bookmaker} props: {e}")
 
-# ==========================================
-# 2. MASTER CACHE (For Odds API Data)
-# ==========================================
-def save_master_cache(cache_data: dict):
-    if not supabase: return
+def _load_local_json(path: str, default):
+    if not path or not os.path.exists(path):
+        return default
     try:
-        data = {"cache_json": cache_data, "updated_at": "now()"}
-        supabase.table("master_cache").upsert({"id": 1, **data}).execute()
-        print("DB: Master Cache updated successfully.")
-    except Exception as e:
-        print(f"DB ERROR saving master cache: {e}")
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception as exc:
+        print(f"Local JSON load failed for {path}: {exc}")
+        return default
+
+
+def _save_local_json(path: str, data) -> None:
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+    except Exception as exc:
+        print(f"Local JSON save failed for {path}: {exc}")
+
+
+def _parse_decimal_odds(value) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        text = str(value).strip()
+        if text.startswith("+") or text.startswith("-"):
+            return american_to_decimal(text)
+        numeric = float(text)
+        return numeric if numeric > 1.0 else None
+    except Exception:
+        return None
+
+
+def _parse_edge_pct(edge_val) -> Optional[float]:
+    if edge_val is None or edge_val == "":
+        return None
+    if isinstance(edge_val, str):
+        cleaned = edge_val.replace("%", "").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    try:
+        return float(edge_val) * 100.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _infer_market_type(market: str) -> str:
+    market_key = str(market).strip().lower()
+    if market_key in {"h2h", "moneyline", "model_mlb_f5"}:
+        return "moneyline"
+    if market_key in {"spread", "spreads", "model_nba_spread", "model_nhl_puckline", "puckline"}:
+        return "spread"
+    if market_key in {"total", "totals"}:
+        return "total"
+    if market_key.startswith("player_") or market_key in {"points", "assists", "rebounds", "goals"}:
+        return "player_prop"
+    return "other"
+
+
+def _infer_bet_source(market: str, sport: str) -> str:
+    market_key = str(market).strip().upper()
+    if market_key.startswith("MODEL_"):
+        return "model"
+    if sport == "unknown_scraped":
+        return "scraper"
+    return "market_scan"
+
+
+def is_already_logged(matchup, market, selection):
+    def action():
+        rows = (
+            supabase.table("bets_log")
+            .select("id,result")
+            .ilike("matchup", matchup.strip())
+            .eq("market", market.strip().upper())
+            .ilike("selection", selection.strip())
+            .execute()
+            .data
+        )
+        return any(not row.get("result") for row in rows)
+
+    return _safe_execute(action, False)
+
+
+def reset_runtime_db_stats():
+    RUNTIME_DB_STATS["bet_log_success"] = 0
+    RUNTIME_DB_STATS["bet_log_failure"] = 0
+
+
+def get_runtime_db_stats() -> Dict[str, int]:
+    return dict(RUNTIME_DB_STATS)
+
+
+def log_bet_to_db(
+    matchup,
+    market,
+    selection,
+    odds,
+    edge_val,
+    units,
+    fair_price,
+    sport,
+    event_id,
+    bet_source: Optional[str] = None,
+    notes: Optional[str] = None,
+):
+    if not supabase:
+        RUNTIME_DB_STATS["bet_log_failure"] += 1
+        return False
+
+    edge_pct = _parse_edge_pct(edge_val)
+    odds_decimal = _parse_decimal_odds(odds)
+    fair_price_decimal = _parse_decimal_odds(fair_price)
+    payload = {
+        "date": get_local_date_str(),
+        "matchup": matchup.strip(),
+        "market": market.upper().strip(),
+        "selection": selection.strip(),
+        "odds": str(odds),
+        "edge": str(edge_val if isinstance(edge_val, str) else f"{float(edge_val) * 100:.2f}%"),
+        "units": str(units),
+        "fair_price": str(fair_price),
+        "sport": sport,
+        "event_id": str(event_id),
+        "closing_line_pinnacle": "",
+        "result": "",
+        "edge_pct": edge_pct,
+        "odds_decimal": odds_decimal,
+        "fair_price_decimal": fair_price_decimal,
+        "bet_source": bet_source or _infer_bet_source(market, sport),
+        "market_type": _infer_market_type(market),
+        "notes": notes,
+    }
+
+    def action():
+        supabase.table("bets_log").insert(payload).execute()
+        return True
+
+    success = _safe_execute(action, False)
+    if success:
+        RUNTIME_DB_STATS["bet_log_success"] += 1
+    else:
+        RUNTIME_DB_STATS["bet_log_failure"] += 1
+    return success
+
+
+def get_ungraded_past_bets() -> List[Dict[str, Any]]:
+    today = get_local_date_str()
+
+    def action():
+        return supabase.table("bets_log").select("*").eq("result", "").lt("date", today).execute().data
+
+    return _safe_execute(action, [])
+
+
+def get_untracked_bets() -> List[Dict[str, Any]]:
+    def action():
+        rows = supabase.table("bets_log").select("*").execute().data
+        return [row for row in rows if not row.get("closing_line_pinnacle")]
+
+    return _safe_execute(action, [])
+
+
+def get_all_bets() -> List[Dict[str, Any]]:
+    def action():
+        return supabase.table("bets_log").select("*").execute().data
+
+    return _safe_execute(action, [])
+
+
+def get_all_graded_bets() -> List[Dict[str, Any]]:
+    def action():
+        return supabase.table("bets_log").select("*").neq("result", "").execute().data
+
+    return _safe_execute(action, [])
+
+
+def get_all_clv_bets() -> List[Dict[str, Any]]:
+    def action():
+        rows = supabase.table("bets_log").select("*").execute().data
+        return [row for row in rows if row.get("closing_line_decimal") or row.get("closing_line_pinnacle")]
+
+    return _safe_execute(action, [])
+
+
+def update_result(bet_id, result):
+    def action():
+        supabase.table("bets_log").update(
+            {"result": result, "graded_at": get_local_now().isoformat()}
+        ).eq("id", bet_id).execute()
+
+    _safe_execute(action, None)
+
+
+def update_bet_clv(bet_id, closing_price_american, closing_price_decimal, clv_edge_pct: Optional[float] = None):
+    update_payload = {
+        "closing_line_pinnacle": str(closing_price_american),
+        "closing_line_american": str(closing_price_american),
+        "closing_line_decimal": closing_price_decimal,
+        "clv_tracked_at": get_local_now().isoformat(),
+    }
+    if clv_edge_pct is not None:
+        update_payload["clv_edge_pct"] = clv_edge_pct
+
+    def action():
+        supabase.table("bets_log").update(update_payload).eq("id", bet_id).execute()
+
+    _safe_execute(action, None)
+
+
+def save_odds_cache(cache_data):
+    def action():
+        supabase.table("odds_cache").upsert(
+            {"id": "master", "data": cache_data, "updated_at": datetime.utcnow().isoformat()}
+        ).execute()
+
+    _safe_execute(action, None)
+
+
+def get_odds_cache():
+    def action():
+        response = supabase.table("odds_cache").select("data").eq("id", "master").execute()
+        return response.data[0]["data"] if response.data else {}
+
+    return _safe_execute(action, {})
+
+
+def save_master_cache(cache_data):
+    save_odds_cache(cache_data)
+
 
 def get_master_cache():
-    if not supabase: return {}
-    try:
-        response = supabase.table("master_cache").select("cache_json").eq("id", 1).single().execute()
-        return response.data.get("cache_json", {})
-    except Exception as e:
-        print(f"DB ERROR retrieving cache: {e}")
-        return {}
+    return get_odds_cache()
 
-# ==========================================
-# 3. HTTP TRACKER (Fixes your current ImportError)
-# ==========================================
-def load_tracker_state():
-    """Loads API rate limit tracker state from a local file."""
-    try:
-        if os.path.exists("tracker_state.json"):
-            with open("tracker_state.json", "r") as f:
-                return json.load(f)
-        return {}
-    except Exception:
-        return {}
 
-def save_tracker_state(state: dict):
-    """Saves API rate limit tracker state to a local file."""
-    try:
-        with open("tracker_state.json", "w") as f:
-            json.dump(state, f)
-    except Exception as e:
-        print(f"Error saving tracker state: {e}")
+def load_tracker_state(state_key: str, fallback_path: str):
+    def action():
+        response = supabase.table("bot_state").select("data").eq("id", state_key).execute()
+        if response.data:
+            return response.data[0].get("data", {})
+        return _load_local_json(fallback_path, {})
 
-# ==========================================
-# 4. BET LOGGING (Prevents future model errors)
-# ==========================================
-def is_already_logged(matchup: str, market: str, selection: str) -> bool:
-    """Checks if a specific bet was already alerted today to prevent spam."""
-    if not supabase: return False
-    try:
-        # Simple check against the bet_log table
-        response = supabase.table("bet_log") \
-            .select("id") \
-            .eq("matchup", matchup) \
-            .eq("market", market) \
-            .eq("selection", selection) \
-            .execute()
-        return len(response.data) > 0
-    except Exception:
-        return False
+    return _safe_execute(action, _load_local_json(fallback_path, {}))
 
-def log_bet_to_db(matchup, market, selection, odds, edge, units, sharp_odds, sport, event_id, notes=""):
-    """Logs a new +EV bet alert into the database."""
-    if not supabase: return False
-    try:
-        data = {
-            "matchup": matchup,
-            "market": market,
-            "selection": selection,
-            "odds": odds,
-            "edge": edge,
-            "units": units,
-            "sharp_odds": sharp_odds,
-            "sport": sport,
-            "event_id": event_id,
-            "notes": notes,
-            "placed_at": "now()"
-        }
-        supabase.table("bet_log").insert(data).execute()
-        return True
-    except Exception as e:
-        print(f"DB ERROR logging bet: {e}")
-        return False
+
+def save_tracker_state(state_key: str, data, fallback_path: str) -> None:
+    _save_local_json(fallback_path, data)
+
+    def action():
+        supabase.table("bot_state").upsert(
+            {"id": state_key, "data": data, "updated_at": datetime.utcnow().isoformat()}
+        ).execute()
+
+    _safe_execute(action, None)
+
+
+def log_alert_event(
+    source: str,
+    alert_type: str,
+    dedupe_key: Optional[str] = None,
+    count: int = 1,
+    payload_preview: Optional[str] = None,
+    status: str = "sent",
+):
+    def action():
+        supabase.table("alerts_sent").insert(
+            {
+                "source": source,
+                "alert_type": alert_type,
+                "dedupe_key": dedupe_key,
+                "count": count,
+                "payload_preview": payload_preview,
+                "status": status,
+                "sent_at": get_local_now().isoformat(),
+            }
+        ).execute()
+
+    _safe_execute(action, None)
+
+
+def log_workflow_run(
+    workflow_name: str,
+    status: str,
+    runtime_seconds: float,
+    task_count: int,
+    failure_count: int,
+    alert_count: int,
+    graded_count: int,
+    tracked_count: int,
+    summary: Optional[str] = None,
+):
+    def action():
+        supabase.table("workflow_runs").insert(
+            {
+                "workflow_name": workflow_name,
+                "status": status,
+                "runtime_seconds": runtime_seconds,
+                "task_count": task_count,
+                "failure_count": failure_count,
+                "alert_count": alert_count,
+                "graded_count": graded_count,
+                "tracked_count": tracked_count,
+                "summary": summary,
+                "run_at": get_local_now().isoformat(),
+            }
+        ).execute()
+
+    _safe_execute(action, None)

@@ -53,6 +53,19 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `NHL_GD_GAP_THRESHOLD`
 
 **Optional Feature Flags:**
+* `ENABLE_NEWS` (Default: `true`)
+* `ENABLE_NBA_PROP_BOT` (Default: `true`)
+* `ENABLE_NBA_MODEL` (Default: `true`)
+* `ENABLE_NHL_MODEL` (Default: `true`)
+* `ENABLE_MLB_MODEL` (Default: `true`)
+* `ENABLE_UNIFIED_SCAN` (Default: `true`)
+* `ENABLE_CLV_TRACKER` (Default: `true`)
+* `ENABLE_SGO_GRADER` (Default: `true`)
 * `ENABLE_PERFORMANCE_REPORT` (Default: `false`)
+* `ENABLE_PYBASEBALL_FIP_SCRAPER` (Default: `true`)
+* `ENABLE_DRAFTKINGS_SCRAPER` (Default: `true`)
+* `ENABLE_BETMGM_SCRAPER` (Default: `true`)
+* `ENABLE_FANDUEL_SCRAPER` (Default: `true`)
+* `ENABLE_PRIZEPICKS_SCRAPER` (Default: `true`)
 
 **Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A Master Odds Cache is pulled at the beginning of each core run to ensure all predictive models utilize identical market data while limiting the footprint to just 6 API credits per execution (12 per day).

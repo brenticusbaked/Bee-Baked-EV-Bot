@@ -1,34 +1,197 @@
 import os
+from datetime import datetime, timezone
+from typing import Dict, List
+
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
+from utils.links import sportsbook_search_link
 from utils.odds import decimal_implied_probability, decimal_to_american, quarter_kelly_units
-from utils.thresholds import MIN_EV_THRESHOLD, NEAR_MISS_THRESHOLD
+from utils.thresholds import env_float
+
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+UNIFIED_EV_THRESHOLD = env_float("UNIFIED_EV_THRESHOLD", 0.02)
+UNIFIED_NEAR_MISS_THRESHOLD = env_float("UNIFIED_NEAR_MISS_THRESHOLD", 0.01)
+
+
+def get_mobile_app_link(book_key, selection_id, event_id, matchup):
+    del selection_id, event_id
+    return sportsbook_search_link(book_key, matchup)
+
+
+def calculate_edge(offered_price: float, sharp_price: float) -> float:
+    fair_probability = decimal_implied_probability(sharp_price)
+    return (offered_price * fair_probability) - 1.0
+
 
 def scan_markets():
-    """Scans the master cache for standard market +EV edges."""
     cache = get_master_cache()
     if not cache:
+        print("Cloud cache is empty. Run fetcher first.")
         return {"detail": "cache empty", "count": 0, "label": "alerts"}
 
-    book_weights = get_book_weights()
     alerts = []
     near_misses = []
+    book_weights = get_book_weights()
+    soft_books = ["fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"]
+    now = datetime.now(timezone.utc)
 
     for sport, events in cache.items():
         for event in events:
-            matchup = f"{event.get('away_team')} @ {event.get('home_team')}"
-            # Extract Pinnacle as the sharp reference
-            pinnacle = next((b for b in event.get('bookmakers', []) if b['key'] == 'pinnacle'), None)
-            if not pinnacle:
+            commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+            if now > commence_time:
                 continue
 
-            for market in pinnacle.get('markets', []):
-                # Calculate No-Vig Fair Price from Pinnacle
-                # Compare against retail books (DraftKings, FanDuel, etc.)
-                # If (Retail Odds * Sharp Probability) - 1 > 0.0125: Alert!
-                pass 
+            matchup = f"{event['away_team']} @ {event['home_team']}"
+            markets = {}
 
-    return {"detail": "scan complete", "count": len(alerts), "label": "alerts"}
+            for bookmaker in event.get("bookmakers", []):
+                for market in bookmaker.get("markets", []):
+                    market_key = market["key"]
+                    markets.setdefault(market_key, {"sharp": {}, "soft": []})
+
+                    if bookmaker["key"] == "pinnacle":
+                        for outcome in market.get("outcomes", []):
+                            outcome_key = (
+                                str(outcome["name"]).lower().strip(),
+                                str(outcome.get("point", "")),
+                            )
+                            markets[market_key]["sharp"][outcome_key] = float(outcome["price"])
+                    elif bookmaker["key"] in soft_books:
+                        for outcome in market.get("outcomes", []):
+                            markets[market_key]["soft"].append(
+                                {
+                                    "book": bookmaker["title"],
+                                    "book_key": bookmaker["key"],
+                                    "name": outcome["name"],
+                                    "price": float(outcome["price"]),
+                                    "point": outcome.get("point", ""),
+                                    "id": outcome.get("id"),
+                                }
+                            )
+
+            for market_type, data in markets.items():
+                sharp = data["sharp"]
+                if not sharp:
+                    continue
+
+                best_edge = {"edge": 0.0, "score": 0.0, "bet": None, "sharp_price": None, "book_weight": 1.0}
+                for soft_bet in data["soft"]:
+                    outcome_key = (
+                        str(soft_bet["name"]).lower().strip(),
+                        str(soft_bet.get("point", "")),
+                    )
+                    if outcome_key not in sharp:
+                        continue
+
+                    pinnacle_price = sharp[outcome_key]
+                    edge = calculate_edge(soft_bet["price"], pinnacle_price)
+                    book_weight = book_weights.get(soft_bet["book"], 1.0)
+                    weighted_score = edge * book_weight
+
+                    if UNIFIED_NEAR_MISS_THRESHOLD <= edge < UNIFIED_EV_THRESHOLD:
+                        near_misses.append(
+                            {
+                                "matchup": matchup,
+                                "selection": f"{soft_bet['name']} {soft_bet['point']}".strip(),
+                                "book": soft_bet["book"],
+                                "edge": edge,
+                                "weight": book_weight,
+                            }
+                        )
+
+                    if edge >= UNIFIED_EV_THRESHOLD and weighted_score > best_edge["score"]:
+                        best_edge = {
+                            "edge": edge,
+                            "score": weighted_score,
+                            "bet": soft_bet,
+                            "sharp_price": pinnacle_price,
+                            "book_weight": book_weight,
+                        }
+
+                final = best_edge["bet"]
+                if not final:
+                    continue
+
+                selection = f"{final['name']} {final['point']}".strip()
+                if is_already_logged(matchup, market_type, selection):
+                    continue
+
+                edge = best_edge["edge"]
+                offered_price = final["price"]
+                fair_price = best_edge["sharp_price"]
+                book_weight = best_edge["book_weight"]
+                units = quarter_kelly_units(edge, offered_price)
+                fair_price_american = decimal_to_american(fair_price)
+
+                was_logged = log_bet_to_db(
+                    matchup,
+                    market_type,
+                    selection,
+                    decimal_to_american(offered_price),
+                    edge,
+                    f"{units:.2f}",
+                    fair_price_american,
+                    sport,
+                    event["id"],
+                    notes=f"book={final['book']};book_key={final['book_key']}",
+                )
+                if not was_logged:
+                    print(f"Skipping alert because DB log failed for {selection}.")
+                    continue
+
+                app_link = get_mobile_app_link(final["book_key"], final["id"], event["id"], matchup)
+                alerts.append(
+                    {
+                        "description": (
+                            f"**+EV {market_type.upper()} ALERT**\n\n"
+                            f"**Match:** {matchup}\n"
+                            f"**Bet:** {selection}\n"
+                            f"**Book:** [{final['book']}]({app_link}) @ {decimal_to_american(offered_price)}\n"
+                            f"**Fair Value:** {fair_price_american}\n"
+                            f"**Edge:** {edge * 100:.2f}%\n"
+                            f"**Book Weight:** {book_weight:.2f}x\n"
+                            f"**Suggested:** {units:.2f} Units"
+                        )
+                    }
+                )
+
+    for index, alert in enumerate(alerts):
+        send_discord_alert(
+            {
+                "embeds": [
+                    {
+                        "description": alert["description"],
+                        "color": 3066993,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                ]
+            },
+            source="unified_bot",
+            alert_type="bet_alert",
+            dedupe_key=alert["description"][:200],
+            webhook_url=DISCORD_WEBHOOK_URL,
+            add_bee_image=index == len(alerts) - 1,
+        )
+
+    near_miss_text = ""
+    if near_misses:
+        total_near_misses = len(near_misses)
+        near_misses = sorted(near_misses, key=lambda item: item["edge"], reverse=True)[:3]
+        samples = " | ".join(
+            f"{item['matchup']} - {item['selection']} @ {item['book']} ({item['edge'] * 100:.2f}%, {item['weight']:.2f}x)"
+            for item in near_misses
+        )
+        near_miss_text = f"; near misses: {total_near_misses} total, top {len(near_misses)} -> {samples}"
+
+    return {
+        "detail": f"scan complete{near_miss_text}",
+        "count": len(alerts),
+        "label": "alerts",
+        "meta": {"near_miss_summary": near_miss_text.lstrip('; ').strip()} if near_miss_text else {},
+    }
+
+
+if __name__ == "__main__":
+    scan_markets()

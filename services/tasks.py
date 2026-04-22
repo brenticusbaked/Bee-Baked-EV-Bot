@@ -1,16 +1,6 @@
 from dataclasses import dataclass
 from typing import Callable, List
 
-# 1. DEFINE CORE CLASSES FIRST TO BREAK CIRCULAR IMPORTS
-TaskFunc = Callable[[], None]
-
-@dataclass(frozen=True)
-class PipelineTask:
-    name: str
-    func: TaskFunc
-
-
-# 2. NOW IMPORT THE HEAVY BOT/SCRAPER MODULES
 from bot_propodds_nba import main as run_nba_prop_bot
 from clv_tracker import run_clv_tracker
 from master_odds_fetcher import run_fetcher
@@ -20,21 +10,26 @@ from model_nhl import run_nhl_model
 from performance_report import send_performance_report
 from scraper_betmgm import scrape_betmgm
 from scraper_bot import scrape_news
-from scraper_draftkings import scrape_draftkings
+from scraper_draftkings import scrape_dk as scrape_draftkings
 from scraper_fanduel import scrape_fanduel
 from scraper_prizepicks import scrape_prizepicks
+from scraper_pybaseball_fip import run_fip_scraper
 from sgo_grader import run_grader
 from unified_bot import scan_markets
 from utils.config import env_flag
-from scraper_pybaseball_fip import scrape_fip
 
 
-# 3. TASK DEFINITIONS
+TaskFunc = Callable[[], None]
+
+
+@dataclass(frozen=True)
+class PipelineTask:
+    name: str
+    func: TaskFunc
+
+
 def get_refresh_tasks() -> List[PipelineTask]:
-    return [
-        PipelineTask(name="master_odds_fetcher", func=run_fetcher),
-        PipelineTask(name="pybaseball_fip_scraper", func=scrape_fip)
-    ]
+    return [PipelineTask(name="master_odds_fetcher", func=run_fetcher)]
 
 
 def get_parallel_tasks() -> List[PipelineTask]:
@@ -71,6 +66,8 @@ def get_audit_tasks() -> List[PipelineTask]:
 
 def get_scraper_tasks() -> List[PipelineTask]:
     tasks: List[PipelineTask] = []
+    if env_flag("ENABLE_PYBASEBALL_FIP_SCRAPER", True):
+        tasks.append(PipelineTask(name="scraper_pybaseball_fip", func=run_fip_scraper))
     if env_flag("ENABLE_DRAFTKINGS_SCRAPER", True):
         tasks.append(PipelineTask(name="scraper_draftkings", func=scrape_draftkings))
     if env_flag("ENABLE_BETMGM_SCRAPER", True):
