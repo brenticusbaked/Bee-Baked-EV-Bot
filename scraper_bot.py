@@ -7,6 +7,7 @@ from services.http_client import request
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_INJURY_WEBHOOK_URL = os.getenv("DISCORD_INJURY_WEBHOOK_URL") or DISCORD_WEBHOOK_URL
 RSS_URL = "https://www.rotowire.com/rss/news.php?sport=NBA"
 
 
@@ -14,7 +15,7 @@ def has_seen_news(guid):
     if not supabase:
         return False
     try:
-        response = supabase.table("seen_news").select("id").eq("guid", guid).execute()
+        response = supabase.table("seen_news").select("guid").eq("guid", guid).execute()
         return len(response.data) > 0
     except Exception as exc:
         print(f"Seen news lookup failed: {exc}")
@@ -67,7 +68,7 @@ def scrape_news():
                 source="scraper_bot",
                 alert_type="news_alert",
                 dedupe_key=alert["guid"],
-                webhook_url=DISCORD_WEBHOOK_URL,
+                webhook_url=DISCORD_INJURY_WEBHOOK_URL,
             ):
                 mark_news_as_seen(alert["guid"])
         return {"detail": "news scrape complete", "count": len(alerts), "label": "alerts"}

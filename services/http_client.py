@@ -15,6 +15,7 @@ BEE_IMAGE_URL = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=med
 BEE_IMAGE_STATE_KEY = "bee_image_daily_limit"
 BEE_IMAGE_STATE_FILE = "bee_image_state.json"
 MAX_BEE_IMAGES_PER_DAY = 2
+RESERVED_DAILY_SLIPS_IMAGE_SLOTS = 1
 
 
 def build_session() -> requests.Session:
@@ -55,34 +56,47 @@ def _load_bee_image_state() -> dict:
     return state
 
 
-def _can_use_bee_image() -> bool:
-    today = get_local_date_str()
-    state = _load_bee_image_state()
+def _normalize_bee_image_state(state: dict, today: str) -> dict:
     if state.get("date") != today:
-        return True
+        return {"date": today, "default_count": 0, "daily_slips_count": 0}
+    state.setdefault("default_count", int(state.get("count", 0)))
+    state.setdefault("daily_slips_count", 0)
+    state.pop("count", None)
+    return state
 
-    count = int(state.get("count", 0))
-    return count < MAX_BEE_IMAGES_PER_DAY
 
-
-def _record_bee_image_use() -> None:
+def _can_use_bee_image(slot: str = "default") -> bool:
     today = get_local_date_str()
-    state = _load_bee_image_state()
-    if state.get("date") != today:
-        state = {"date": today, "count": 0}
+    state = _normalize_bee_image_state(_load_bee_image_state(), today)
 
-    count = int(state.get("count", 0))
-    state["count"] = count + 1
+    if slot == "daily_slips":
+        return int(state.get("daily_slips_count", 0)) < RESERVED_DAILY_SLIPS_IMAGE_SLOTS
+
+    max_default_images = max(MAX_BEE_IMAGES_PER_DAY - RESERVED_DAILY_SLIPS_IMAGE_SLOTS, 0)
+    return int(state.get("default_count", 0)) < max_default_images
+
+
+def _record_bee_image_use(slot: str = "default") -> None:
+    today = get_local_date_str()
+    state = _normalize_bee_image_state(_load_bee_image_state(), today)
+
+    key = "daily_slips_count" if slot == "daily_slips" else "default_count"
+    state[key] = int(state.get(key, 0)) + 1
     save_tracker_state(BEE_IMAGE_STATE_KEY, state, BEE_IMAGE_STATE_FILE)
 
 
-def post_discord(payload: dict, webhook_url: Optional[str] = None, add_bee_image: bool = False) -> bool:
+def post_discord(
+    payload: dict,
+    webhook_url: Optional[str] = None,
+    add_bee_image: bool = False,
+    bee_image_slot: str = "default",
+) -> bool:
     target = webhook_url or DISCORD_WEBHOOK_URL
     if not target:
         return False
 
     attached_bee_image = False
-    if add_bee_image and payload.get("embeds") and _can_use_bee_image():
+    if add_bee_image and payload.get("embeds") and _can_use_bee_image(bee_image_slot):
         payload["embeds"][-1]["image"] = {"url": BEE_IMAGE_URL}
         attached_bee_image = True
 
@@ -96,5 +110,5 @@ def post_discord(payload: dict, webhook_url: Optional[str] = None, add_bee_image
         print(f"Discord post failed with status {response.status_code}: {response.text[:200]}")
         return False
     if attached_bee_image:
-        _record_bee_image_use()
+        _record_bee_image_use(bee_image_slot)
     return True

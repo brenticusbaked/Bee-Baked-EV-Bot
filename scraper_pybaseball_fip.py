@@ -38,19 +38,6 @@ async def run_fip_scraper():
         )
         page = await context.new_page()
         
-        # In async playwright, we must await the .json() parsing
-        async def handle_response(response):
-            nonlocal fg_data
-            if "api/leaders/major-league/data" in response.url:
-                try:
-                    json_response = await response.json()
-                    if "data" in json_response:
-                        fg_data = json_response["data"]
-                except Exception:
-                    pass
-
-        page.on("response", handle_response)
-        
         try:
             url = f"https://www.fangraphs.com/leaders/major-league?pos=all&stats=pit&lg=all&qual=0&type=8&season={season}&month=0"
             await page.goto(url, wait_until="domcontentloaded", timeout=25000)
@@ -59,7 +46,13 @@ async def run_fip_scraper():
             
         try:
             if not fg_data:
-                await page.wait_for_response(lambda res: "api/leaders/major-league/data" in res.url, timeout=5000)
+                response = await page.wait_for_response(
+                    lambda res: "api/leaders/major-league/data" in res.url,
+                    timeout=5000,
+                )
+                json_response = await response.json()
+                if "data" in json_response:
+                    fg_data = json_response["data"]
         except Exception:
             pass
             

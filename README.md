@@ -39,6 +39,8 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `SGO_API_KEY`
 * `DISCORD_WEBHOOK_URL`
 * `DISCORD_STATUS_WEBHOOK_URL` (Optional: sends workflow-complete status updates to a separate Discord channel)
+* `DISCORD_INJURY_WEBHOOK_URL` (Optional: sends injury/news alerts to a separate Discord channel)
+* `DISCORD_DAILY_SLIPS_WEBHOOK_URL` (Optional: sends the daily CLV + win/loss slip report to a separate Discord channel)
 * `SUPABASE_URL`
 * `SUPABASE_KEY` (Use the `service_role` key to bypass Row-Level Security)
 
@@ -75,4 +77,4 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ENABLE_FANDUEL_SCRAPER` (Default: `true`)
 * `ENABLE_PRIZEPICKS_SCRAPER` (Default: `true`)
 
-**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A master odds cache is pulled at the beginning of each core run using NBA spreads, NHL spreads, and MLB H2H only, which keeps the footprint to 6 API credits per execution (12 per day). MLB H2H remains available for the MLB model, but unified MLB H2H alerts are off by default unless `ENABLE_MLB_H2H_ALERTS=true`.
+**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A master odds cache is pulled at the beginning of each core run using NBA spreads, NHL spreads, and MLB H2H only, which keeps the footprint to 6 API credits per execution (12 per day). MLB H2H remains available for the MLB model, but unified MLB H2H alerts are off by default unless `ENABLE_MLB_H2H_ALERTS=true`. The daily slips summary runs once per day from `.github/workflows/daily_slips.yml` at `13:15 UTC` and can be routed to a dedicated Discord channel.
