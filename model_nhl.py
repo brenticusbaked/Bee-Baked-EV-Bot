@@ -12,6 +12,7 @@ from utils.time import get_local_now
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 NHL_GD_GAP_THRESHOLD = env_float("NHL_GD_GAP_THRESHOLD", 40.0)
+NHL_MODEL_EDGE_THRESHOLD = env_float("NHL_MODEL_EDGE_THRESHOLD", 0.01)
 
 
 def get_dynamic_link(bookmaker, target_string):
@@ -96,6 +97,8 @@ def run_nhl_model():
             fair_price = fair_american_from_probability(model_probability)
             edge = model_edge_from_probability(model_probability, best_odds)
             units = model_units_from_probability(model_probability, best_odds)
+            if edge < NHL_MODEL_EDGE_THRESHOLD or units <= 0:
+                continue
 
             was_logged = log_bet_to_db(
                 matchup,

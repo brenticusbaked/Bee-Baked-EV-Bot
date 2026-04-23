@@ -12,6 +12,7 @@ from utils.time import get_local_now
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.25)
+MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.01)
 
 
 def get_dynamic_link(bookmaker, target_string):
@@ -69,8 +70,10 @@ def get_advanced_pitcher_stats(pitcher_id, api_cache, fip_cache):
     actual_fip = None
     
     str_id = str(pitcher_id)
+    source = "statsapi_estimate"
     if fip_cache and str_id in fip_cache:
         actual_fip = fip_cache[str_id].get("fip")
+        source = "fangraphs"
         
     try:
         person = get_json(url).get("people", [{}])[0]
@@ -85,7 +88,7 @@ def get_advanced_pitcher_stats(pitcher_id, api_cache, fip_cache):
     except Exception as exc:
         print(f"Error fetching stats for Pitcher ID {pitcher_id}: {exc}")
         
-    api_cache[pitcher_id] = (est_fip, actual_fip, era)
+    api_cache[pitcher_id] = (est_fip, actual_fip, era, source)
     return api_cache[pitcher_id]
 
 
@@ -112,8 +115,8 @@ def run_mlb_model():
             home_p = game["teams"]["home"].get("probablePitcher")
             if not away_p or not home_p: continue
 
-            a_est_fip, a_act_fip, a_era = get_advanced_pitcher_stats(away_p["id"], pitcher_stats_cache, pybaseball_cache)
-            h_est_fip, h_act_fip, h_era = get_advanced_pitcher_stats(home_p["id"], pitcher_stats_cache, pybaseball_cache)
+            a_est_fip, a_act_fip, a_era, a_source = get_advanced_pitcher_stats(away_p["id"], pitcher_stats_cache, pybaseball_cache)
+            h_est_fip, h_act_fip, h_era, h_source = get_advanced_pitcher_stats(home_p["id"], pitcher_stats_cache, pybaseball_cache)
             
             a_mod_fip = a_act_fip if a_act_fip is not None else a_est_fip
             h_mod_fip = h_act_fip if h_act_fip is not None else h_est_fip
@@ -136,12 +139,34 @@ def run_mlb_model():
             prob = min(0.53 + max(fip_diff - MLB_FIP_GAP_THRESHOLD, 0.0) * 0.03, 0.64)
             fair_p = fair_american_from_probability(prob)
             edge = model_edge_from_probability(prob, odds)
+            if edge < MLB_MODEL_EDGE_THRESHOLD:
+                continue
             
             # Use utility for precise Quarter-Kelly sizing
             dec_odds = american_to_decimal(odds)
             u_size = quarter_kelly_units(edge, dec_odds)
+            if u_size <= 0:
+                continue
 
-            log_bet_to_db(matchup, "MODEL_MLB_F5", better_team, odds, edge, f"{u_size:.2f}", fair_p, "baseball_mlb", event_id)
+            was_logged = log_bet_to_db(
+                matchup,
+                "MODEL_MLB_F5",
+                better_team,
+                odds,
+                edge,
+                f"{u_size:.2f}",
+                fair_p,
+                "baseball_mlb",
+                event_id,
+                notes=(
+                    f"book={book};market={selected_market};model=mlb_fip;"
+                    f"probability={prob:.4f};fip_diff={fip_diff:.4f};"
+                    f"away_source={a_source};home_source={h_source}"
+                ),
+            )
+            if not was_logged:
+                print(f"Skipping MLB model alert because DB log failed for {better_team}.")
+                continue
 
             # Dynamic Angle Sizing (Estimating secondary edges as ~75% of primary F5 edge)
             secondary_u = max(0.5, round(u_size * 0.75, 1))
@@ -159,6 +184,9 @@ def run_mlb_model():
                     f"**MLB ADVANCED METRIC MISMATCH**\n"
                     f"**Game:** {matchup}\n"
                     f"**Advantage:** {better_team} (F5)\n"
+                    f"**{away_p['fullName']}** FIP: **{a_mod_fip:.2f}** | ERA: **{a_era:.2f}** ({a_source})\n"
+                    f"**{home_p['fullName']}** FIP: **{h_mod_fip:.2f}** | ERA: **{h_era:.2f}** ({h_source})\n"
+                    f"**FIP Gap:** {fip_diff:.2f}\n"
                     f"**Price:** [{book}]({link}) @ {odds}\n"
                     f"**Model Edge:** {edge * 100:.2f}% | **Fair:** {fair_p}\n"
                     f"**Primary Bet:** {u_size:.2f} Units\n\n"

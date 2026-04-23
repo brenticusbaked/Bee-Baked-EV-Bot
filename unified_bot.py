@@ -13,6 +13,10 @@ from utils.thresholds import env_float
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 UNIFIED_EV_THRESHOLD = env_float("UNIFIED_EV_THRESHOLD", 0.02)
 UNIFIED_NEAR_MISS_THRESHOLD = env_float("UNIFIED_NEAR_MISS_THRESHOLD", 0.01)
+UNIFIED_SPREAD_EV_THRESHOLD = env_float("UNIFIED_SPREAD_EV_THRESHOLD", UNIFIED_EV_THRESHOLD)
+UNIFIED_H2H_EV_THRESHOLD = env_float("UNIFIED_H2H_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.03))
+UNIFIED_TOTAL_EV_THRESHOLD = env_float("UNIFIED_TOTAL_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.0225))
+ENABLE_MLB_H2H_ALERTS = os.getenv("ENABLE_MLB_H2H_ALERTS", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def get_mobile_app_link(book_key, selection_id, event_id, matchup):
@@ -23,6 +27,30 @@ def get_mobile_app_link(book_key, selection_id, event_id, matchup):
 def calculate_edge(offered_price: float, sharp_price: float) -> float:
     fair_probability = decimal_implied_probability(sharp_price)
     return (offered_price * fair_probability) - 1.0
+
+
+def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
+    sport_key = str(sport).strip().lower()
+    market_key = str(market_type).strip().lower()
+
+    if sport_key == "basketball_nba":
+        return market_key == "spreads"
+    if sport_key == "icehockey_nhl":
+        return market_key == "spreads"
+    if sport_key == "baseball_mlb":
+        return market_key == "h2h" and ENABLE_MLB_H2H_ALERTS
+    return market_key in {"spreads", "totals", "h2h"}
+
+
+def _market_ev_threshold(market_type: str) -> float:
+    market_key = str(market_type).strip().lower()
+    if market_key == "spreads":
+        return UNIFIED_SPREAD_EV_THRESHOLD
+    if market_key == "h2h":
+        return UNIFIED_H2H_EV_THRESHOLD
+    if market_key == "totals":
+        return UNIFIED_TOTAL_EV_THRESHOLD
+    return UNIFIED_EV_THRESHOLD
 
 
 def scan_markets():
@@ -72,6 +100,11 @@ def scan_markets():
                             )
 
             for market_type, data in markets.items():
+                if not _market_allowed_for_sport(sport, market_type):
+                    continue
+
+                market_threshold = _market_ev_threshold(market_type)
+
                 sharp = data["sharp"]
                 if not sharp:
                     continue
@@ -90,7 +123,7 @@ def scan_markets():
                     book_weight = book_weights.get(soft_bet["book"], 1.0)
                     weighted_score = edge * book_weight
 
-                    if UNIFIED_NEAR_MISS_THRESHOLD <= edge < UNIFIED_EV_THRESHOLD:
+                    if UNIFIED_NEAR_MISS_THRESHOLD <= edge < market_threshold:
                         near_misses.append(
                             {
                                 "matchup": matchup,
@@ -98,10 +131,11 @@ def scan_markets():
                                 "book": soft_bet["book"],
                                 "edge": edge,
                                 "weight": book_weight,
+                                "market": market_type,
                             }
                         )
 
-                    if edge >= UNIFIED_EV_THRESHOLD and weighted_score > best_edge["score"]:
+                    if edge >= market_threshold and weighted_score > best_edge["score"]:
                         best_edge = {
                             "edge": edge,
                             "score": weighted_score,
@@ -180,7 +214,7 @@ def scan_markets():
         total_near_misses = len(near_misses)
         near_misses = sorted(near_misses, key=lambda item: item["edge"], reverse=True)[:3]
         samples = " | ".join(
-            f"{item['matchup']} - {item['selection']} @ {item['book']} ({item['edge'] * 100:.2f}%, {item['weight']:.2f}x)"
+            f"{item['matchup']} - {item['market'].upper()} - {item['selection']} @ {item['book']} ({item['edge'] * 100:.2f}%, {item['weight']:.2f}x)"
             for item in near_misses
         )
         near_miss_text = f"; near misses: {total_near_misses} total, top {len(near_misses)} -> {samples}"

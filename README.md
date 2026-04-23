@@ -45,12 +45,18 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 **Optional Threshold Overrides:**
 * `UNIFIED_EV_THRESHOLD`
 * `UNIFIED_NEAR_MISS_THRESHOLD`
+* `UNIFIED_SPREAD_EV_THRESHOLD`
+* `UNIFIED_H2H_EV_THRESHOLD`
+* `UNIFIED_TOTAL_EV_THRESHOLD`
 * `LINE_MOVEMENT_MAX_BOOST`
 * `LINE_MOVEMENT_MAX_PENALTY`
 * `PROP_EV_THRESHOLD`
 * `PROP_NEAR_MISS_THRESHOLD`
 * `MLB_FIP_GAP_THRESHOLD`
+* `MLB_MODEL_EDGE_THRESHOLD`
+* `NBA_MODEL_EDGE_THRESHOLD`
 * `NHL_GD_GAP_THRESHOLD`
+* `NHL_MODEL_EDGE_THRESHOLD`
 
 **Optional Feature Flags:**
 * `ENABLE_NEWS` (Default: `true`)
@@ -59,6 +65,7 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ENABLE_NHL_MODEL` (Default: `true`)
 * `ENABLE_MLB_MODEL` (Default: `true`)
 * `ENABLE_UNIFIED_SCAN` (Default: `true`)
+* `ENABLE_MLB_H2H_ALERTS` (Default: `false`)
 * `ENABLE_CLV_TRACKER` (Default: `true`)
 * `ENABLE_SGO_GRADER` (Default: `true`)
 * `ENABLE_PERFORMANCE_REPORT` (Default: `false`)
@@ -68,4 +75,4 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ENABLE_FANDUEL_SCRAPER` (Default: `true`)
 * `ENABLE_PRIZEPICKS_SCRAPER` (Default: `true`)
 
-**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A Master Odds Cache is pulled at the beginning of each core run to ensure all predictive models utilize identical market data while limiting the footprint to just 6 API credits per execution (12 per day).
+**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A master odds cache is pulled at the beginning of each core run using NBA spreads, NHL spreads, and MLB H2H only, which keeps the footprint to 6 API credits per execution (12 per day). MLB H2H remains available for the MLB model, but unified MLB H2H alerts are off by default unless `ENABLE_MLB_H2H_ALERTS=true`.

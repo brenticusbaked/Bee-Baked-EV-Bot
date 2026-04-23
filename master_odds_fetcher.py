@@ -1,15 +1,16 @@
 import os
 from db_manager import save_master_cache
 from services.http_client import request
+from utils.thresholds import env_float
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 
-# TARGETED CONFIG: Exactly 3 markets total to stay at 6 credits per run (3 markets x 2 regions)
-# We prioritize the highest volume +EV markets.
+# Clean 6-credit pull: one market per sport across two regions.
+# NBA and NHL focus on spreads; MLB keeps H2H so the MLB model can still shop prices.
 STRICT_CONFIG = {
-    "basketball_nba": "spreads,h2h", # 2 markets
-    "icehockey_nhl": "h2h",          # 1 market
-    "baseball_mlb": "h2h",          # Swapped dynamically if needed
+    "basketball_nba": "spreads",
+    "icehockey_nhl": "spreads",
+    "baseball_mlb": "h2h",
 }
 
 def run_fetcher():
@@ -22,7 +23,7 @@ def run_fetcher():
     target_books = "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks"
     cache = {}
 
-    print(f"BEE-BAKED FETCH: Running 6-credit precision pull...")
+    print("BEE-BAKED FETCH: Running 6-credit precision pull...")
 
     for sport, markets in STRICT_CONFIG.items():
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"

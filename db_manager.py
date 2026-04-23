@@ -139,6 +139,11 @@ def log_bet_to_db(
         return False
 
     edge_pct = _parse_edge_pct(edge_val)
+    if edge_pct is not None and edge_pct <= 0:
+        print(f"Skipping non-positive edge bet log for {selection}: {edge_pct:.4f}%")
+        RUNTIME_DB_STATS["bet_log_failure"] += 1
+        return False
+
     odds_decimal = _parse_decimal_odds(odds)
     fair_price_decimal = _parse_decimal_odds(fair_price)
     payload = {
