@@ -17,6 +17,10 @@ UNIFIED_SPREAD_EV_THRESHOLD = env_float("UNIFIED_SPREAD_EV_THRESHOLD", UNIFIED_E
 UNIFIED_H2H_EV_THRESHOLD = env_float("UNIFIED_H2H_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.03))
 UNIFIED_TOTAL_EV_THRESHOLD = env_float("UNIFIED_TOTAL_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.0225))
 ENABLE_MLB_H2H_ALERTS = os.getenv("ENABLE_MLB_H2H_ALERTS", "false").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_NBA_TOTAL_ALERTS = os.getenv("ENABLE_NBA_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_NHL_TOTAL_ALERTS = os.getenv("ENABLE_NHL_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_MLB_SPREAD_ALERTS = os.getenv("ENABLE_MLB_SPREAD_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_MLB_TOTAL_ALERTS = os.getenv("ENABLE_MLB_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def get_mobile_app_link(book_key, selection_id, event_id, matchup):
@@ -34,11 +38,15 @@ def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
     market_key = str(market_type).strip().lower()
 
     if sport_key == "basketball_nba":
-        return market_key == "spreads"
+        return market_key == "spreads" or (market_key == "totals" and ENABLE_NBA_TOTAL_ALERTS)
     if sport_key == "icehockey_nhl":
-        return market_key == "spreads"
+        return market_key == "spreads" or (market_key == "totals" and ENABLE_NHL_TOTAL_ALERTS)
     if sport_key == "baseball_mlb":
-        return market_key == "h2h" and ENABLE_MLB_H2H_ALERTS
+        return (
+            (market_key == "h2h" and ENABLE_MLB_H2H_ALERTS)
+            or (market_key == "spreads" and ENABLE_MLB_SPREAD_ALERTS)
+            or (market_key == "totals" and ENABLE_MLB_TOTAL_ALERTS)
+        )
     return market_key in {"spreads", "totals", "h2h"}
 
 

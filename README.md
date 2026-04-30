@@ -36,6 +36,8 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 
 **Environment Variables:** Add the following to your GitHub Repository Secrets:
 * `ODDS_API_KEY`
+* `ODDS_API_KEY_2` (Optional: targeted secondary Odds API expansion for extra markets)
+* `ODDS_API_KEY_3` (Optional: tertiary Odds API expansion for NHL totals and MLB spreads/totals)
 * `SGO_API_KEY`
 * `DISCORD_WEBHOOK_URL`
 * `DISCORD_STATUS_WEBHOOK_URL` (Optional: sends workflow-complete status updates to a separate Discord channel)
@@ -69,6 +71,10 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ENABLE_MLB_MODEL` (Default: `true`)
 * `ENABLE_UNIFIED_SCAN` (Default: `true`)
 * `ENABLE_MLB_H2H_ALERTS` (Default: `false`)
+* `ENABLE_NBA_TOTAL_ALERTS` (Default: `true`)
+* `ENABLE_NHL_TOTAL_ALERTS` (Default: `true`)
+* `ENABLE_MLB_SPREAD_ALERTS` (Default: `true`)
+* `ENABLE_MLB_TOTAL_ALERTS` (Default: `true`)
 * `ENABLE_CLV_TRACKER` (Default: `true`)
 * `ENABLE_SGO_GRADER` (Default: `true`)
 * `ENABLE_PERFORMANCE_REPORT` (Default: `false`)
@@ -78,4 +84,4 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ENABLE_FANDUEL_SCRAPER` (Default: `true`)
 * `ENABLE_PRIZEPICKS_SCRAPER` (Default: `true`)
 
-**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A master odds cache is pulled at the beginning of each core run using NBA spreads, NHL spreads, and MLB H2H only, which keeps the footprint to 6 API credits per execution (12 per day). MLB H2H remains available for the MLB model, but unified MLB H2H alerts are off by default unless `ENABLE_MLB_H2H_ALERTS=true`. The daily slips summary runs once per day from `.github/workflows/daily_slips.yml` at `13:15 UTC` and can be routed to a dedicated Discord channel.
+**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 8,16 * * *`) that executes `master_run.py` twice daily (8:00 AM & 4:00 PM UTC). Browser scrapers run separately in `.github/workflows/scrapers.yml` at `30 8,16 * * *`. A master odds cache is pulled at the beginning of each core run using NBA spreads, NHL spreads, and MLB H2H only, which keeps the primary footprint to 6 API credits per execution (12 per day). If `ODDS_API_KEY_2` is provided, a secondary expansion pull is merged into the same cache using NBA H2H + totals, NHL H2H, and MLB first-5 H2H for 8 additional credits per execution (16 per day on the second key). If `ODDS_API_KEY_3` is provided, a tertiary expansion pull is merged into the same cache using NHL totals plus MLB spreads and totals for 6 additional credits per execution (12 per day on the third key). MLB H2H remains available for the MLB model, but unified MLB H2H alerts are off by default unless `ENABLE_MLB_H2H_ALERTS=true`. NBA totals, NHL totals, MLB spreads, and MLB totals can all be toggled independently with feature flags. The daily slips summary runs once per day from `.github/workflows/daily_slips.yml` at `13:15 UTC` and now reports slips placed, bets settled, and CLV updates based on their actual timestamps instead of only the original bet date.
