@@ -32,6 +32,7 @@ jobs:
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
+          DISCORD_INJURY_WEBHOOK_URL: ${{ secrets.DISCORD_INJURY_WEBHOOK_URL }}
           
           # --- PROXY AUTHENTICATION ---
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
