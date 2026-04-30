@@ -57,6 +57,9 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `PROP_EV_THRESHOLD`
 * `PROP_NEAR_MISS_THRESHOLD`
 * `NBA_PROP_STATS` (Optional comma-separated override. Example: `points,assists,rebounds,three_pointers,steals,blocks,turnovers,points_rebounds_assists`)
+* `SGO_GRADER_MAX_FETCHES`
+* `SGO_GRADER_FETCH_DELAY_SECONDS`
+* `CLV_LOOKBACK_DAYS`
 * `MLB_FIP_GAP_THRESHOLD`
 * `MLB_MODEL_EDGE_THRESHOLD`
 * `NBA_MODEL_EDGE_THRESHOLD`

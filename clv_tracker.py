@@ -1,6 +1,13 @@
+import os
+from datetime import timedelta
+
 from db_manager import get_master_cache, get_untracked_bets, update_bet_clv
 from services.bet_logic import outcome_matches, parse_selection
 from utils.odds import american_to_decimal, decimal_to_american, parse_float
+from utils.time import get_local_now
+
+
+CLV_LOOKBACK_DAYS = int(os.getenv("CLV_LOOKBACK_DAYS", "2"))
 
 
 def run_clv_tracker():
@@ -12,9 +19,16 @@ def run_clv_tracker():
         print("CLV Audit: Nothing to track or cache empty.")
         return {"detail": "nothing to track", "count": 0, "label": "tracked"}
 
-    print(f"Auditing CLV for {len(untracked)} bets using Cloud Cache...")
+    cutoff_date = (get_local_now() - timedelta(days=CLV_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    eligible_bets = [bet for bet in untracked if str(bet.get("date", "")) >= cutoff_date]
 
-    for bet in untracked:
+    if not eligible_bets:
+        print("CLV Audit: No recent bets eligible for tracking.")
+        return {"detail": "no recent bets to track", "count": 0, "label": "tracked"}
+
+    print(f"Auditing CLV for {len(eligible_bets)} recent bets using Cloud Cache...")
+
+    for bet in eligible_bets:
         sport = bet.get("sport")
         events = cache.get(sport)
         if not events:

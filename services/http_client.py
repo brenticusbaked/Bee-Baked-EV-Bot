@@ -18,13 +18,13 @@ MAX_BEE_IMAGES_PER_DAY = 2
 RESERVED_DAILY_SLIPS_IMAGE_SLOTS = 1
 
 
-def build_session() -> requests.Session:
+def build_session(retry_on_429: bool = True) -> requests.Session:
     retry = Retry(
         total=3,
         connect=3,
         read=3,
         backoff_factor=1.0,
-        status_forcelist=(429, 500, 502, 503, 504),
+        status_forcelist=((429, 500, 502, 503, 504) if retry_on_429 else (500, 502, 503, 504)),
         allowed_methods=frozenset({"GET", "POST"}),
     )
     adapter = HTTPAdapter(max_retries=retry)
@@ -36,11 +36,13 @@ def build_session() -> requests.Session:
 
 
 SESSION = build_session()
+NO_429_RETRY_SESSION = build_session(retry_on_429=False)
 
 
-def request(method: str, url: str, **kwargs) -> requests.Response:
+def request(method: str, url: str, retry_on_429: bool = True, **kwargs) -> requests.Response:
     kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
-    response = SESSION.request(method=method.upper(), url=url, **kwargs)
+    session = SESSION if retry_on_429 else NO_429_RETRY_SESSION
+    response = session.request(method=method.upper(), url=url, **kwargs)
     response.raise_for_status()
     return response
 

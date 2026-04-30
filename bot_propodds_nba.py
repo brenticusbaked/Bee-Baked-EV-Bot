@@ -2,6 +2,8 @@ import os
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import requests
+
 from db_manager import is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
@@ -256,7 +258,7 @@ def get_sgo_edges():
     }
 
     try:
-        data = request("GET", url, params=params, timeout=15).json()
+        data = request("GET", url, params=params, timeout=15, retry_on_429=False).json()
         if isinstance(data, dict):
             events_list = data.get("events", [])
         else:
@@ -366,6 +368,12 @@ def get_sgo_edges():
                             ),
                         }
                     )
+    except requests.HTTPError as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        print(f"Prop Bot Error: {exc}")
+        if status_code == 429:
+            return [], [], {"reason": "SGO rate limited", "status_code": 429}
+        return [], [], {"reason": f"error: {exc}", "status_code": status_code}
     except Exception as exc:
         print(f"Prop Bot Error: {exc}")
         return [], [], {"reason": f"error: {exc}"}
@@ -401,11 +409,15 @@ def main():
             add_bee_image=index == len(picks) - 1,
         )
 
-    detail = (
-        f"prop bot scanned {scan_stats.get('events', 0)} events, "
-        f"{scan_stats.get('parsed_props', 0)} parsed props, "
-        f"{scan_stats.get('qualified_groups', 0)} sharp markets"
-    )
+    reason = scan_stats.get("reason")
+    if reason:
+        detail = reason
+    else:
+        detail = (
+            f"prop bot scanned {scan_stats.get('events', 0)} events, "
+            f"{scan_stats.get('parsed_props', 0)} parsed props, "
+            f"{scan_stats.get('qualified_groups', 0)} sharp markets"
+        )
     meta = {}
     near_miss_summary = _near_miss_summary(near_misses)
     if near_miss_summary:
