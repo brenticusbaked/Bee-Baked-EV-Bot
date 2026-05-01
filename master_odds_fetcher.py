@@ -21,7 +21,7 @@ PRIMARY_CONFIG = {
 SECONDARY_CONFIG = {
     "basketball_nba": "h2h,totals",
     "icehockey_nhl": "h2h",
-    "baseball_mlb": "h2h_1st_half",
+    "baseball_mlb": "h2h_1st_5_innings",
 }
 
 # Tertiary key expands the scan into totals and MLB run-line style markets

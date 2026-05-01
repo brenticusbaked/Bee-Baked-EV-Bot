@@ -37,7 +37,7 @@ def get_best_f5_moneyline(target_team):
             if bookmaker["key"] == "pinnacle":
                 continue
             for market in bookmaker.get("markets", []):
-                if market["key"] not in {"h2h_1st_half", "h2h"}:
+                if market["key"] not in {"h2h_1st_5_innings", "h2h_1st_half", "h2h"}:
                     continue
                 for outcome in market["outcomes"]:
                     if target_team in outcome["name"]:

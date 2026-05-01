@@ -58,7 +58,7 @@ def run_clv_tracker():
         if market_key in {"model_nba_spread", "model_nhl_puckline"}:
             candidate_keys.append("spreads")
         if market_key == "model_mlb_f5":
-            candidate_keys.append("h2h_1st_half")
+            candidate_keys.extend(["h2h_1st_5_innings", "h2h_1st_half"])
 
         # Standard market key aliases
         if market_key in {"moneyline", "ml"}:
