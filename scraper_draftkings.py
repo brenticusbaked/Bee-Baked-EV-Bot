@@ -96,18 +96,24 @@ async def scrape_dk():
         try:
             print("DraftKings: Navigating to NBA lines...")
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                async with page.expect_response(
+                    lambda r: "eventgroups" in r.url.lower() and ("api" in r.url.lower() or "sites" in r.url.lower()),
+                    timeout=15000,
+                ) as response_info:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                response = await response_info.value
+                api_data = await response.json()
             except Exception:
                 print("DraftKings navigation timeout caught gracefully. Checking for API data anyway...")
-
-            try:
-                response = await page.wait_for_response(
-                    lambda r: "eventgroups" in r.url.lower() and ("api" in r.url.lower() or "sites" in r.url.lower()),
-                    timeout=8000,
-                )
-                api_data = await response.json()
-            except Exception as exc:
-                print(f"DraftKings API wait failed: {exc}")
+                try:
+                    await page.reload(wait_until="domcontentloaded", timeout=15000)
+                    content = await page.content()
+                    if "eventGroup" in content or "eventgroup" in content:
+                        print("DraftKings page loaded but API response was not captured directly.")
+                except Exception:
+                    pass
+            if not api_data:
+                print("DraftKings API response was not captured during navigation.")
         finally:
             await browser.close()
 

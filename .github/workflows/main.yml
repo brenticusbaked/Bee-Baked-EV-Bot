@@ -35,6 +35,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           DISCORD_INJURY_WEBHOOK_URL: ${{ secrets.DISCORD_INJURY_WEBHOOK_URL }}
+          ENABLE_SGO_GRADER: "false"
           
           # --- PROXY AUTHENTICATION ---
           PROXY_LIST: ${{ secrets.PROXY_LIST }}

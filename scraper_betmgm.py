@@ -50,36 +50,26 @@ def scrape_betmgm():
                 ),
             )
             page = context.new_page()
-
-            def handle_response(response):
-                nonlocal data
-                if "api/v1/fixtures" in response.url and "competitionId=6004" in response.url:
-                    try:
-                        response_json = response.json()
-                        if "fixtures" in response_json:
-                            data = response_json
-                    except Exception:
-                        pass
-
-            page.on("response", handle_response)
-
             try:
-                page.goto(
-                    "https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004",
-                    wait_until="domcontentloaded",
-                    timeout=25000,
-                )
+                with page.expect_response(
+                    lambda response: "api/v1/fixtures" in response.url and "competitionId=6004" in response.url,
+                    timeout=15000,
+                ) as response_info:
+                    page.goto(
+                        "https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004",
+                        wait_until="domcontentloaded",
+                        timeout=25000,
+                    )
+                response_json = response_info.value.json()
+                if "fixtures" in response_json:
+                    data = response_json
             except Exception:
                 print("BetMGM navigation timeout caught gracefully. Checking for data anyway...")
-
-            try:
                 if not data:
-                    page.wait_for_response(
-                        lambda response: "api/v1/fixtures" in response.url and "competitionId=6004" in response.url,
-                        timeout=5000,
-                    )
-            except Exception:
-                pass
+                    try:
+                        page.reload(wait_until="domcontentloaded", timeout=15000)
+                    except Exception:
+                        pass
 
             browser.close()
 

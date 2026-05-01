@@ -40,21 +40,21 @@ async def run_fip_scraper():
         
         try:
             url = f"https://www.fangraphs.com/leaders/major-league?pos=all&stats=pit&lg=all&qual=0&type=8&season={season}&month=0"
-            await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-        except Exception as e:
-            print(f"FanGraphs DOM timeout caught gracefully. Checking for intercepted API data...")
-            
-        try:
-            if not fg_data:
-                response = await page.wait_for_response(
-                    lambda res: "api/leaders/major-league/data" in res.url,
-                    timeout=5000,
-                )
-                json_response = await response.json()
-                if "data" in json_response:
-                    fg_data = json_response["data"]
+            async with page.expect_response(
+                lambda res: "api/leaders/major-league/data" in res.url,
+                timeout=15000,
+            ) as response_info:
+                await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            json_response = await response_info.value.json()
+            if "data" in json_response:
+                fg_data = json_response["data"]
         except Exception:
-            pass
+            print(f"FanGraphs DOM timeout caught gracefully. Checking for intercepted API data...")
+            if not fg_data:
+                try:
+                    await page.reload(wait_until="domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
             
         await browser.close()
 

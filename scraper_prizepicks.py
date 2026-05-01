@@ -46,26 +46,20 @@ def scrape_prizepicks():
                 )
             )
             page = context.new_page()
-
-            def handle_response(response):
-                nonlocal data
-                if "api.prizepicks.com/projections" in response.url and "league_id=7" in response.url:
-                    try:
-                        response_json = response.json()
-                        if "data" in response_json:
-                            data = response_json
-                    except Exception:
-                        pass
-
-            page.on("response", handle_response)
-            page.goto("https://app.prizepicks.com/board", wait_until="networkidle")
             try:
-                page.wait_for_response(
+                with page.expect_response(
                     lambda response: "api.prizepicks.com/projections" in response.url and "league_id=7" in response.url,
-                    timeout=6000,
-                )
+                    timeout=15000,
+                ) as response_info:
+                    page.goto("https://app.prizepicks.com/board", wait_until="domcontentloaded", timeout=25000)
+                response_json = response_info.value.json()
+                if "data" in response_json:
+                    data = response_json
             except Exception:
-                pass
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
             browser.close()
 
         if not data:

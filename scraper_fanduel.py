@@ -42,39 +42,27 @@ def scrape_fanduel():
                 )
             )
             page = context.new_page()
-
-            def handle_response(response):
-                nonlocal data
-                if "api/content-managed-page" in response.url and "eventTypeId=7522" in response.url:
+            try:
+                with page.expect_response(
+                    lambda response: "api/content-managed-page" in response.url and "eventTypeId=7522" in response.url,
+                    timeout=15000,
+                ) as response_info:
+                    page.goto("https://sportsbook.fanduel.com/basketball/nba", wait_until="domcontentloaded", timeout=25000)
+                response_json = response_info.value.json()
+                if "attachments" in response_json:
+                    data = response_json
+            except Exception:
+                print(f"FanDuel navigation timeout caught gracefully. Checking for data anyway...")
+                if not data:
                     try:
-                        response_json = response.json()
-                        if "attachments" in response_json:
-                            data = response_json
+                        page.reload(wait_until="domcontentloaded", timeout=15000)
                     except Exception:
                         pass
-
-            page.on("response", handle_response)
-            
-            # FIXED: Changed networkidle to domcontentloaded and wrapped in a try/except
-            # so FanDuel doesn't timeout and crash your bot!
-            try:
-                page.goto("https://sportsbook.fanduel.com/basketball/nba", wait_until="domcontentloaded", timeout=25000)
-            except Exception as e:
-                print(f"FanDuel navigation timeout caught gracefully. Checking for data anyway...")
-                
-            try:
-                if not data:
-                    page.wait_for_response(
-                        lambda response: "api/content-managed-page" in response.url and "eventTypeId=7522" in response.url,
-                        timeout=6000,
-                    )
-            except Exception:
-                pass
             browser.close()
 
         if not data:
             print("Could not intercept FanDuel API data via Playwright.")
-            return
+            return {"detail": "fanduel scrape no data", "count": 0, "label": "alerts"}
 
         current_lines = {}
         alerts = []
