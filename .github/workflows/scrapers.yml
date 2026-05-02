@@ -37,8 +37,8 @@ jobs:
           ENABLE_PYBASEBALL_FIP_SCRAPER: "false"
           ENABLE_DRAFTKINGS_SCRAPER: "false"
           ENABLE_BETMGM_SCRAPER: "false"
-          ENABLE_FANDUEL_SCRAPER: "false"
-          ENABLE_PRIZEPICKS_SCRAPER: "true"
+          ENABLE_FANDUEL_SCRAPER: "true"
+          ENABLE_PRIZEPICKS_SCRAPER: "false"
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
