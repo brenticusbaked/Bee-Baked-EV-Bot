@@ -75,7 +75,7 @@ def scrape_betmgm():
 
         if not data:
             print("Could not intercept BetMGM API data via Playwright.")
-            return {"detail": "betmgm scrape complete", "count": 0, "label": "alerts"}
+            return {"detail": "betmgm scrape no data", "count": 0, "label": "alerts"}
 
         current_lines = {}
         alerts = []

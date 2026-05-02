@@ -30,6 +30,6 @@ jobs:
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
-          SGO_GRADER_MAX_FETCHES: "12"
-          SGO_GRADER_FETCH_DELAY_SECONDS: "1.5"
+          SGO_GRADER_MAX_FETCHES: "2"
+          SGO_GRADER_FETCH_DELAY_SECONDS: "2.5"
         run: python sgo_grader.py

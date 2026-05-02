@@ -1,6 +1,8 @@
 import os
 import time
 
+import requests
+
 from db_manager import get_ungraded_past_bets, update_result
 from services.bet_logic import grade_game_bet, normalize_text, parse_selection
 from services.http_client import post_discord, request
@@ -15,7 +17,7 @@ SGO_GRADER_FETCH_DELAY_SECONDS = float(os.getenv("SGO_GRADER_FETCH_DELAY_SECONDS
 
 def get_sgo_results(league_id, date_str):
     if not SGO_API_KEY:
-        return {"players": {}, "events": []}
+        return {"players": {}, "events": [], "rate_limited": False}
 
     url = "https://api.sportsgameodds.com/v2/events"
     params = {"apiKey": SGO_API_KEY, "leagueID": league_id, "date": date_str}
@@ -30,16 +32,22 @@ def get_sgo_results(league_id, date_str):
             events = data
         else:
             print(f"SGO API returned unexpected format for {league_id} on {date_str}: {data}")
-            return {"players": {}, "events": []}
+            return {"players": {}, "events": [], "rate_limited": False}
 
         players = {}
         for event in events:
             for player_name, player_stats in event.get("boxscore", {}).items():
                 players[normalize_text(player_name)] = player_stats
-        return {"players": players, "events": events}
+        return {"players": players, "events": events, "rate_limited": False}
+    except requests.HTTPError as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        print(f"SGO fetch failed for {league_id} on {date_str}: {exc}")
+        if status_code == 429:
+            return {"players": {}, "events": [], "rate_limited": True}
+        return {"players": {}, "events": [], "rate_limited": False}
     except Exception as exc:
         print(f"SGO fetch failed for {league_id} on {date_str}: {exc}")
-        return {"players": {}, "events": []}
+        return {"players": {}, "events": [], "rate_limited": False}
 
 
 def _match_event_by_name(events, matchup: str):
@@ -82,6 +90,7 @@ def run_grader():
     profit = 0.0
     cache = {}
     cache_fetches = 0
+    hit_rate_limit = False
     league_map = {"basketball_nba": "NBA", "icehockey_nhl": "NHL", "baseball_mlb": "MLB"}
 
     print(f"Grading {len(ungraded_bets)} bets...")
@@ -97,6 +106,9 @@ def run_grader():
                 continue
             cache[cache_key] = get_sgo_results(league, bet["date"])
             cache_fetches += 1
+            if cache[cache_key].get("rate_limited"):
+                hit_rate_limit = True
+                break
             time.sleep(SGO_GRADER_FETCH_DELAY_SECONDS)
 
         data = cache[cache_key]
@@ -125,6 +137,9 @@ def run_grader():
         profit += profit_for_result(bet.get("odds", 0), bet.get("units", 0), graded_result)
         results_found += 1
 
+    if hit_rate_limit:
+        print("SGO grader stopped early after a rate-limit response.")
+
     if results_found > 0:
         post_discord(
             {
@@ -143,7 +158,10 @@ def run_grader():
         )
 
     return {
-        "detail": f"grading complete ({cache_fetches} SGO date fetches)",
+        "detail": (
+            f"grading complete ({cache_fetches} SGO date fetches)"
+            + (" | stopped on rate limit" if hit_rate_limit else "")
+        ),
         "count": results_found,
         "label": "graded",
     }

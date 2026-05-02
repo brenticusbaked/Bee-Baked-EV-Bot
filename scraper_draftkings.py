@@ -119,7 +119,7 @@ async def scrape_dk():
 
     if not api_data:
         print("Could not intercept DraftKings API data via Playwright.")
-        return {"detail": "draftkings scrape complete", "count": 0, "label": "alerts"}
+        return {"detail": "draftkings scrape no data", "count": 0, "label": "alerts"}
 
     try:
         current_lines = _parse_spread_lines(api_data)
