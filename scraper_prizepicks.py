@@ -1,5 +1,6 @@
 import os
 import random
+import json
 from typing import Dict
 
 from playwright.sync_api import sync_playwright
@@ -45,39 +46,35 @@ def _fetch_prizepicks_data() -> dict:
             ),
             locale="en-US",
         )
+        context.set_extra_http_headers(
+            {
+                "Accept": "application/json",
+                "Origin": "https://app.prizepicks.com",
+                "Referer": "https://app.prizepicks.com/",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+        )
         page = context.new_page()
         try:
             page.goto("https://app.prizepicks.com/board", wait_until="domcontentloaded", timeout=25000)
             page.wait_for_timeout(3000)
-            payload = page.evaluate(
-                """async ({ leagueId }) => {
-                    const response = await fetch(
-                        `https://api.prizepicks.com/projections?league_id=${leagueId}&per_page=250&single_stat=true`,
-                        {
-                            method: "GET",
-                            headers: {
-                                "accept": "application/json",
-                                "x-requested-with": "XMLHttpRequest"
-                            },
-                            credentials: "include"
-                        }
-                    );
-                    const text = await response.text();
-                    return {
-                        ok: response.ok,
-                        status: response.status,
-                        text
-                    };
-                }""",
-                {"leagueId": PRIZEPICKS_LEAGUE_ID},
+            api_url = (
+                "https://api.prizepicks.com/projections"
+                f"?league_id={PRIZEPICKS_LEAGUE_ID}&per_page=250&single_stat=true"
             )
+            response = page.goto(api_url, wait_until="domcontentloaded", timeout=25000)
+            if response is None:
+                raise RuntimeError("PrizePicks API navigation returned no response")
+            payload = {
+                "ok": response.ok,
+                "status": response.status,
+                "text": response.text(),
+            }
         finally:
             browser.close()
 
     if not payload.get("ok"):
         raise RuntimeError(f"PrizePicks browser-context fetch failed with status {payload.get('status')}")
-
-    import json
 
     return json.loads(payload.get("text", "{}"))
 
