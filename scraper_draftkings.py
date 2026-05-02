@@ -22,7 +22,6 @@ USER_AGENT = os.getenv(
 DK_PAGE_URL = "https://sportsbook.draftkings.com/leagues/basketball/nba"
 DK_DIRECT_URLS = [
     "https://sportsbook.draftkings.com/sites/US-NJ-SB/api/v1/eventgroup/103/full?format=json",
-    "https://sportsbook-nash-usnj.draftkings.com/sites/US-NJ-SB/api/v1/eventgroups/103?format=json",
 ]
 
 
@@ -94,6 +93,23 @@ def _decode_possible_json(text: str):
             return json.loads(candidate)
         except Exception:
             continue
+    return None
+
+
+def _extract_embedded_payload(html: str):
+    patterns = [
+        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+        r'window\.__NEXT_DATA__\s*=\s*({.*?});',
+        r'window\.__INITIAL_STATE__\s*=\s*({.*?});',
+        r'window\.__NUXT__\s*=\s*({.*?});',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.DOTALL | re.IGNORECASE)
+        if not match:
+            continue
+        payload = _decode_possible_json(match.group(1))
+        if _looks_like_direct_dk_payload(payload):
+            return _normalize_direct_dk_payload(payload)
     return None
 
 
@@ -213,8 +229,21 @@ async def _fetch_dk_playwright_payload():
                 try:
                     await page.reload(wait_until="domcontentloaded", timeout=15000)
                     content = await page.content()
-                    if "eventGroup" in content or "eventgroup" in content:
+                    embedded_payload = _extract_embedded_payload(content)
+                    if embedded_payload:
+                        print("DraftKings payload captured from embedded page state.")
+                        api_data = embedded_payload
+                    elif "eventGroup" in content or "eventgroup" in content:
                         print("DraftKings page loaded but API response was not captured directly.")
+                except Exception:
+                    pass
+            if not api_data:
+                try:
+                    content = await page.content()
+                    embedded_payload = _extract_embedded_payload(content)
+                    if embedded_payload:
+                        print("DraftKings payload captured from embedded page state.")
+                        api_data = embedded_payload
                 except Exception:
                     pass
             if not api_data:
