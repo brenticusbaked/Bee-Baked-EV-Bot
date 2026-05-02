@@ -5,7 +5,7 @@ from typing import Dict, Iterable, List, Optional
 from playwright.async_api import async_playwright
 
 from db_manager import load_tracker_state, save_tracker_state
-from services.http_client import post_discord
+from services.http_client import post_discord, request
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -17,6 +17,11 @@ USER_AGENT = os.getenv(
     "USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 )
+DK_PAGE_URL = "https://sportsbook.draftkings.com/leagues/basketball/nba"
+DK_DIRECT_URLS = [
+    "https://sportsbook.draftkings.com/sites/US-NJ-SB/api/v1/eventgroup/103/full?format=json",
+    "https://sportsbook-nash-usnj.draftkings.com/sites/US-NJ-SB/api/v1/eventgroups/103?format=json",
+]
 
 
 def load_previous_lines():
@@ -52,7 +57,25 @@ def _build_event_name_map(payload: dict) -> Dict[str, str]:
     return event_name_map
 
 
+def _looks_like_direct_dk_payload(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    events = payload.get("events")
+    offerings = payload.get("eventGroup") or payload.get("offerCategories") or payload.get("offers")
+    return isinstance(events, list) and bool(events) and offerings is not None
+
+
+def _normalize_direct_dk_payload(payload: dict) -> dict:
+    if "eventGroup" in payload or "eventgroup" in payload:
+        return payload
+
+    offer_categories = payload.get("offerCategories", [])
+    events = payload.get("events", [])
+    return {"eventGroup": {"events": events, "offerCategories": offer_categories}}
+
+
 def _parse_spread_lines(payload: dict) -> Dict[str, Dict[str, object]]:
+    payload = _normalize_direct_dk_payload(payload)
     event_name_map = _build_event_name_map(payload)
     current_lines: Dict[str, Dict[str, object]] = {}
 
@@ -76,8 +99,21 @@ def _parse_spread_lines(payload: dict) -> Dict[str, Dict[str, object]]:
     return current_lines
 
 
-async def scrape_dk():
-    url = "https://sportsbook.draftkings.com/leagues/basketball/nba"
+def _fetch_dk_direct_payload():
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT, "Referer": DK_PAGE_URL}
+    for url in DK_DIRECT_URLS:
+        try:
+            response = request("GET", url, headers=headers, timeout=20, retry_on_429=False)
+            payload = response.json()
+            if _looks_like_direct_dk_payload(payload):
+                print(f"DraftKings payload captured via direct endpoint: {url}")
+                return _normalize_direct_dk_payload(payload)
+        except Exception as exc:
+            print(f"DraftKings direct fetch failed for {url}: {exc}")
+    return None
+
+
+async def _fetch_dk_playwright_payload():
     api_data = None
 
     async with async_playwright() as playwright:
@@ -100,7 +136,7 @@ async def scrape_dk():
                     lambda r: "eventgroups" in r.url.lower() and ("api" in r.url.lower() or "sites" in r.url.lower()),
                     timeout=15000,
                 ) as response_info:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                    await page.goto(DK_PAGE_URL, wait_until="domcontentloaded", timeout=25000)
                 response = await response_info.value
                 api_data = await response.json()
             except Exception:
@@ -117,12 +153,23 @@ async def scrape_dk():
         finally:
             await browser.close()
 
+    return api_data
+
+
+async def scrape_dk():
+    api_data = _fetch_dk_direct_payload()
     if not api_data:
-        print("Could not intercept DraftKings API data via Playwright.")
+        api_data = await _fetch_dk_playwright_payload()
+
+    if not api_data:
+        print("Could not capture DraftKings API data.")
         return {"detail": "draftkings scrape no data", "count": 0, "label": "alerts"}
 
     try:
         current_lines = _parse_spread_lines(api_data)
+        if not current_lines:
+            return {"detail": "draftkings scrape parsed no spread lines", "count": 0, "label": "alerts"}
+
         previous_lines = load_previous_lines()
         alerts: List[str] = []
 
@@ -147,7 +194,11 @@ async def scrape_dk():
         save_current_lines(current_lines)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 15844367}]}, webhook_url=DISCORD_WEBHOOK_URL)
-        return {"detail": "draftkings scrape complete", "count": len(alerts), "label": "alerts"}
+        return {
+            "detail": f"draftkings scrape complete ({len(current_lines)} lines tracked)",
+            "count": len(alerts),
+            "label": "alerts",
+        }
     except Exception as exc:
         print(f"DraftKings Scrape Error: {exc}")
         return {"detail": f"draftkings scrape error: {exc}", "count": 0, "label": "alerts"}
