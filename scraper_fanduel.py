@@ -7,6 +7,7 @@ from typing import Dict, Optional
 from playwright.sync_api import sync_playwright
 
 from db_manager import load_tracker_state, save_tracker_state
+from services.http_client import request
 from services.http_client import post_discord
 
 
@@ -18,6 +19,8 @@ PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 FANDUEL_URL = "https://sportsbook.fanduel.com/basketball/nba"
+FANDUEL_CONTENT_API = "https://sbapi.nj.sportsbook.fanduel.com/api/content-managed-page"
+FANDUEL_AK = os.getenv("FANDUEL_AK", "FhMFpcPWXMeyZxOx")
 FANDUEL_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -145,6 +148,42 @@ def _extract_payload_from_page(page):
     return captured["data"], captured["url"]
 
 
+def _fetch_fanduel_direct_payload():
+    params = {
+        "currencyCode": "USD",
+        "exchangeLocale": "en_US",
+        "includePrices": "true",
+        "language": "en",
+        "regionCode": "NAMERICA",
+        "timezone": "America/Chicago",
+        "_ak": FANDUEL_AK,
+        "page": "CUSTOM",
+        "customPageId": "nba",
+    }
+    headers = {
+        "Accept": "application/json",
+        "Referer": "https://sportsbook.fanduel.com/",
+        "User-Agent": FANDUEL_USER_AGENT,
+    }
+
+    try:
+        response = request(
+            "GET",
+            FANDUEL_CONTENT_API,
+            params=params,
+            headers=headers,
+            timeout=20,
+            retry_on_429=False,
+        )
+        payload = response.json()
+        if _looks_like_fanduel_nba_payload(FANDUEL_CONTENT_API, payload):
+            print("FanDuel payload captured via direct content-managed endpoint.")
+            return payload
+    except Exception as exc:
+        print(f"FanDuel direct content-managed fetch failed: {exc}")
+    return None
+
+
 def _extract_embedded_payload(html: str):
     patterns = [
         r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
@@ -168,6 +207,10 @@ def _extract_embedded_payload(html: str):
 
 
 def _fetch_fanduel_payload():
+    direct_payload = _fetch_fanduel_direct_payload()
+    if direct_payload:
+        return direct_payload
+
     with sync_playwright() as playwright:
         for proxy_ip in _proxy_candidates():
             proxy_settings = _proxy_settings(proxy_ip)
