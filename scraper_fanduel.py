@@ -1,5 +1,7 @@
 import os
 import random
+import json
+import re
 from typing import Dict, Optional
 
 from playwright.sync_api import sync_playwright
@@ -130,7 +132,39 @@ def _extract_payload_from_page(page):
         except Exception:
             pass
 
+    if captured["data"] is None:
+        try:
+            html = page.content()
+            embedded = _extract_embedded_payload(html)
+            if embedded:
+                captured["data"] = embedded
+                captured["url"] = "embedded_page_state"
+        except Exception:
+            pass
+
     return captured["data"], captured["url"]
+
+
+def _extract_embedded_payload(html: str):
+    patterns = [
+        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+        r'window\.__NEXT_DATA__\s*=\s*({.*?});',
+        r'window\.__INITIAL_STATE__\s*=\s*({.*?});',
+        r'window\.__NUXT__\s*=\s*({.*?});',
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.DOTALL | re.IGNORECASE)
+        if not match:
+            continue
+        raw = match.group(1).strip()
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            continue
+        if _looks_like_fanduel_nba_payload("embedded_state", payload):
+            return payload
+    return None
 
 
 def _fetch_fanduel_payload():
