@@ -1,6 +1,7 @@
 import asyncio
 import os
 import json
+import re
 from typing import Dict, Iterable, List, Optional
 
 from playwright.async_api import async_playwright
@@ -75,6 +76,27 @@ def _normalize_direct_dk_payload(payload: dict) -> dict:
     return {"eventGroup": {"events": events, "offerCategories": offer_categories}}
 
 
+def _decode_possible_json(text: str):
+    text = (text or "").strip()
+    if not text:
+        return None
+
+    candidates = [text]
+    pre_match = re.search(r"<pre[^>]*>\s*(\{.*\})\s*</pre>", text, flags=re.DOTALL | re.IGNORECASE)
+    if pre_match:
+        candidates.append(pre_match.group(1))
+    next_data_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', text, flags=re.DOTALL | re.IGNORECASE)
+    if next_data_match:
+        candidates.append(next_data_match.group(1))
+
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    return None
+
+
 def _parse_spread_lines(payload: dict) -> Dict[str, Dict[str, object]]:
     payload = _normalize_direct_dk_payload(payload)
     event_name_map = _build_event_name_map(payload)
@@ -105,7 +127,11 @@ def _fetch_dk_direct_payload():
     for url in DK_DIRECT_URLS:
         try:
             response = request("GET", url, headers=headers, timeout=20, retry_on_429=False)
-            payload = response.json()
+            payload = None
+            try:
+                payload = response.json()
+            except Exception:
+                payload = _decode_possible_json(response.text)
             if _looks_like_direct_dk_payload(payload):
                 print(f"DraftKings payload captured via direct endpoint: {url}")
                 return _normalize_direct_dk_payload(payload)
@@ -144,7 +170,7 @@ async def _fetch_dk_browser_direct_payload():
                     if response is None:
                         continue
                     text = await response.text()
-                    payload = json.loads(text)
+                    payload = _decode_possible_json(text)
                     if _looks_like_direct_dk_payload(payload):
                         print(f"DraftKings payload captured via browser direct endpoint: {url}")
                         return _normalize_direct_dk_payload(payload)
