@@ -18,6 +18,7 @@ PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
+MAX_PROXY_ATTEMPTS = int(os.getenv("SCRAPER_PROXY_ATTEMPTS", "3"))
 BETMGM_URL = "https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -38,7 +39,7 @@ def _proxy_candidates():
         return [None]
     shuffled = PROXY_IPS[:]
     random.shuffle(shuffled)
-    return [None] + shuffled
+    return [None] + shuffled[: max(MAX_PROXY_ATTEMPTS - 1, 0)]
 
 
 def _proxy_settings(proxy_ip: Optional[str]):

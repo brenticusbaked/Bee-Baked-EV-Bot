@@ -18,6 +18,7 @@ PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
+MAX_PROXY_ATTEMPTS = int(os.getenv("SCRAPER_PROXY_ATTEMPTS", "3"))
 FANDUEL_URL = "https://sportsbook.fanduel.com/basketball/nba"
 FANDUEL_CONTENT_API = "https://sbapi.nj.sportsbook.fanduel.com/api/content-managed-page"
 FANDUEL_AK = os.getenv("FANDUEL_AK", "FhMFpcPWXMeyZxOx")
@@ -40,7 +41,7 @@ def _proxy_candidates():
         return [None]
     shuffled = PROXY_IPS[:]
     random.shuffle(shuffled)
-    return [None] + shuffled
+    return [None] + shuffled[: max(MAX_PROXY_ATTEMPTS - 1, 0)]
 
 
 def _proxy_settings(proxy_ip: Optional[str]):
