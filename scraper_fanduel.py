@@ -49,10 +49,10 @@ def _proxy_settings(proxy_ip: Optional[str]):
 
 
 def _looks_like_fanduel_nba_payload(response_url: str, payload: dict) -> bool:
-    if "attachments" not in payload:
+    container = _find_market_container(payload)
+    if not container:
         return False
-    attachments = payload.get("attachments", {})
-    markets = attachments.get("markets", {})
+    markets = container.get("markets", {})
     if not isinstance(markets, dict) or not markets:
         return False
     if "basketball" not in response_url.lower() and "nba" not in response_url.lower() and "eventTypeId=7522" not in response_url:
@@ -66,6 +66,33 @@ def _looks_like_fanduel_nba_payload(response_url: str, payload: dict) -> bool:
     return True
 
 
+def _find_market_container(payload):
+    if isinstance(payload, dict):
+        attachments = payload.get("attachments")
+        if isinstance(attachments, dict):
+            markets = attachments.get("markets")
+            events = attachments.get("events")
+            if isinstance(markets, dict) and isinstance(events, dict):
+                return attachments
+
+        markets = payload.get("markets")
+        events = payload.get("events")
+        if isinstance(markets, dict) and isinstance(events, dict):
+            return payload
+
+        for value in payload.values():
+            found = _find_market_container(value)
+            if found:
+                return found
+
+    if isinstance(payload, list):
+        for item in payload:
+            found = _find_market_container(item)
+            if found:
+                return found
+    return None
+
+
 def _extract_payload_from_page(page):
     captured = {"data": None, "url": None}
 
@@ -76,8 +103,6 @@ def _extract_payload_from_page(page):
         if "json" not in content_type and "javascript" not in content_type:
             return
         url = response.url
-        if "fanduel" not in url.lower() and "content-managed-page" not in url.lower():
-            return
         try:
             payload = response.json()
         except Exception:
@@ -136,9 +161,9 @@ def _fetch_fanduel_payload():
 
 def _build_current_lines(data: dict) -> Dict[str, Dict[str, object]]:
     current_lines = {}
-    attachments = data.get("attachments", {})
-    markets = attachments.get("markets", {})
-    events = attachments.get("events", {})
+    container = _find_market_container(data) or {}
+    markets = container.get("markets", {})
+    events = container.get("events", {})
 
     for market_data in markets.values():
         if not isinstance(market_data, dict):
