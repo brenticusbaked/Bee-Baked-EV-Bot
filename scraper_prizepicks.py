@@ -58,23 +58,45 @@ def _fetch_prizepicks_data() -> dict:
         try:
             page.goto("https://app.prizepicks.com/board", wait_until="domcontentloaded", timeout=25000)
             page.wait_for_timeout(3000)
-            api_url = (
-                "https://api.prizepicks.com/projections"
-                f"?league_id={PRIZEPICKS_LEAGUE_ID}&per_page=250&single_stat=true"
-            )
-            response = page.goto(api_url, wait_until="domcontentloaded", timeout=25000)
-            if response is None:
+            payload = None
+            api_urls = [
+                (
+                    "https://api.prizepicks.com/projections"
+                    f"?league_id={PRIZEPICKS_LEAGUE_ID}&per_page=250&single_stat=true&game_mode=pickem"
+                ),
+                (
+                    "https://api.prizepicks.com/v1/projections"
+                    f"?league_id={PRIZEPICKS_LEAGUE_ID}&per_page=250&single_stat=true&game_mode=pickem"
+                ),
+                (
+                    "https://api.prizepicks.com/projections"
+                    f"?league_id={PRIZEPICKS_LEAGUE_ID}&per_page=250&single_stat=true"
+                ),
+            ]
+            for api_url in api_urls:
+                response = page.goto(api_url, wait_until="domcontentloaded", timeout=25000)
+                if response is None:
+                    continue
+                candidate = {
+                    "ok": response.ok,
+                    "status": response.status,
+                    "text": response.text(),
+                    "url": api_url,
+                }
+                if candidate["ok"]:
+                    payload = candidate
+                    break
+                payload = candidate
+            if not payload:
                 raise RuntimeError("PrizePicks API navigation returned no response")
-            payload = {
-                "ok": response.ok,
-                "status": response.status,
-                "text": response.text(),
-            }
         finally:
             browser.close()
 
     if not payload.get("ok"):
-        raise RuntimeError(f"PrizePicks browser-context fetch failed with status {payload.get('status')}")
+        raise RuntimeError(
+            f"PrizePicks browser-context fetch failed with status {payload.get('status')} "
+            f"for {payload.get('url')}"
+        )
 
     return json.loads(payload.get("text", "{}"))
 
