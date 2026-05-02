@@ -34,9 +34,10 @@ jobs:
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SCRAPER_PROXY_ATTEMPTS: "2"
           ENABLE_PYBASEBALL_FIP_SCRAPER: "false"
           ENABLE_DRAFTKINGS_SCRAPER: "false"
-          ENABLE_BETMGM_SCRAPER: "true"
+          ENABLE_BETMGM_SCRAPER: "false"
           ENABLE_FANDUEL_SCRAPER: "true"
           ENABLE_PRIZEPICKS_SCRAPER: "false"
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
