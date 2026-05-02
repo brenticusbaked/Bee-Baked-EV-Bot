@@ -1,24 +1,21 @@
 import os
+import random
 from typing import Dict
 
+from playwright.sync_api import sync_playwright
+
 from db_manager import load_tracker_state, save_tracker_state
-from services.http_client import post_discord, request
+from services.http_client import post_discord
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 TRACKER_FILE = "prizepicks_lines.json"
 STATE_KEY = "tracker_prizepicks_nba"
 PRIZEPICKS_LEAGUE_ID = os.getenv("PRIZEPICKS_NBA_LEAGUE_ID", "7")
-PRIZEPICKS_URL = "https://api.prizepicks.com/projections"
-PRIZEPICKS_HEADERS = {
-    "Accept": "application/json",
-    "Origin": "https://app.prizepicks.com",
-    "Referer": "https://app.prizepicks.com/",
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
-}
+PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
+RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
+PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 
 
 def load_previous_lines():
@@ -30,15 +27,59 @@ def save_current_lines(lines):
 
 
 def _fetch_prizepicks_data() -> dict:
-    response = request(
-        "GET",
-        PRIZEPICKS_URL,
-        params={"league_id": PRIZEPICKS_LEAGUE_ID, "per_page": 250, "single_stat": "true"},
-        headers=PRIZEPICKS_HEADERS,
-        timeout=20,
-        retry_on_429=False,
-    )
-    return response.json()
+    with sync_playwright() as playwright:
+        proxy_settings = None
+        if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
+            chosen_ip = random.choice(PROXY_IPS)
+            proxy_settings = {
+                "server": f"http://{chosen_ip}",
+                "username": PROXY_USERNAME,
+                "password": PROXY_PASSWORD,
+            }
+
+        browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
+        )
+        page = context.new_page()
+        try:
+            page.goto("https://app.prizepicks.com/board", wait_until="domcontentloaded", timeout=25000)
+            page.wait_for_timeout(3000)
+            payload = page.evaluate(
+                """async ({ leagueId }) => {
+                    const response = await fetch(
+                        `https://api.prizepicks.com/projections?league_id=${leagueId}&per_page=250&single_stat=true`,
+                        {
+                            method: "GET",
+                            headers: {
+                                "accept": "application/json",
+                                "x-requested-with": "XMLHttpRequest"
+                            },
+                            credentials: "include"
+                        }
+                    );
+                    const text = await response.text();
+                    return {
+                        ok: response.ok,
+                        status: response.status,
+                        text
+                    };
+                }""",
+                {"leagueId": PRIZEPICKS_LEAGUE_ID},
+            )
+        finally:
+            browser.close()
+
+    if not payload.get("ok"):
+        raise RuntimeError(f"PrizePicks browser-context fetch failed with status {payload.get('status')}")
+
+    import json
+
+    return json.loads(payload.get("text", "{}"))
 
 
 def _player_map(payload: dict) -> Dict[str, str]:
@@ -53,11 +94,11 @@ def scrape_prizepicks():
     try:
         data = _fetch_prizepicks_data()
     except Exception as exc:
-        print(f"PrizePicks direct fetch failed: {exc}")
+        print(f"PrizePicks browser-context fetch failed: {exc}")
         return {"detail": f"prizepicks scrape error: {exc}", "count": 0, "label": "alerts"}
 
     if "data" not in data:
-        print("PrizePicks direct fetch returned no projection payload.")
+        print("PrizePicks fetch returned no projection payload.")
         return {"detail": "prizepicks scrape no data", "count": 0, "label": "alerts"}
 
     current_lines = {}
