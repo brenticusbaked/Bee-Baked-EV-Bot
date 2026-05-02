@@ -1,5 +1,6 @@
 import asyncio
 import os
+import json
 from typing import Dict, Iterable, List, Optional
 
 from playwright.async_api import async_playwright
@@ -113,6 +114,48 @@ def _fetch_dk_direct_payload():
     return None
 
 
+async def _fetch_dk_browser_direct_payload():
+    async with async_playwright() as playwright:
+        proxy_settings = None
+        if PROXY_USERNAME and PROXY_PASSWORD:
+            proxy_settings = {
+                "server": "http://p.webshare.io:80",
+                "username": PROXY_USERNAME,
+                "password": PROXY_PASSWORD,
+            }
+
+        browser = await playwright.chromium.launch(headless=True, proxy=proxy_settings)
+        context = await browser.new_context(
+            user_agent=USER_AGENT,
+            extra_http_headers={
+                "Accept": "application/json",
+                "Referer": DK_PAGE_URL,
+            },
+        )
+        page = await context.new_page()
+
+        try:
+            await page.goto(DK_PAGE_URL, wait_until="domcontentloaded", timeout=25000)
+            await page.wait_for_timeout(1500)
+
+            for url in DK_DIRECT_URLS:
+                try:
+                    response = await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                    if response is None:
+                        continue
+                    text = await response.text()
+                    payload = json.loads(text)
+                    if _looks_like_direct_dk_payload(payload):
+                        print(f"DraftKings payload captured via browser direct endpoint: {url}")
+                        return _normalize_direct_dk_payload(payload)
+                except Exception as exc:
+                    print(f"DraftKings browser direct fetch failed for {url}: {exc}")
+        finally:
+            await browser.close()
+
+    return None
+
+
 async def _fetch_dk_playwright_payload():
     api_data = None
 
@@ -158,6 +201,8 @@ async def _fetch_dk_playwright_payload():
 
 async def scrape_dk():
     api_data = _fetch_dk_direct_payload()
+    if not api_data:
+        api_data = await _fetch_dk_browser_direct_payload()
     if not api_data:
         api_data = await _fetch_dk_playwright_payload()
 
