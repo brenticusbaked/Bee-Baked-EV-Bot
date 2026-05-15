@@ -58,6 +58,10 @@ def _proxy_candidates():
     return [None] + shuffled[: max(MAX_PROXY_ATTEMPTS - 1, 0)]
 
 
+def _browser_proxy_candidates():
+    return [proxy_ip for proxy_ip in _proxy_candidates() if proxy_ip]
+
+
 def _proxy_settings(proxy_ip: Optional[str]):
     if not proxy_ip:
         return None
@@ -368,7 +372,7 @@ def _extract_payload_from_page(page):
 
 def _fetch_betmgm_snapshot():
     with sync_playwright() as playwright:
-        for proxy_ip in _proxy_candidates():
+        for proxy_ip in _browser_proxy_candidates():
             proxy_settings = _proxy_settings(proxy_ip)
             proxy_label = proxy_ip or "direct"
             browser = None
@@ -384,6 +388,12 @@ def _fetch_betmgm_snapshot():
                 )
                 context.set_default_navigation_timeout(NAV_TIMEOUT_MS)
                 context.set_default_timeout(max(WAIT_MS, 3000))
+                context.set_extra_http_headers(
+                    {
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Referer": "https://www.betmgm.com/",
+                    }
+                )
                 page = context.new_page()
                 data, source_url, rendered_text = _extract_payload_from_page(page)
                 browser.close()
