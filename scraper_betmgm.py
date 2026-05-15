@@ -35,6 +35,7 @@ ENABLE_BROWSER_FALLBACK = os.getenv("BETMGM_ENABLE_BROWSER_FALLBACK", "true").st
 BETMGM_PREFERRED_STATE = os.getenv("BETMGM_PREFERRED_STATE", "ky").strip().lower()
 BETMGM_URL = "https://www.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_NBA_PATH = "/en/sports/basketball-7/betting/usa-9/nba-6004"
+BETMGM_API_COUNTRY = os.getenv("BETMGM_API_COUNTRY", "US").strip().upper()
 BETMGM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -292,6 +293,11 @@ def _preferred_betmgm_url() -> str:
     return f"https://{state}.betmgm.com{BETMGM_NBA_PATH}"
 
 
+def _preferred_betmgm_api_base() -> str:
+    state = BETMGM_PREFERRED_STATE or "ky"
+    return f"https://sportsapi.{state}.betmgm.com"
+
+
 def _normalized_betmgm_hosts(parsed) -> list[str]:
     labels = [label for label in parsed.netloc.lower().split(".") if label]
     if len(labels) < 2 or labels[-2:] != ["betmgm", "com"]:
@@ -341,6 +347,181 @@ def _candidate_betmgm_urls_from_html(html: str) -> list[str]:
         seen.add(candidate)
         deduped.append(candidate)
     return deduped[:8]
+
+
+def _translation_text(translations) -> str:
+    if isinstance(translations, list):
+        for item in translations:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("shortText")
+                if text:
+                    return str(text).strip()
+    if isinstance(translations, dict):
+        text = translations.get("text") or translations.get("shortText")
+        if text:
+            return str(text).strip()
+    if isinstance(translations, str):
+        return translations.strip()
+    return ""
+
+
+def _translation_sign(translations) -> str:
+    if isinstance(translations, list):
+        for item in translations:
+            if isinstance(item, dict):
+                sign = item.get("sign") or item.get("shortTextSign")
+                if sign:
+                    return str(sign).strip()
+    if isinstance(translations, dict):
+        sign = translations.get("sign") or translations.get("shortTextSign")
+        if sign:
+            return str(sign).strip()
+    return ""
+
+
+def _build_current_lines_from_api(fixtures: list[dict]) -> Dict[str, Dict[str, object]]:
+    current_lines: Dict[str, Dict[str, object]] = {}
+
+    for fixture in fixtures:
+        if not isinstance(fixture, dict):
+            continue
+        participants = fixture.get("participants") or []
+        if len(participants) < 2:
+            continue
+        participant_names = [_translation_text(participant.get("name")) for participant in participants if isinstance(participant, dict)]
+        if len(participant_names) < 2:
+            continue
+        matchup = f"{participant_names[0]} @ {participant_names[1]}"
+
+        fixture_ids = fixture.get("id") or []
+        event_id = None
+        if isinstance(fixture_ids, list):
+            for item in fixture_ids:
+                if isinstance(item, dict) and item.get("entityId") is not None:
+                    event_id = str(item.get("entityId"))
+                    break
+        if not event_id:
+            event_id = re.sub(r"[^a-z0-9]+", "_", matchup.lower()).strip("_")
+
+        for market in fixture.get("markets", []):
+            if not isinstance(market, dict):
+                continue
+            market_name = _translation_text(market.get("name")).lower()
+            market_type = str(market.get("marketType", "")).lower()
+            if "spread" not in market_name and "spread" not in market_type:
+                continue
+
+            market_value = market.get("value")
+            options = market.get("options") or []
+            for option in options:
+                if not isinstance(option, dict):
+                    continue
+                option_name = option.get("name")
+                team = _translation_text(option_name)
+                if not team:
+                    continue
+
+                sign = _translation_sign(option_name)
+                line_value = None
+                if market_value not in (None, ""):
+                    try:
+                        value_float = float(market_value)
+                        if sign in {"+", "-"}:
+                            line_value = f"{sign}{abs(value_float):.1f}".rstrip("0").rstrip(".")
+                            if "." not in line_value:
+                                line_value = f"{line_value}.0"
+                        else:
+                            line_value = f"{value_float:+.1f}".rstrip("0").rstrip(".")
+                            if "." not in line_value:
+                                line_value = f"{line_value}.0"
+                    except Exception:
+                        line_value = None
+
+                if line_value is None:
+                    continue
+
+                unique_key = f"{event_id}_{team.lower()}"
+                current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line_value}
+
+    return current_lines
+
+
+def _fetch_betmgm_api_lines() -> Dict[str, Dict[str, object]]:
+    headers = {
+        "Accept": "application/json",
+        "Referer": _preferred_betmgm_url(),
+        "User-Agent": BETMGM_USER_AGENT,
+    }
+    api_base = _preferred_betmgm_api_base()
+    request_kwargs = _request_proxy_kwargs(None)
+
+    try:
+        sports_response = request(
+            "GET",
+            f"{api_base}/offer/api/{BETMGM_API_COUNTRY}/sports",
+            headers=headers,
+            timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+            retry_on_429=False,
+            **request_kwargs,
+        )
+        sports_items = sports_response.json().get("items", [])
+        basketball_sport_id = None
+        for sport in sports_items:
+            if not isinstance(sport, dict):
+                continue
+            if _translation_text(sport.get("name")).lower() == "basketball":
+                basketball_sport_id = sport.get("id")
+                break
+        if basketball_sport_id is None:
+            print("BetMGM API did not return a Basketball sport id.")
+            return {}
+
+        competitions_response = request(
+            "GET",
+            f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/competitions",
+            headers=headers,
+            timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+            retry_on_429=False,
+            params={"language": "en"},
+            **request_kwargs,
+        )
+        competitions = competitions_response.json().get("items", [])
+        nba_competition_id = None
+        for competition in competitions:
+            if not isinstance(competition, dict):
+                continue
+            if _translation_text(competition.get("name")).lower() == "nba":
+                nba_competition_id = competition.get("id")
+                break
+        if nba_competition_id is None:
+            print("BetMGM API did not return an NBA competition id.")
+            return {}
+
+        fixtures_response = request(
+            "GET",
+            f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/fixtures",
+            headers=headers,
+            timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+            retry_on_429=False,
+            params={
+                "language": "en",
+                "competitionIds": nba_competition_id,
+                "onlyMainMarkets": "true",
+                "marketsFilterCriteria": "Visible",
+                "isInPlay": "false",
+            },
+            **request_kwargs,
+        )
+        fixtures = fixtures_response.json().get("items", [])
+        current_lines = _build_current_lines_from_api(fixtures)
+        if current_lines:
+            print(f"BetMGM lines parsed via sportsbook API on {api_base}.")
+            return current_lines
+        print(f"BetMGM sportsbook API returned fixtures but no spread lines on {api_base}.")
+    except Exception as exc:
+        print(f"BetMGM sportsbook API fetch failed: {exc}")
+
+    return {}
 
 
 def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
@@ -540,7 +721,9 @@ def _build_current_lines(data: dict) -> Dict[str, Dict[str, object]]:
 
 def scrape_betmgm():
     try:
-        current_lines = _fetch_betmgm_direct_lines()
+        current_lines = _fetch_betmgm_api_lines()
+        if not current_lines:
+            current_lines = _fetch_betmgm_direct_lines()
         if not current_lines and ENABLE_BROWSER_FALLBACK:
             print("BetMGM: trying proxied browser fallback...")
             data, rendered_text = _fetch_betmgm_snapshot()
