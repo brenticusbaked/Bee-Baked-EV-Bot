@@ -20,6 +20,7 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
+          pip install playwright-stealth==1.0.6
           playwright install chromium
 
       - name: Run BetMGM Scraper Test

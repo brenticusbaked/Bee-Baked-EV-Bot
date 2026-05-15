@@ -8,6 +8,10 @@ from typing import Dict, Optional
 from urllib.parse import quote, urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
+try:
+    from playwright_stealth import stealth_sync
+except Exception:  # pragma: no cover - optional dependency in some environments
+    stealth_sync = None
 
 from db_manager import load_tracker_state, save_tracker_state
 from services.http_client import post_discord, request
@@ -738,6 +742,8 @@ def _fetch_betmgm_snapshot():
                     context = browser.new_context(
                         ignore_https_errors=True,
                         user_agent=BETMGM_USER_AGENT,
+                        locale="en-US",
+                        timezone_id="America/Chicago",
                     )
                     context.set_default_navigation_timeout(NAV_TIMEOUT_MS)
                     context.set_default_timeout(max(WAIT_MS, 3000))
@@ -748,6 +754,11 @@ def _fetch_betmgm_snapshot():
                         }
                     )
                     page = context.new_page()
+                    if stealth_sync:
+                        try:
+                            stealth_sync(page)
+                        except Exception as exc:
+                            print(f"BetMGM stealth setup warning: {exc}")
                     data, source_url, rendered_text = _extract_payload_from_page(page, target_url)
                     browser.close()
                     if data:
