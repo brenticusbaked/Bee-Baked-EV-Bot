@@ -37,6 +37,7 @@ ENABLE_BROWSER_FALLBACK = os.getenv("BETMGM_ENABLE_BROWSER_FALLBACK", "true").st
     "on",
 }
 BETMGM_PREFERRED_STATE = os.getenv("BETMGM_PREFERRED_STATE", "ky").strip().lower()
+BETMGM_HOME_URL = "https://www.betmgm.com/"
 BETMGM_URL = "https://www.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_NBA_PATH = "/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_API_COUNTRY = os.getenv("BETMGM_API_COUNTRY", "US").strip().upper()
@@ -726,7 +727,7 @@ def _extract_payload_from_page(page, target_url: str):
 
 
 def _fetch_betmgm_snapshot():
-    target_urls = [BETMGM_URL]
+    target_urls = [BETMGM_HOME_URL]
     with sync_playwright() as playwright:
         for proxy_ip in _browser_proxy_candidates():
             proxy_settings = _proxy_settings(proxy_ip)
