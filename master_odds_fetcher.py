@@ -32,8 +32,11 @@ TERTIARY_CONFIG = {
     "baseball_mlb": "spreads,totals",
 }
 
-REGIONS = "us,eu"
-TARGET_BOOKS = "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks"
+REGIONS = os.getenv("ODDS_API_REGIONS", "us,eu")
+TARGET_BOOKS = os.getenv(
+    "ODDS_API_TARGET_BOOKS",
+    "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks",
+)
 
 
 def _credits_for_config(config: Dict[str, str]) -> int:

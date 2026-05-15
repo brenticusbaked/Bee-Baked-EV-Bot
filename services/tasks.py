@@ -84,7 +84,7 @@ def get_scraper_tasks() -> List[PipelineTask]:
         from scraper_draftkings import scrape_dk as scrape_draftkings
 
         tasks.append(PipelineTask(name="scraper_draftkings", func=scrape_draftkings))
-    if env_flag("ENABLE_BETMGM_SCRAPER", True):
+    if env_flag("ENABLE_BETMGM_SCRAPER", False):
         from scraper_betmgm import scrape_betmgm
 
         tasks.append(PipelineTask(name="scraper_betmgm", func=scrape_betmgm))

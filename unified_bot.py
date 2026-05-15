@@ -6,8 +6,8 @@ from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
 from utils.links import sportsbook_search_link
-from utils.odds import decimal_implied_probability, decimal_to_american, quarter_kelly_units
-from utils.thresholds import env_float
+from utils.odds import decimal_implied_probability, decimal_to_american, fair_probabilities_from_prices, quarter_kelly_units
+from utils.thresholds import env_float, env_int
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -21,6 +21,7 @@ ENABLE_NBA_TOTAL_ALERTS = os.getenv("ENABLE_NBA_TOTAL_ALERTS", "true").strip().l
 ENABLE_NHL_TOTAL_ALERTS = os.getenv("ENABLE_NHL_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_MLB_SPREAD_ALERTS = os.getenv("ENABLE_MLB_SPREAD_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_MLB_TOTAL_ALERTS = os.getenv("ENABLE_MLB_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVENT_MARKET", 3))
 
 
 def get_mobile_app_link(book_key, selection_id, event_id, matchup):
@@ -31,6 +32,10 @@ def get_mobile_app_link(book_key, selection_id, event_id, matchup):
 def calculate_edge(offered_price: float, sharp_price: float) -> float:
     fair_probability = decimal_implied_probability(sharp_price)
     return (offered_price * fair_probability) - 1.0
+
+
+def calculate_edge_from_probability(offered_price: float, fair_probability: float) -> float:
+    return (float(offered_price) * float(fair_probability)) - 1.0
 
 
 def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
@@ -117,17 +122,19 @@ def scan_markets():
                 if not sharp:
                     continue
 
-                best_edge = {"edge": 0.0, "score": 0.0, "bet": None, "sharp_price": None, "book_weight": 1.0}
+                fair_probabilities = fair_probabilities_from_prices(sharp)
+                candidates = []
                 for soft_bet in data["soft"]:
                     outcome_key = (
                         str(soft_bet["name"]).lower().strip(),
                         str(soft_bet.get("point", "")),
                     )
-                    if outcome_key not in sharp:
+                    fair_probability = fair_probabilities.get(outcome_key)
+                    if not fair_probability:
                         continue
 
-                    pinnacle_price = sharp[outcome_key]
-                    edge = calculate_edge(soft_bet["price"], pinnacle_price)
+                    fair_decimal = 1.0 / fair_probability
+                    edge = calculate_edge_from_probability(soft_bet["price"], fair_probability)
                     book_weight = book_weights.get(soft_bet["book"], 1.0)
                     weighted_score = edge * book_weight
 
@@ -143,61 +150,81 @@ def scan_markets():
                             }
                         )
 
-                    if edge >= market_threshold and weighted_score > best_edge["score"]:
-                        best_edge = {
-                            "edge": edge,
-                            "score": weighted_score,
-                            "bet": soft_bet,
-                            "sharp_price": pinnacle_price,
-                            "book_weight": book_weight,
-                        }
-
-                final = best_edge["bet"]
-                if not final:
-                    continue
-
-                selection = f"{final['name']} {final['point']}".strip()
-                if is_already_logged(matchup, market_type, selection):
-                    continue
-
-                edge = best_edge["edge"]
-                offered_price = final["price"]
-                fair_price = best_edge["sharp_price"]
-                book_weight = best_edge["book_weight"]
-                units = quarter_kelly_units(edge, offered_price)
-                fair_price_american = decimal_to_american(fair_price)
-
-                was_logged = log_bet_to_db(
-                    matchup,
-                    market_type,
-                    selection,
-                    decimal_to_american(offered_price),
-                    edge,
-                    f"{units:.2f}",
-                    fair_price_american,
-                    sport,
-                    event["id"],
-                    notes=f"book={final['book']};book_key={final['book_key']}",
-                )
-                if not was_logged:
-                    print(f"Skipping alert because DB log failed for {selection}.")
-                    continue
-
-                app_link = get_mobile_app_link(final["book_key"], final["id"], event["id"], matchup)
-                alerts.append(
-                    {
-                        "description": (
-                            f"**+EV {market_type.upper()} ALERT**\n\n"
-                            f"**Match:** {matchup}\n"
-                            f"**Bet:** {selection}\n"
-                            f"**Book:** [{final['book']}]({app_link}) @ {decimal_to_american(offered_price)}\n"
-                            f"**Fair Value:** {fair_price_american}\n"
-                            f"**Edge:** {edge * 100:.2f}%\n"
-                            f"**Book Weight:** {book_weight:.2f}x\n"
-                            f"**Suggested:** {units:.2f} Units"
+                    if edge >= market_threshold:
+                        candidates.append(
+                            {
+                                "edge": edge,
+                                "score": weighted_score,
+                                "bet": soft_bet,
+                                "fair_decimal": fair_decimal,
+                                "fair_probability": fair_probability,
+                                "book_weight": book_weight,
+                                "outcome_key": outcome_key,
+                            }
                         )
-                    }
-                )
+
+                if not candidates:
+                    continue
+
+                selected_candidates = []
+                seen_outcomes = set()
+                for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
+                    if candidate["outcome_key"] in seen_outcomes:
+                        continue
+                    seen_outcomes.add(candidate["outcome_key"])
+                    selected_candidates.append(candidate)
+                    if len(selected_candidates) >= UNIFIED_MAX_ALERTS_PER_EVENT_MARKET:
+                        break
+
+                for candidate in selected_candidates:
+                    final = candidate["bet"]
+                    selection = f"{final['name']} {final['point']}".strip()
+                    if is_already_logged(matchup, market_type, selection):
+                        continue
+
+                    edge = candidate["edge"]
+                    offered_price = final["price"]
+                    fair_decimal = candidate["fair_decimal"]
+                    fair_probability = candidate["fair_probability"]
+                    book_weight = candidate["book_weight"]
+                    units = quarter_kelly_units(edge, offered_price)
+                    fair_price_american = decimal_to_american(fair_decimal)
+
+                    was_logged = log_bet_to_db(
+                        matchup,
+                        market_type,
+                        selection,
+                        decimal_to_american(offered_price),
+                        edge,
+                        f"{units:.2f}",
+                        fair_price_american,
+                        sport,
+                        event["id"],
+                        notes=(
+                            f"book={final['book']};book_key={final['book_key']};"
+                            f"book_weight={book_weight:.4f};fair_probability={fair_probability:.4f};"
+                            f"fair_decimal={fair_decimal:.4f}"
+                        ),
+                    )
+                    if not was_logged:
+                        print(f"Skipping alert because DB log failed for {selection}.")
+                        continue
+
+                    app_link = get_mobile_app_link(final["book_key"], final["id"], event["id"], matchup)
+                    alerts.append(
+                        {
+                            "description": (
+                                f"**+EV {market_type.upper()} ALERT**\n\n"
+                                f"**Match:** {matchup}\n"
+                                f"**Bet:** {selection}\n"
+                                f"**Book:** [{final['book']}]({app_link}) @ {decimal_to_american(offered_price)}\n"
+                                f"**Fair Value:** {fair_price_american}\n"
+                                f"**Edge:** {edge * 100:.2f}%\n"
+                                f"**Book Weight:** {book_weight:.2f}x\n"
+                                f"**Suggested:** {units:.2f} Units"
+                            )
+                        }
+                    )
 
     for index, alert in enumerate(alerts):
         send_discord_alert(

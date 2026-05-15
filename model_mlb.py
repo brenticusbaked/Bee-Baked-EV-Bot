@@ -4,7 +4,7 @@ from db_manager import get_master_cache, is_already_logged, log_bet_to_db, load_
 from services.alerts import send_discord_alert
 from services.http_client import get_json
 from utils.links import sportsbook_search_link
-from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
+from utils.model_pricing import fair_american_from_probability, model_edge_from_probability
 from utils.odds import decimal_to_american, quarter_kelly_units, american_to_decimal
 from utils.thresholds import env_float
 from utils.time import get_local_now
@@ -13,10 +13,41 @@ from utils.time import get_local_now
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.25)
 MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.01)
+F5_MARKET_PRIORITY = {"h2h_1st_5_innings": 2, "h2h_1st_half": 2, "h2h": 1}
 
 
 def get_dynamic_link(bookmaker, target_string):
     return sportsbook_search_link(bookmaker, target_string)
+
+
+def _team_aliases(team_name: str):
+    normalized = str(team_name).lower().replace(".", "").strip()
+    aliases = {normalized}
+    replacements = {
+        "arizona diamondbacks": {"arizona dbacks", "dbacks", "diamondbacks"},
+        "athletics": {"oakland athletics", "athletics"},
+        "chicago white sox": {"white sox"},
+        "boston red sox": {"red sox"},
+        "los angeles angels": {"la angels", "angels"},
+        "los angeles dodgers": {"la dodgers", "dodgers"},
+        "new york mets": {"ny mets", "mets"},
+        "new york yankees": {"ny yankees", "yankees"},
+        "san francisco giants": {"sf giants", "giants"},
+        "st louis cardinals": {"st louis cardinals", "cardinals"},
+        "tampa bay rays": {"tb rays", "rays"},
+    }
+    aliases.update(replacements.get(normalized, set()))
+    words = normalized.split()
+    if words:
+        aliases.add(words[-1])
+    return {alias for alias in aliases if alias}
+
+
+def _team_matches(target_team: str, candidate: str) -> bool:
+    candidate_text = str(candidate).lower().replace(".", "").strip()
+    if not candidate_text:
+        return False
+    return any(alias == candidate_text or alias in candidate_text for alias in _team_aliases(target_team))
 
 
 def get_best_f5_moneyline(target_team):
@@ -29,25 +60,30 @@ def get_best_f5_moneyline(target_team):
     best_book_title = "Unknown"
     event_id = None
     selected_market = None
+    selected_priority = 0
 
     for game in cache.get("baseball_mlb", []):
-        if target_team not in game["home_team"] and target_team not in game["away_team"]:
+        if not _team_matches(target_team, game["home_team"]) and not _team_matches(target_team, game["away_team"]):
             continue
         for bookmaker in game.get("bookmakers", []):
             if bookmaker["key"] == "pinnacle":
                 continue
             for market in bookmaker.get("markets", []):
-                if market["key"] not in {"h2h_1st_5_innings", "h2h_1st_half", "h2h"}:
+                market_priority = F5_MARKET_PRIORITY.get(market["key"], 0)
+                if not market_priority:
                     continue
                 for outcome in market["outcomes"]:
-                    if target_team in outcome["name"]:
+                    if _team_matches(target_team, outcome["name"]):
                         price = float(outcome["price"])
-                        if price > best_price:
+                        if market_priority > selected_priority or (
+                            market_priority == selected_priority and price > best_price
+                        ):
                             best_price = price
                             best_book = bookmaker["key"]
                             best_book_title = bookmaker["title"]
                             event_id = game["id"]
                             selected_market = market["key"]
+                            selected_priority = market_priority
 
     if best_price > 0:
         return (

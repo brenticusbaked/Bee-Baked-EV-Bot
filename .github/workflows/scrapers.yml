@@ -2,9 +2,8 @@ name: Syndicate Scrapers
 
 on:
   schedule:
-    # Runs at 08:30 and 16:30 UTC — 30 minutes after the core pipeline (main.yml at 08:00/16:00)
-    # This ensures the core odds cache is populated before scrapers fire.
-    - cron: '30 8,16 * * *'
+    # Runs 30 minutes after the core pipeline so the odds cache is refreshed first.
+    - cron: '30 10,14,20 * * *'
   workflow_dispatch:
 
 jobs:
@@ -23,8 +22,8 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-          # Pin to v1.x stable — v2.x does not exist on PyPI.
-          # The scraper_unified.py uses stealth_sync(page) from this version.
+          # Pin to v1.x stable; v2.x does not exist on PyPI.
+          # scraper_unified.py uses stealth_sync(page) from this version.
           pip install playwright-stealth==1.0.6
           playwright install chromium
 

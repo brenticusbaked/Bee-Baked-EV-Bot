@@ -12,6 +12,31 @@ def decimal_implied_probability(decimal_odds: float) -> float:
         return 0.0
 
 
+def fair_probabilities_from_prices(prices_by_outcome: dict) -> dict:
+    grouped = {}
+    for outcome_key, price in prices_by_outcome.items():
+        point = outcome_key[1] if isinstance(outcome_key, tuple) and len(outcome_key) > 1 else ""
+        try:
+            point = str(abs(float(point))) if point not in {"", None} else point
+        except (TypeError, ValueError):
+            pass
+        grouped.setdefault(point, []).append((outcome_key, price))
+
+    fair_probabilities = {}
+    for outcomes in grouped.values():
+        implied = [
+            (outcome_key, decimal_implied_probability(price))
+            for outcome_key, price in outcomes
+        ]
+        overround = sum(prob for _, prob in implied)
+        for outcome_key, probability in implied:
+            if overround > 0 and len(implied) >= 2:
+                fair_probabilities[outcome_key] = probability / overround
+            else:
+                fair_probabilities[outcome_key] = probability
+    return fair_probabilities
+
+
 def decimal_to_american(decimal_odds: float) -> str:
     decimal_odds = float(decimal_odds)
     if decimal_odds <= 1.0:

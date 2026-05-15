@@ -3,7 +3,11 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from supabase import Client, create_client
+try:
+    from supabase import Client, create_client
+except ImportError:
+    Client = Any
+    create_client = None
 
 from utils.odds import american_to_decimal, parse_float
 from utils.time import get_local_date_str, get_local_now
@@ -11,8 +15,9 @@ from utils.time import get_local_date_str, get_local_now
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if create_client and SUPABASE_URL and SUPABASE_KEY else None
 RUNTIME_DB_STATS = {"bet_log_success": 0, "bet_log_failure": 0}
+PENDING_BETS_LOG_PATH = os.getenv("PENDING_BETS_LOG_PATH", "pending_bets_log.json")
 
 
 def _safe_execute(action, fallback):
@@ -115,10 +120,61 @@ def is_already_logged(matchup, market, selection):
 def reset_runtime_db_stats():
     RUNTIME_DB_STATS["bet_log_success"] = 0
     RUNTIME_DB_STATS["bet_log_failure"] = 0
+    flush_pending_bet_logs()
 
 
 def get_runtime_db_stats() -> Dict[str, int]:
     return dict(RUNTIME_DB_STATS)
+
+
+def _queue_pending_bet_log(payload: Dict[str, Any]) -> None:
+    pending = _load_local_json(PENDING_BETS_LOG_PATH, [])
+    if not isinstance(pending, list):
+        pending = []
+    identity = (
+        payload.get("date"),
+        payload.get("matchup"),
+        payload.get("market"),
+        payload.get("selection"),
+        payload.get("event_id"),
+    )
+    for row in pending:
+        if (
+            row.get("date"),
+            row.get("matchup"),
+            row.get("market"),
+            row.get("selection"),
+            row.get("event_id"),
+        ) == identity:
+            return
+    pending.append(payload)
+    _save_local_json(PENDING_BETS_LOG_PATH, pending)
+
+
+def flush_pending_bet_logs() -> int:
+    if not supabase:
+        return 0
+
+    pending = _load_local_json(PENDING_BETS_LOG_PATH, [])
+    if not isinstance(pending, list) or not pending:
+        return 0
+
+    remaining = []
+    flushed = 0
+    for payload in pending:
+        def action():
+            supabase.table("bets_log").insert(payload).execute()
+            return True
+
+        if _safe_execute(action, False):
+            flushed += 1
+        else:
+            remaining.append(payload)
+
+    _save_local_json(PENDING_BETS_LOG_PATH, remaining)
+    if flushed:
+        print(f"Flushed {flushed} pending bet log(s) to Supabase.")
+    return flushed
 
 
 def log_bet_to_db(
@@ -134,10 +190,6 @@ def log_bet_to_db(
     bet_source: Optional[str] = None,
     notes: Optional[str] = None,
 ):
-    if not supabase:
-        RUNTIME_DB_STATS["bet_log_failure"] += 1
-        return False
-
     edge_pct = _parse_edge_pct(edge_val)
     if edge_pct is not None and edge_pct <= 0:
         print(f"Skipping non-positive edge bet log for {selection}: {edge_pct:.4f}%")
@@ -167,6 +219,11 @@ def log_bet_to_db(
         "notes": notes,
     }
 
+    if not supabase:
+        RUNTIME_DB_STATS["bet_log_failure"] += 1
+        _queue_pending_bet_log(payload)
+        return False
+
     def action():
         supabase.table("bets_log").insert(payload).execute()
         return True
@@ -176,6 +233,7 @@ def log_bet_to_db(
         RUNTIME_DB_STATS["bet_log_success"] += 1
     else:
         RUNTIME_DB_STATS["bet_log_failure"] += 1
+        _queue_pending_bet_log(payload)
     return success
 
 
