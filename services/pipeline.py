@@ -43,7 +43,7 @@ def _run_callable(func):
 
 
 def run_task(task: PipelineTask) -> TaskResult:
-    print(f"[start] {task.name}")
+    print(f"[start] {task.name}", flush=True)
     started = perf_counter()
     try:
         output = _run_callable(task.func)
@@ -78,7 +78,7 @@ def print_results(results: Iterable[TaskResult]) -> None:
     for name, ok, detail, seconds, count, label, meta in results:
         status = "ok" if ok else "failed"
         count_text = f" | {count} {label}" if count else ""
-        print(f"[{status}] {name}: {detail} ({seconds:.2f}s){count_text}")
+        print(f"[{status}] {name}: {detail} ({seconds:.2f}s){count_text}", flush=True)
 
 
 def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
@@ -151,39 +151,39 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
 
 
 def run_master_pipeline() -> None:
-    print(f"BEE-BAKED PIPELINE STARTING - {datetime.now().isoformat()}")
+    print(f"BEE-BAKED PIPELINE STARTING - {datetime.now().isoformat()}", flush=True)
     reset_runtime_db_stats()
     all_results: List[TaskResult] = []
 
-    print("--- PHASE 1: REFRESHING CLOUD CACHE ---")
+    print("--- PHASE 1: REFRESHING CLOUD CACHE ---", flush=True)
     results = run_sequential(get_refresh_tasks())
     all_results.extend(results)
     print_results(results)
 
-    print("--- PHASE 2: EXECUTING MODELS & NEWS ---")
+    print("--- PHASE 2: EXECUTING MODELS & NEWS ---", flush=True)
     results = run_parallel(get_parallel_tasks())
     all_results.extend(results)
     print_results(results)
 
-    print("--- PHASE 3: UNIFIED MARKET SCAN ---")
+    print("--- PHASE 3: UNIFIED MARKET SCAN ---", flush=True)
     results = run_sequential(get_scan_tasks())
     all_results.extend(results)
     print_results(results)
 
-    print("--- PHASE 4: POST-GAME AUDIT ---")
+    print("--- PHASE 4: POST-GAME AUDIT ---", flush=True)
     results = run_sequential(get_audit_tasks())
     all_results.extend(results)
     print_results(results)
 
     send_pipeline_summary("BEE-BAKED CORE RUN COMPLETE", all_results)
-    print("BEE-BAKED PIPELINE COMPLETE.")
+    print("BEE-BAKED PIPELINE COMPLETE.", flush=True)
 
 
 def run_scraper_pipeline() -> None:
-    print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {datetime.now().isoformat()}")
+    print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {datetime.now().isoformat()}", flush=True)
     reset_runtime_db_stats()
-    print("--- SCRAPER PHASE: EXECUTING BROWSER SCRAPERS ---")
+    print("--- SCRAPER PHASE: EXECUTING BROWSER SCRAPERS ---", flush=True)
     results = run_parallel(get_scraper_tasks())
     print_results(results)
     send_pipeline_summary("BEE-BAKED SCRAPER RUN COMPLETE", results)
-    print("BEE-BAKED SCRAPER PIPELINE COMPLETE.")
+    print("BEE-BAKED SCRAPER PIPELINE COMPLETE.", flush=True)
