@@ -286,6 +286,29 @@ def _state_select_page_detected(rendered_text: str) -> bool:
     return "where are you playing from?" in lowered or "select from available locations" in lowered
 
 
+def _normalized_betmgm_hosts(parsed) -> list[str]:
+    labels = [label for label in parsed.netloc.lower().split(".") if label]
+    if len(labels) < 2 or labels[-2:] != ["betmgm", "com"]:
+        return []
+
+    hosts = []
+    if len(labels) == 3 and labels[0] in {"www", "sports"}:
+        hosts.append(parsed.netloc.lower())
+    if len(labels) == 3 and 2 <= len(labels[0]) <= 3 and labels[0].isalpha():
+        hosts.append(parsed.netloc.lower())
+    if len(labels) >= 4 and 2 <= len(labels[-3]) <= 3 and labels[-3].isalpha():
+        hosts.append(f"{labels[-3]}.betmgm.com")
+
+    seen = set()
+    deduped = []
+    for host in hosts:
+        if host in seen:
+            continue
+        seen.add(host)
+        deduped.append(host)
+    return deduped
+
+
 def _candidate_betmgm_urls_from_html(html: str) -> list[str]:
     href_matches = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
     candidates = []
@@ -297,11 +320,12 @@ def _candidate_betmgm_urls_from_html(html: str) -> list[str]:
         parsed = urlparse(absolute)
         if "betmgm.com" not in parsed.netloc:
             continue
-        candidates.append(absolute)
-
-        if parsed.path != BETMGM_NBA_PATH:
-            rebuilt = parsed._replace(path=BETMGM_NBA_PATH, params="", query="", fragment="").geturl()
-            candidates.append(rebuilt)
+        for host in _normalized_betmgm_hosts(parsed):
+            if parsed.path == BETMGM_NBA_PATH and host == parsed.netloc.lower():
+                candidates.append(parsed._replace(netloc=host, params="", query="", fragment="").geturl())
+            else:
+                rebuilt = parsed._replace(netloc=host, path=BETMGM_NBA_PATH, params="", query="", fragment="").geturl()
+                candidates.append(rebuilt)
 
     seen = set()
     deduped = []
@@ -347,6 +371,7 @@ def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
                 if _state_select_page_detected(rendered_text):
                     for candidate_url in _candidate_betmgm_urls_from_html(response.text):
                         try:
+                            print(f"BetMGM trying state URL via {preview_label}: {candidate_url}")
                             candidate_response = request(
                                 "GET",
                                 candidate_url,
