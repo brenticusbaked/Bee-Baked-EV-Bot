@@ -5,6 +5,7 @@ import re
 import string
 from html import unescape
 from typing import Dict, Optional
+from urllib.parse import quote
 
 from playwright.sync_api import sync_playwright
 
@@ -70,14 +71,11 @@ def _proxy_settings(proxy_ip: Optional[str]):
 
 
 def _request_proxy_kwargs(proxy_ip: Optional[str]):
-    settings = _proxy_settings(proxy_ip)
-    if not settings:
+    if not proxy_ip or not (PROXY_USERNAME and PROXY_PASSWORD):
         return {}
-    proxy_url = settings["server"].replace(
-        "http://",
-        f"http://{settings['username']}:{settings['password']}@",
-        1,
-    )
+    encoded_username = quote(PROXY_USERNAME, safe="")
+    encoded_password = quote(PROXY_PASSWORD, safe="")
+    proxy_url = f"http://{encoded_username}:{encoded_password}@{proxy_ip}"
     return {"proxies": {"http": proxy_url, "https": proxy_url}}
 
 
