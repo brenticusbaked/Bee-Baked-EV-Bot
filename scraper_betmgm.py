@@ -23,7 +23,7 @@ MAX_PROXY_ATTEMPTS = int(os.getenv("BETMGM_SCRAPER_PROXY_ATTEMPTS", os.getenv("S
 NAV_TIMEOUT_MS = int(os.getenv("BETMGM_NAV_TIMEOUT_MS", "15000"))
 WAIT_CYCLES = int(os.getenv("BETMGM_WAIT_CYCLES", "2"))
 WAIT_MS = int(os.getenv("BETMGM_WAIT_MS", "2000"))
-BETMGM_URL = "https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
+BETMGM_URL = "https://www.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
