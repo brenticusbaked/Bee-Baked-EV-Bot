@@ -58,12 +58,32 @@ def _proxy_settings(proxy_ip: Optional[str]):
 
 
 def _looks_like_betmgm_payload(payload: dict) -> bool:
-    if not isinstance(payload, dict):
+    container = _find_fixture_container(payload)
+    if not container:
         return False
-    fixtures = payload.get("fixtures")
+    fixtures = container.get("fixtures")
     if not isinstance(fixtures, list) or not fixtures:
         return False
     return any(isinstance(fixture, dict) and fixture.get("optionMarkets") for fixture in fixtures)
+
+
+def _find_fixture_container(payload):
+    if isinstance(payload, dict):
+        fixtures = payload.get("fixtures")
+        if isinstance(fixtures, list) and fixtures:
+            return payload
+
+        for value in payload.values():
+            found = _find_fixture_container(value)
+            if found:
+                return found
+
+    if isinstance(payload, list):
+        for item in payload:
+            found = _find_fixture_container(item)
+            if found:
+                return found
+    return None
 
 
 def _decode_possible_json(text: str):
@@ -110,12 +130,15 @@ def _extract_payload_from_page(page):
         if captured["data"] is not None:
             return
         content_type = response.headers.get("content-type", "").lower()
-        if "json" not in content_type and "javascript" not in content_type:
+        if "json" not in content_type and "javascript" not in content_type and "text" not in content_type:
             return
         try:
             payload = response.json()
         except Exception:
-            return
+            try:
+                payload = _decode_possible_json(response.text())
+            except Exception:
+                return
         if _looks_like_betmgm_payload(payload):
             captured["data"] = payload
             captured["url"] = response.url
@@ -183,7 +206,8 @@ def _fetch_betmgm_payload():
 
 def _build_current_lines(data: dict) -> Dict[str, Dict[str, object]]:
     current_lines = {}
-    for fixture in data.get("fixtures", []):
+    container = _find_fixture_container(data) or {}
+    for fixture in container.get("fixtures", []):
         matchup = fixture.get("name", {"value": "Unknown Matchup"}).get("value")
         event_id = str(fixture.get("id"))
 
