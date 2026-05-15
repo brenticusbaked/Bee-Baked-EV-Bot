@@ -726,7 +726,7 @@ def _extract_payload_from_page(page, target_url: str):
 
 
 def _fetch_betmgm_snapshot():
-    target_urls = [BETMGM_URL, _preferred_betmgm_url()]
+    target_urls = [BETMGM_URL]
     with sync_playwright() as playwright:
         for proxy_ip in _browser_proxy_candidates():
             proxy_settings = _proxy_settings(proxy_ip)
