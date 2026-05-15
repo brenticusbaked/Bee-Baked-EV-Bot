@@ -6,6 +6,7 @@ on:
 jobs:
   test-betmgm:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -22,6 +23,7 @@ jobs:
           playwright install chromium
 
       - name: Run BetMGM Scraper Test
+        timeout-minutes: 2
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
@@ -34,6 +36,8 @@ jobs:
           ENABLE_PRIZEPICKS_SCRAPER: "false"
           SCRAPER_PROXY_ATTEMPTS: "2"
           BETMGM_SCRAPER_PROXY_ATTEMPTS: "2"
+          BETMGM_DIRECT_TIMEOUT_MS: "8000"
+          BETMGM_LAUNCH_TIMEOUT_MS: "8000"
           BETMGM_NAV_TIMEOUT_MS: "10000"
           BETMGM_WAIT_CYCLES: "1"
           BETMGM_WAIT_MS: "1500"

@@ -20,6 +20,8 @@ PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
 MAX_PROXY_ATTEMPTS = int(os.getenv("BETMGM_SCRAPER_PROXY_ATTEMPTS", os.getenv("SCRAPER_PROXY_ATTEMPTS", "2")))
+DIRECT_TIMEOUT_MS = int(os.getenv("BETMGM_DIRECT_TIMEOUT_MS", "8000"))
+LAUNCH_TIMEOUT_MS = int(os.getenv("BETMGM_LAUNCH_TIMEOUT_MS", "8000"))
 NAV_TIMEOUT_MS = int(os.getenv("BETMGM_NAV_TIMEOUT_MS", "15000"))
 WAIT_CYCLES = int(os.getenv("BETMGM_WAIT_CYCLES", "2"))
 WAIT_MS = int(os.getenv("BETMGM_WAIT_MS", "2000"))
@@ -270,7 +272,7 @@ def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
             "GET",
             BETMGM_URL,
             headers=headers,
-            timeout=20,
+            timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
             retry_on_429=False,
         )
         rendered_text = _extract_rendered_text_from_html(response.text)
@@ -352,11 +354,17 @@ def _fetch_betmgm_snapshot():
             proxy_label = proxy_ip or "direct"
             browser = None
             try:
-                browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
+                browser = playwright.chromium.launch(
+                    headless=True,
+                    proxy=proxy_settings,
+                    timeout=LAUNCH_TIMEOUT_MS,
+                )
                 context = browser.new_context(
                     ignore_https_errors=True,
                     user_agent=BETMGM_USER_AGENT,
                 )
+                context.set_default_navigation_timeout(NAV_TIMEOUT_MS)
+                context.set_default_timeout(max(WAIT_MS, 3000))
                 page = context.new_page()
                 data, source_url, rendered_text = _extract_payload_from_page(page)
                 browser.close()
