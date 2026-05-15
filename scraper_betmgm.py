@@ -40,6 +40,28 @@ BETMGM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+STATE_DISPLAY_NAMES = {
+    "az": "Arizona",
+    "co": "Colorado",
+    "dc": "District of Columbia",
+    "ia": "Iowa",
+    "il": "Illinois",
+    "in": "Indiana",
+    "ks": "Kansas",
+    "ky": "Kentucky",
+    "la": "Louisiana",
+    "ma": "Massachusetts",
+    "mi": "Michigan",
+    "ms": "Mississippi",
+    "nc": "North Carolina",
+    "nj": "New Jersey",
+    "oh": "Ohio",
+    "pa": "Pennsylvania",
+    "tn": "Tennessee",
+    "va": "Virginia",
+    "wv": "West Virginia",
+    "wy": "Wyoming",
+}
 MATCHUP_RECORD_RE = re.compile(r"^(?P<team1>.+?)\s+\d{1,2}-\d{1,2}\s+(?P<team2>.+?)\s+\d{1,2}-\d{1,2}$")
 SPREAD_TOKEN_RE = re.compile(r"^[+-]\d+(?:\.\d+)?$")
 ODDS_DECIMAL_RE = re.compile(r"^\d+(?:\.\d+)?$")
@@ -298,6 +320,10 @@ def _preferred_betmgm_api_base() -> str:
     return f"https://sportsapi.{state}.betmgm.com"
 
 
+def _preferred_state_label() -> str:
+    return STATE_DISPLAY_NAMES.get(BETMGM_PREFERRED_STATE or "ky", "Kentucky")
+
+
 def _normalized_betmgm_hosts(parsed) -> list[str]:
     labels = [label for label in parsed.netloc.lower().split(".") if label]
     if len(labels) < 2 or labels[-2:] != ["betmgm", "com"]:
@@ -453,73 +479,75 @@ def _fetch_betmgm_api_lines() -> Dict[str, Dict[str, object]]:
         "User-Agent": BETMGM_USER_AGENT,
     }
     api_base = _preferred_betmgm_api_base()
-    request_kwargs = _request_proxy_kwargs(None)
 
-    try:
-        sports_response = request(
-            "GET",
-            f"{api_base}/offer/api/{BETMGM_API_COUNTRY}/sports",
-            headers=headers,
-            timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-            retry_on_429=False,
-            **request_kwargs,
-        )
-        sports_items = sports_response.json().get("items", [])
-        basketball_sport_id = None
-        for sport in sports_items:
-            if not isinstance(sport, dict):
+    for proxy_ip in _proxy_candidates():
+        proxy_label = proxy_ip or "direct"
+        request_kwargs = _request_proxy_kwargs(proxy_ip)
+        try:
+            sports_response = request(
+                "GET",
+                f"{api_base}/offer/api/{BETMGM_API_COUNTRY}/sports",
+                headers=headers,
+                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+                retry_on_429=False,
+                **request_kwargs,
+            )
+            sports_items = sports_response.json().get("items", [])
+            basketball_sport_id = None
+            for sport in sports_items:
+                if not isinstance(sport, dict):
+                    continue
+                if _translation_text(sport.get("name")).lower() == "basketball":
+                    basketball_sport_id = sport.get("id")
+                    break
+            if basketball_sport_id is None:
+                print(f"BetMGM API did not return a Basketball sport id via {proxy_label}.")
                 continue
-            if _translation_text(sport.get("name")).lower() == "basketball":
-                basketball_sport_id = sport.get("id")
-                break
-        if basketball_sport_id is None:
-            print("BetMGM API did not return a Basketball sport id.")
-            return {}
 
-        competitions_response = request(
-            "GET",
-            f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/competitions",
-            headers=headers,
-            timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-            retry_on_429=False,
-            params={"language": "en"},
-            **request_kwargs,
-        )
-        competitions = competitions_response.json().get("items", [])
-        nba_competition_id = None
-        for competition in competitions:
-            if not isinstance(competition, dict):
+            competitions_response = request(
+                "GET",
+                f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/competitions",
+                headers=headers,
+                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+                retry_on_429=False,
+                params={"language": "en"},
+                **request_kwargs,
+            )
+            competitions = competitions_response.json().get("items", [])
+            nba_competition_id = None
+            for competition in competitions:
+                if not isinstance(competition, dict):
+                    continue
+                if _translation_text(competition.get("name")).lower() == "nba":
+                    nba_competition_id = competition.get("id")
+                    break
+            if nba_competition_id is None:
+                print(f"BetMGM API did not return an NBA competition id via {proxy_label}.")
                 continue
-            if _translation_text(competition.get("name")).lower() == "nba":
-                nba_competition_id = competition.get("id")
-                break
-        if nba_competition_id is None:
-            print("BetMGM API did not return an NBA competition id.")
-            return {}
 
-        fixtures_response = request(
-            "GET",
-            f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/fixtures",
-            headers=headers,
-            timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-            retry_on_429=False,
-            params={
-                "language": "en",
-                "competitionIds": nba_competition_id,
-                "onlyMainMarkets": "true",
-                "marketsFilterCriteria": "Visible",
-                "isInPlay": "false",
-            },
-            **request_kwargs,
-        )
-        fixtures = fixtures_response.json().get("items", [])
-        current_lines = _build_current_lines_from_api(fixtures)
-        if current_lines:
-            print(f"BetMGM lines parsed via sportsbook API on {api_base}.")
-            return current_lines
-        print(f"BetMGM sportsbook API returned fixtures but no spread lines on {api_base}.")
-    except Exception as exc:
-        print(f"BetMGM sportsbook API fetch failed: {exc}")
+            fixtures_response = request(
+                "GET",
+                f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/fixtures",
+                headers=headers,
+                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+                retry_on_429=False,
+                params={
+                    "language": "en",
+                    "competitionIds": nba_competition_id,
+                    "onlyMainMarkets": "true",
+                    "marketsFilterCriteria": "Visible",
+                    "isInPlay": "false",
+                },
+                **request_kwargs,
+            )
+            fixtures = fixtures_response.json().get("items", [])
+            current_lines = _build_current_lines_from_api(fixtures)
+            if current_lines:
+                print(f"BetMGM lines parsed via sportsbook API on {api_base} using {proxy_label}.")
+                return current_lines
+            print(f"BetMGM sportsbook API returned fixtures but no spread lines on {api_base} using {proxy_label}.")
+        except Exception as exc:
+            print(f"BetMGM sportsbook API fetch failed via {proxy_label}: {exc}")
 
     return {}
 
@@ -646,11 +674,55 @@ def _extract_payload_from_page(page, target_url: str):
         except Exception:
             rendered_text = ""
 
+    if _state_select_page_detected(rendered_text):
+        state_label = _preferred_state_label()
+        try:
+            print(f"BetMGM browser selecting state: {state_label}")
+            state_link = page.get_by_role("link", name=state_label).first
+            state_link.click(timeout=3000)
+            page.wait_for_timeout(1500)
+            try:
+                page.goto(_preferred_betmgm_url(), wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+            except Exception:
+                print(f"BetMGM navigation timeout caught gracefully for {_preferred_betmgm_url()} after state select.")
+
+            for _ in range(WAIT_CYCLES):
+                if captured["data"] is not None:
+                    break
+                try:
+                    page.wait_for_timeout(WAIT_MS)
+                except Exception:
+                    break
+                try:
+                    page.mouse.wheel(0, 2500)
+                except Exception:
+                    pass
+
+            if captured["data"] is None:
+                try:
+                    html = page.content()
+                    embedded = _extract_embedded_payload(html)
+                    if embedded:
+                        captured["data"] = embedded
+                        captured["url"] = "embedded_page_state_after_state_select"
+                except Exception:
+                    pass
+
+            try:
+                rendered_text = page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                try:
+                    rendered_text = _extract_rendered_text_from_html(page.content())
+                except Exception:
+                    rendered_text = ""
+        except Exception as exc:
+            print(f"BetMGM browser state selection failed: {exc}")
+
     return captured["data"], captured["url"], rendered_text
 
 
 def _fetch_betmgm_snapshot():
-    target_urls = [_preferred_betmgm_url(), BETMGM_URL]
+    target_urls = [BETMGM_URL, _preferred_betmgm_url()]
     with sync_playwright() as playwright:
         for proxy_ip in _browser_proxy_candidates():
             proxy_settings = _proxy_settings(proxy_ip)
