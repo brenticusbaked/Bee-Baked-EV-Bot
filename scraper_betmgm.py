@@ -30,6 +30,7 @@ BETMGM_USER_AGENT = (
 )
 MATCHUP_RECORD_RE = re.compile(r"^(?P<team1>.+?)\s+\d{1,2}-\d{1,2}\s+(?P<team2>.+?)\s+\d{1,2}-\d{1,2}$")
 SPREAD_TOKEN_RE = re.compile(r"^[+-]\d+(?:\.\d+)?$")
+ODDS_DECIMAL_RE = re.compile(r"^\d+(?:\.\d+)?$")
 
 
 def load_previous_lines():
@@ -170,7 +171,91 @@ def _parse_lines_from_rendered_text(rendered_text: str) -> Dict[str, Dict[str, o
             "line": spread_tokens[1],
         }
 
+    if current_lines:
+        return current_lines
+
+    blocked_prefixes = (
+        "today",
+        "tomorrow",
+        "game ",
+        "all wagers",
+        "matches",
+        "futures",
+        "specials",
+        "basketball",
+        "nba",
+        "money",
+        "total",
+        "spread",
+    )
+
+    for index, line in enumerate(lines):
+        if line.lower() != "spread":
+            continue
+        if index + 2 >= len(lines):
+            continue
+        if lines[index + 1].lower() != "total" or lines[index + 2].lower() != "money":
+            continue
+
+        block = lines[index + 3 : index + 20]
+        if not block:
+            continue
+
+        matchup_line = None
+        for token in block:
+            token_lower = token.lower()
+            if token_lower.startswith(blocked_prefixes):
+                continue
+            if SPREAD_TOKEN_RE.match(token) or ODDS_DECIMAL_RE.match(token):
+                continue
+            if token.startswith("O ") or token.startswith("U "):
+                continue
+            if len(token) < 6 or not re.search(r"[A-Za-z]", token):
+                continue
+            matchup_line = token
+            break
+
+        if not matchup_line:
+            continue
+
+        matchup_match = MATCHUP_RECORD_RE.match(matchup_line)
+        if not matchup_match:
+            continue
+
+        spread_tokens = [token for token in block if SPREAD_TOKEN_RE.match(token)]
+        if len(spread_tokens) < 2:
+            continue
+
+        team1 = matchup_match.group("team1").strip()
+        team2 = matchup_match.group("team2").strip()
+        matchup = f"{team1} @ {team2}"
+        matchup_key = re.sub(r"[^a-z0-9]+", "_", matchup.lower()).strip("_")
+
+        current_lines[f"{matchup_key}_{team1.lower()}"] = {
+            "matchup": matchup,
+            "team": team1,
+            "line": spread_tokens[0],
+        }
+        current_lines[f"{matchup_key}_{team2.lower()}"] = {
+            "matchup": matchup,
+            "team": team2,
+            "line": spread_tokens[1],
+        }
+
     return current_lines
+
+
+def _debug_rendered_text_preview(rendered_text: str) -> str:
+    lines = [line.strip() for line in rendered_text.splitlines() if line.strip()]
+    if not lines:
+        return "no rendered text"
+
+    for index, line in enumerate(lines):
+        if line.lower() == "spread":
+            preview = lines[max(index - 2, 0) : min(index + 14, len(lines))]
+            return " | ".join(preview[:12])
+
+    return " | ".join(lines[:12])
 
 
 def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
@@ -193,6 +278,7 @@ def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
         if current_lines:
             print("BetMGM lines parsed via direct HTML page.")
             return current_lines
+        print(f"BetMGM direct HTML preview: {_debug_rendered_text_preview(rendered_text)}")
     except Exception as exc:
         print(f"BetMGM direct HTML fetch failed: {exc}")
     return {}
@@ -280,6 +366,7 @@ def _fetch_betmgm_snapshot():
                 if _parse_lines_from_rendered_text(rendered_text):
                     print(f"BetMGM lines parsed via {proxy_label}: rendered_page_text")
                     return None, rendered_text
+                print(f"BetMGM rendered preview via {proxy_label}: {_debug_rendered_text_preview(rendered_text)}")
                 print(f"BetMGM: no usable payload or rendered lines via {proxy_label}.")
             except Exception as exc:
                 print(f"BetMGM proxy attempt failed via {proxy_label}: {exc}")
