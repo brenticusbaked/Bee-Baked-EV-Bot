@@ -25,6 +25,12 @@ LAUNCH_TIMEOUT_MS = int(os.getenv("BETMGM_LAUNCH_TIMEOUT_MS", "8000"))
 NAV_TIMEOUT_MS = int(os.getenv("BETMGM_NAV_TIMEOUT_MS", "15000"))
 WAIT_CYCLES = int(os.getenv("BETMGM_WAIT_CYCLES", "2"))
 WAIT_MS = int(os.getenv("BETMGM_WAIT_MS", "2000"))
+ENABLE_BROWSER_FALLBACK = os.getenv("BETMGM_ENABLE_BROWSER_FALLBACK", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 BETMGM_URL = "https://www.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -61,6 +67,18 @@ def _proxy_settings(proxy_ip: Optional[str]):
         "username": dynamic_username,
         "password": PROXY_PASSWORD,
     }
+
+
+def _request_proxy_kwargs(proxy_ip: Optional[str]):
+    settings = _proxy_settings(proxy_ip)
+    if not settings:
+        return {}
+    proxy_url = settings["server"].replace(
+        "http://",
+        f"http://{settings['username']}:{settings['password']}@",
+        1,
+    )
+    return {"proxies": {"http": proxy_url, "https": proxy_url}}
 
 
 def _looks_like_betmgm_payload(payload: dict) -> bool:
@@ -267,22 +285,25 @@ def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
         "User-Agent": BETMGM_USER_AGENT,
     }
 
-    try:
-        response = request(
-            "GET",
-            BETMGM_URL,
-            headers=headers,
-            timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-            retry_on_429=False,
-        )
-        rendered_text = _extract_rendered_text_from_html(response.text)
-        current_lines = _parse_lines_from_rendered_text(rendered_text)
-        if current_lines:
-            print("BetMGM lines parsed via direct HTML page.")
-            return current_lines
-        print(f"BetMGM direct HTML preview: {_debug_rendered_text_preview(rendered_text)}")
-    except Exception as exc:
-        print(f"BetMGM direct HTML fetch failed: {exc}")
+    for proxy_ip in _proxy_candidates():
+        proxy_label = proxy_ip or "direct"
+        try:
+            response = request(
+                "GET",
+                BETMGM_URL,
+                headers=headers,
+                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+                retry_on_429=False,
+                **_request_proxy_kwargs(proxy_ip),
+            )
+            rendered_text = _extract_rendered_text_from_html(response.text)
+            current_lines = _parse_lines_from_rendered_text(rendered_text)
+            if current_lines:
+                print(f"BetMGM lines parsed via {proxy_label} HTML page.")
+                return current_lines
+            print(f"BetMGM HTML preview via {proxy_label}: {_debug_rendered_text_preview(rendered_text)}")
+        except Exception as exc:
+            print(f"BetMGM HTML fetch failed via {proxy_label}: {exc}")
     return {}
 
 
@@ -412,7 +433,7 @@ def _build_current_lines(data: dict) -> Dict[str, Dict[str, object]]:
 def scrape_betmgm():
     try:
         current_lines = _fetch_betmgm_direct_lines()
-        if not current_lines:
+        if not current_lines and ENABLE_BROWSER_FALLBACK:
             data, rendered_text = _fetch_betmgm_snapshot()
             if data:
                 current_lines = _build_current_lines(data)
