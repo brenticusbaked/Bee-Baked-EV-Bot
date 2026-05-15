@@ -5,7 +5,7 @@ import re
 import string
 from html import unescape
 from typing import Dict, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -33,6 +33,7 @@ ENABLE_BROWSER_FALLBACK = os.getenv("BETMGM_ENABLE_BROWSER_FALLBACK", "true").st
     "on",
 }
 BETMGM_URL = "https://www.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
+BETMGM_NBA_PATH = "/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -280,6 +281,38 @@ def _debug_rendered_text_preview(rendered_text: str) -> str:
     return " | ".join(lines[:12])
 
 
+def _state_select_page_detected(rendered_text: str) -> bool:
+    lowered = rendered_text.lower()
+    return "where are you playing from?" in lowered or "select from available locations" in lowered
+
+
+def _candidate_betmgm_urls_from_html(html: str) -> list[str]:
+    href_matches = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
+    candidates = []
+    for href in href_matches:
+        href = href.strip()
+        if not href:
+            continue
+        absolute = urljoin(BETMGM_URL, href)
+        parsed = urlparse(absolute)
+        if "betmgm.com" not in parsed.netloc:
+            continue
+        candidates.append(absolute)
+
+        if parsed.path != BETMGM_NBA_PATH:
+            rebuilt = parsed._replace(path=BETMGM_NBA_PATH, params="", query="", fragment="").geturl()
+            candidates.append(rebuilt)
+
+    seen = set()
+    deduped = []
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped[:8]
+
+
 def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -290,20 +323,50 @@ def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
     for proxy_ip in _proxy_candidates():
         proxy_label = proxy_ip or "direct"
         try:
-            response = request(
-                "GET",
-                BETMGM_URL,
-                headers=headers,
-                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-                retry_on_429=False,
-                **_request_proxy_kwargs(proxy_ip),
-            )
-            rendered_text = _extract_rendered_text_from_html(response.text)
-            current_lines = _parse_lines_from_rendered_text(rendered_text)
+            request_kwargs = _request_proxy_kwargs(proxy_ip)
+
+            def fetch_lines_from_url(target_url: str, label_suffix: str = "") -> Dict[str, Dict[str, object]]:
+                response = request(
+                    "GET",
+                    target_url,
+                    headers=headers,
+                    timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+                    retry_on_429=False,
+                    **request_kwargs,
+                )
+                rendered_text = _extract_rendered_text_from_html(response.text)
+                current = _parse_lines_from_rendered_text(rendered_text)
+                if current:
+                    suffix = f" {label_suffix}".rstrip()
+                    print(f"BetMGM lines parsed via {proxy_label}{suffix} HTML page.")
+                    return current
+
+                preview_label = f"{proxy_label}{(' ' + label_suffix) if label_suffix else ''}"
+                print(f"BetMGM HTML preview via {preview_label}: {_debug_rendered_text_preview(rendered_text)}")
+
+                if _state_select_page_detected(rendered_text):
+                    for candidate_url in _candidate_betmgm_urls_from_html(response.text):
+                        try:
+                            candidate_response = request(
+                                "GET",
+                                candidate_url,
+                                headers=headers,
+                                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
+                                retry_on_429=False,
+                                **request_kwargs,
+                            )
+                            candidate_text = _extract_rendered_text_from_html(candidate_response.text)
+                            candidate_current = _parse_lines_from_rendered_text(candidate_text)
+                            if candidate_current:
+                                print(f"BetMGM lines parsed via {preview_label} state URL: {candidate_url}")
+                                return candidate_current
+                        except Exception as candidate_exc:
+                            print(f"BetMGM state URL fetch failed via {preview_label}: {candidate_exc}")
+                return {}
+
+            current_lines = fetch_lines_from_url(BETMGM_URL)
             if current_lines:
-                print(f"BetMGM lines parsed via {proxy_label} HTML page.")
                 return current_lines
-            print(f"BetMGM HTML preview via {proxy_label}: {_debug_rendered_text_preview(rendered_text)}")
         except Exception as exc:
             print(f"BetMGM HTML fetch failed via {proxy_label}: {exc}")
     return {}
@@ -442,6 +505,7 @@ def scrape_betmgm():
     try:
         current_lines = _fetch_betmgm_direct_lines()
         if not current_lines and ENABLE_BROWSER_FALLBACK:
+            print("BetMGM: trying proxied browser fallback...")
             data, rendered_text = _fetch_betmgm_snapshot()
             if data:
                 current_lines = _build_current_lines(data)
