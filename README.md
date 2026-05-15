@@ -58,6 +58,10 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `PROP_NEAR_MISS_THRESHOLD`
 * `NBA_PROP_STATS` (Optional comma-separated override. Example: `points,assists,rebounds,three_pointers,steals,blocks,turnovers,points_rebounds_assists`)
 * `SCRAPER_PROXY_ATTEMPTS`
+* `BETMGM_SCRAPER_PROXY_ATTEMPTS`
+* `BETMGM_NAV_TIMEOUT_MS`
+* `BETMGM_WAIT_CYCLES`
+* `BETMGM_WAIT_MS`
 * `SGO_GRADER_MAX_FETCHES`
 * `SGO_GRADER_FETCH_DELAY_SECONDS`
 * `CLV_LOOKBACK_DAYS`

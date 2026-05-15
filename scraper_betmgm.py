@@ -18,7 +18,10 @@ PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
-MAX_PROXY_ATTEMPTS = int(os.getenv("SCRAPER_PROXY_ATTEMPTS", "3"))
+MAX_PROXY_ATTEMPTS = int(os.getenv("BETMGM_SCRAPER_PROXY_ATTEMPTS", os.getenv("SCRAPER_PROXY_ATTEMPTS", "2")))
+NAV_TIMEOUT_MS = int(os.getenv("BETMGM_NAV_TIMEOUT_MS", "15000"))
+WAIT_CYCLES = int(os.getenv("BETMGM_WAIT_CYCLES", "2"))
+WAIT_MS = int(os.getenv("BETMGM_WAIT_MS", "2000"))
 BETMGM_URL = "https://sports.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -120,15 +123,15 @@ def _extract_payload_from_page(page):
     page.on("response", handle_response)
 
     try:
-        page.goto(BETMGM_URL, wait_until="domcontentloaded", timeout=25000)
+        page.goto(BETMGM_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
     except Exception:
         print("BetMGM navigation timeout caught gracefully. Checking for data anyway...")
 
-    for _ in range(3):
+    for _ in range(WAIT_CYCLES):
         if captured["data"] is not None:
             break
         try:
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(WAIT_MS)
         except Exception:
             break
         try:
