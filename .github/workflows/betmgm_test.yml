@@ -43,6 +43,7 @@ jobs:
           BETMGM_WAIT_CYCLES: "1"
           BETMGM_WAIT_MS: "1500"
           BETMGM_ENABLE_BROWSER_FALLBACK: "true"
+          BETMGM_PREFERRED_STATE: "ky"
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
           PROXY_LIST: ${{ secrets.PROXY_LIST }}

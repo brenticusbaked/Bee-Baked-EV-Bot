@@ -32,6 +32,7 @@ ENABLE_BROWSER_FALLBACK = os.getenv("BETMGM_ENABLE_BROWSER_FALLBACK", "true").st
     "yes",
     "on",
 }
+BETMGM_PREFERRED_STATE = os.getenv("BETMGM_PREFERRED_STATE", "ky").strip().lower()
 BETMGM_URL = "https://www.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_NBA_PATH = "/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_USER_AGENT = (
@@ -286,6 +287,11 @@ def _state_select_page_detected(rendered_text: str) -> bool:
     return "where are you playing from?" in lowered or "select from available locations" in lowered
 
 
+def _preferred_betmgm_url() -> str:
+    state = BETMGM_PREFERRED_STATE or "ky"
+    return f"https://{state}.betmgm.com{BETMGM_NBA_PATH}"
+
+
 def _normalized_betmgm_hosts(parsed) -> list[str]:
     labels = [label for label in parsed.netloc.lower().split(".") if label]
     if len(labels) < 2 or labels[-2:] != ["betmgm", "com"]:
@@ -310,8 +316,8 @@ def _normalized_betmgm_hosts(parsed) -> list[str]:
 
 
 def _candidate_betmgm_urls_from_html(html: str) -> list[str]:
+    candidates = [_preferred_betmgm_url()]
     href_matches = re.findall(r'href=["\']([^"\']+)["\']', html, flags=re.IGNORECASE)
-    candidates = []
     for href in href_matches:
         href = href.strip()
         if not href:
@@ -389,15 +395,19 @@ def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
                             print(f"BetMGM state URL fetch failed via {preview_label}: {candidate_exc}")
                 return {}
 
-            current_lines = fetch_lines_from_url(BETMGM_URL)
-            if current_lines:
-                return current_lines
+            for target_url, label_suffix in (
+                (_preferred_betmgm_url(), "preferred_state"),
+                (BETMGM_URL, ""),
+            ):
+                current_lines = fetch_lines_from_url(target_url, label_suffix)
+                if current_lines:
+                    return current_lines
         except Exception as exc:
             print(f"BetMGM HTML fetch failed via {proxy_label}: {exc}")
     return {}
 
 
-def _extract_payload_from_page(page):
+def _extract_payload_from_page(page, target_url: str):
     captured = {"data": None, "url": None}
 
     def handle_response(response):
@@ -420,9 +430,9 @@ def _extract_payload_from_page(page):
     page.on("response", handle_response)
 
     try:
-        page.goto(BETMGM_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
+        page.goto(target_url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
     except Exception:
-        print("BetMGM navigation timeout caught gracefully. Checking for data anyway...")
+        print(f"BetMGM navigation timeout caught gracefully for {target_url}. Checking for data anyway...")
 
     for _ in range(WAIT_CYCLES):
         if captured["data"] is not None:
@@ -459,47 +469,49 @@ def _extract_payload_from_page(page):
 
 
 def _fetch_betmgm_snapshot():
+    target_urls = [_preferred_betmgm_url(), BETMGM_URL]
     with sync_playwright() as playwright:
         for proxy_ip in _browser_proxy_candidates():
             proxy_settings = _proxy_settings(proxy_ip)
             proxy_label = proxy_ip or "direct"
-            browser = None
-            try:
-                browser = playwright.chromium.launch(
-                    headless=True,
-                    proxy=proxy_settings,
-                    timeout=LAUNCH_TIMEOUT_MS,
-                )
-                context = browser.new_context(
-                    ignore_https_errors=True,
-                    user_agent=BETMGM_USER_AGENT,
-                )
-                context.set_default_navigation_timeout(NAV_TIMEOUT_MS)
-                context.set_default_timeout(max(WAIT_MS, 3000))
-                context.set_extra_http_headers(
-                    {
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Referer": "https://www.betmgm.com/",
-                    }
-                )
-                page = context.new_page()
-                data, source_url, rendered_text = _extract_payload_from_page(page)
-                browser.close()
-                if data:
-                    print(f"BetMGM payload captured via {proxy_label}: {source_url}")
-                    return data, rendered_text
-                if _parse_lines_from_rendered_text(rendered_text):
-                    print(f"BetMGM lines parsed via {proxy_label}: rendered_page_text")
-                    return None, rendered_text
-                print(f"BetMGM rendered preview via {proxy_label}: {_debug_rendered_text_preview(rendered_text)}")
-                print(f"BetMGM: no usable payload or rendered lines via {proxy_label}.")
-            except Exception as exc:
-                print(f"BetMGM proxy attempt failed via {proxy_label}: {exc}")
-                if browser:
-                    try:
-                        browser.close()
-                    except Exception:
-                        pass
+            for target_url in target_urls:
+                browser = None
+                try:
+                    browser = playwright.chromium.launch(
+                        headless=True,
+                        proxy=proxy_settings,
+                        timeout=LAUNCH_TIMEOUT_MS,
+                    )
+                    context = browser.new_context(
+                        ignore_https_errors=True,
+                        user_agent=BETMGM_USER_AGENT,
+                    )
+                    context.set_default_navigation_timeout(NAV_TIMEOUT_MS)
+                    context.set_default_timeout(max(WAIT_MS, 3000))
+                    context.set_extra_http_headers(
+                        {
+                            "Accept-Language": "en-US,en;q=0.9",
+                            "Referer": "https://www.betmgm.com/",
+                        }
+                    )
+                    page = context.new_page()
+                    data, source_url, rendered_text = _extract_payload_from_page(page, target_url)
+                    browser.close()
+                    if data:
+                        print(f"BetMGM payload captured via {proxy_label}: {source_url}")
+                        return data, rendered_text
+                    if _parse_lines_from_rendered_text(rendered_text):
+                        print(f"BetMGM lines parsed via {proxy_label}: rendered_page_text ({target_url})")
+                        return None, rendered_text
+                    print(f"BetMGM rendered preview via {proxy_label} ({target_url}): {_debug_rendered_text_preview(rendered_text)}")
+                    print(f"BetMGM: no usable payload or rendered lines via {proxy_label} ({target_url}).")
+                except Exception as exc:
+                    print(f"BetMGM proxy attempt failed via {proxy_label} ({target_url}): {exc}")
+                    if browser:
+                        try:
+                            browser.close()
+                        except Exception:
+                            pass
         return None, ""
 
 

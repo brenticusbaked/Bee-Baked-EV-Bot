@@ -65,6 +65,7 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `BETMGM_WAIT_CYCLES`
 * `BETMGM_WAIT_MS`
 * `BETMGM_ENABLE_BROWSER_FALLBACK`
+* `BETMGM_PREFERRED_STATE`
 * `SGO_GRADER_MAX_FETCHES`
 * `SGO_GRADER_FETCH_DELAY_SECONDS`
 * `CLV_LOOKBACK_DAYS`
