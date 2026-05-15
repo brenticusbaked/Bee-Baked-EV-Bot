@@ -1,0 +1,43 @@
+name: BetMGM Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-betmgm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+
+      - name: Run BetMGM Scraper Test
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ENABLE_PYBASEBALL_FIP_SCRAPER: "false"
+          ENABLE_DRAFTKINGS_SCRAPER: "false"
+          ENABLE_BETMGM_SCRAPER: "true"
+          ENABLE_FANDUEL_SCRAPER: "false"
+          ENABLE_PRIZEPICKS_SCRAPER: "false"
+          SCRAPER_PROXY_ATTEMPTS: "1"
+          BETMGM_SCRAPER_PROXY_ATTEMPTS: "1"
+          BETMGM_NAV_TIMEOUT_MS: "10000"
+          BETMGM_WAIT_CYCLES: "1"
+          BETMGM_WAIT_MS: "1500"
+          PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
+          PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+          PROXY_LIST: ${{ secrets.PROXY_LIST }}
+        run: python scraper_unified.py
