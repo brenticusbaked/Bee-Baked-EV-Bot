@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from db_manager import get_master_cache
+from db_manager import get_master_cache, log_execution_report_to_db
 from execution.desk import ExecutionDesk, report_to_dict
 from execution.risk import RiskLimits, RiskManager
 from execution_signal import build_order_from_edge, quote_from_book
@@ -127,8 +127,9 @@ def run_execution_scan() -> dict:
                         for venue in venues
                     ]
                     risk = RiskManager(RiskLimits(EXECUTION_MAX_ORDER_UNITS, EXECUTION_MAX_NOTIONAL, EXECUTION_EV_THRESHOLD))
-                    report = ExecutionDesk.paper(quotes, risk=risk).execute(order)
-                    reports.append(report_to_dict(report))
+                    report = report_to_dict(ExecutionDesk.paper(quotes, risk=risk).execute(order))
+                    log_execution_report_to_db(report)
+                    reports.append(report)
 
     _append_reports(EXECUTION_LEDGER_PATH, reports)
     detail = f"paper routed {len(reports)} order(s)"

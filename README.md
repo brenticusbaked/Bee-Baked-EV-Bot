@@ -32,6 +32,8 @@ The repo now includes a paper-trading execution desk that turns +EV signals into
 * **Risk Controls:** `execution.risk.RiskManager` blocks orders that exceed quantity, notional, symbol exposure, or minimum-edge limits.
 * **TCA / Execution Quality:** `execution.tca.execution_metrics` reports fill rate, average fill price, slippage, edge capture, and fees.
 * **Pipeline Bridge:** `execution_scanner.py` consumes the existing master odds cache and paper-routes qualifying +EV opportunities into `execution_ledger.json`.
+* **Supabase Persistence:** Execution reports are written to `execution_orders`, `execution_child_orders`, `execution_fills`, and `venue_metrics` when Supabase is configured. If Supabase is unavailable, reports queue in `pending_execution_reports.json`.
+* **Venue Analytics:** `execution_analytics.py` summarizes venue fill rate, average fill price, routed quantity, fees, and average edge capture from Supabase or a local ledger.
 
 Run the standalone demo:
 
@@ -39,7 +41,21 @@ Run the standalone demo:
 python execution_desk.py
 ```
 
+Summarize venue performance from Supabase:
+
+```bash
+python execution_analytics.py
+```
+
+Or from a local paper ledger:
+
+```bash
+python execution_analytics.py --ledger execution_ledger.json
+```
+
 Run the execution bridge in the scheduled pipeline by setting `ENABLE_EXECUTION_DESK=true`. It is disabled by default and paper-only by design.
+
+Before enabling Supabase execution persistence, run `supabase_execution_schema.sql` in the Supabase SQL editor.
 
 ## ⚡ Discord Notifications
 The bot acts as a live dispatcher, pinging your Discord with structured alerts:
@@ -100,6 +116,7 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `EXECUTION_MAX_ORDER_UNITS`
 * `EXECUTION_MAX_NOTIONAL`
 * `EXECUTION_LEDGER_PATH`
+* `PENDING_EXECUTION_REPORTS_PATH`
 * `MLB_FIP_GAP_THRESHOLD`
 * `MLB_MODEL_EDGE_THRESHOLD`
 * `NBA_MODEL_EDGE_THRESHOLD`

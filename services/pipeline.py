@@ -91,6 +91,7 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
     total_alerts = sum(count for _, _, _, _, count, label, _ in result_list if label == "alerts")
     total_graded = sum(count for _, _, _, _, count, label, _ in result_list if label == "graded")
     total_tracked = sum(count for _, _, _, _, count, label, _ in result_list if label == "tracked")
+    total_executions = sum(count for _, _, _, _, count, label, _ in result_list if label == "executions")
     db_stats = get_runtime_db_stats()
     failed = sum(1 for _, ok, _, _, _, _, _ in result_list if not ok)
 
@@ -124,7 +125,9 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
         f"Updates: {total_updates}\n"
         f"CLV Tracked: {total_tracked}\n"
         f"Graded: {total_graded}\n"
+        f"Executions: {total_executions}\n"
         f"Bet Log Writes: {db_stats.get('bet_log_success', 0)} success / {db_stats.get('bet_log_failure', 0)} failed\n\n"
+        f"Execution Writes: {db_stats.get('execution_log_success', 0)} success / {db_stats.get('execution_log_failure', 0)} failed\n\n"
         f"**Task Timings**\n"
         + "\n".join(task_lines)
     )
