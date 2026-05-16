@@ -17,6 +17,7 @@ from utils.thresholds import env_float, env_int
 
 EXECUTION_EV_THRESHOLD = env_float("EXECUTION_EV_THRESHOLD", 0.025)
 EXECUTION_MAX_ORDERS = max(1, env_int("EXECUTION_MAX_ORDERS", 10))
+EXECUTION_CALIBRATION_ORDERS = max(0, env_int("EXECUTION_CALIBRATION_ORDERS", 0))
 EXECUTION_MAX_ORDER_UNITS = env_float("EXECUTION_MAX_ORDER_UNITS", 5.0)
 EXECUTION_MAX_NOTIONAL = env_float("EXECUTION_MAX_NOTIONAL", 1000.0)
 EXECUTION_LEDGER_PATH = os.getenv("EXECUTION_LEDGER_PATH", "execution_ledger.json")
@@ -60,11 +61,10 @@ def run_execution_scan() -> dict:
     soft_books = {"fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"}
     now = datetime.now(timezone.utc)
     reports: List[dict] = []
+    candidates: List[dict] = []
 
     for sport, events in cache.items():
         for event in events:
-            if len(reports) >= EXECUTION_MAX_ORDERS:
-                break
             commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
             if now > commence_time:
                 continue
@@ -93,43 +93,66 @@ def run_execution_scan() -> dict:
                             )
 
             for market_type, market_data in markets.items():
-                if len(reports) >= EXECUTION_MAX_ORDERS:
-                    break
                 fair_probs = fair_probabilities_from_prices(market_data["sharp"])
                 for key, venues in market_data["venues"].items():
-                    if len(reports) >= EXECUTION_MAX_ORDERS:
-                        break
                     fair_probability = fair_probs.get(key)
                     if not fair_probability:
                         continue
 
                     best = max(venues, key=lambda venue: venue["price"])
                     edge = _calculate_edge_from_probability(best["price"], fair_probability)
-                    if edge < EXECUTION_EV_THRESHOLD:
-                        continue
-
                     fair_decimal = 1.0 / fair_probability
-                    units = quarter_kelly_units(edge, best["price"], cap=EXECUTION_MAX_ORDER_UNITS)
-                    if units <= 0:
-                        continue
-
-                    order = build_order_from_edge(
-                        matchup=matchup,
-                        market=market_type,
-                        selection=best["selection"],
-                        offered_decimal=best["price"],
-                        fair_decimal=fair_decimal,
-                        units=units,
-                        source_signal=f"{sport}:{event.get('id')}",
+                    units = quarter_kelly_units(max(edge, 0.005), best["price"], cap=EXECUTION_MAX_ORDER_UNITS)
+                    candidates.append(
+                        {
+                            "edge": edge,
+                            "sport": sport,
+                            "event_id": event.get("id"),
+                            "matchup": matchup,
+                            "market_type": market_type,
+                            "best": best,
+                            "venues": venues,
+                            "fair_decimal": fair_decimal,
+                            "units": max(0.25, units),
+                        }
                     )
-                    quotes = [
-                        quote_from_book(order.symbol, venue["book_key"], venue["book"], venue["price"], units, venue["weight"])
-                        for venue in venues
-                    ]
-                    risk = RiskManager(RiskLimits(EXECUTION_MAX_ORDER_UNITS, EXECUTION_MAX_NOTIONAL, EXECUTION_EV_THRESHOLD))
-                    report = report_to_dict(ExecutionDesk.paper(quotes, risk=risk).execute(order))
-                    log_execution_report_to_db(report)
-                    reports.append(report)
+
+    selected = [candidate for candidate in candidates if candidate["edge"] >= EXECUTION_EV_THRESHOLD]
+    selected = sorted(selected, key=lambda candidate: candidate["edge"], reverse=True)[:EXECUTION_MAX_ORDERS]
+    if len(selected) < EXECUTION_MAX_ORDERS and EXECUTION_CALIBRATION_ORDERS:
+        selected_ids = {(item["event_id"], item["market_type"], item["best"]["selection"]) for item in selected}
+        calibration_slots = min(EXECUTION_CALIBRATION_ORDERS, EXECUTION_MAX_ORDERS - len(selected))
+        calibration_candidates = [
+            candidate for candidate in sorted(candidates, key=lambda item: item["edge"], reverse=True)
+            if (candidate["event_id"], candidate["market_type"], candidate["best"]["selection"]) not in selected_ids
+        ][:calibration_slots]
+        for candidate in calibration_candidates:
+            candidate["calibration"] = True
+        selected.extend(calibration_candidates)
+
+    for candidate in selected:
+        best = candidate["best"]
+        order = build_order_from_edge(
+            matchup=candidate["matchup"],
+            market=candidate["market_type"],
+            selection=best["selection"],
+            offered_decimal=best["price"],
+            fair_decimal=candidate["fair_decimal"],
+            units=candidate["units"],
+            source_signal=f"{candidate['sport']}:{candidate['event_id']}",
+        )
+        order.metadata["edge"] = candidate["edge"]
+        if candidate.get("calibration"):
+            order.metadata["calibration"] = True
+        quotes = [
+            quote_from_book(order.symbol, venue["book_key"], venue["book"], venue["price"], candidate["units"], venue["weight"])
+            for venue in candidate["venues"]
+        ]
+        min_edge = min(EXECUTION_EV_THRESHOLD, candidate["edge"]) if candidate.get("calibration") else EXECUTION_EV_THRESHOLD
+        risk = RiskManager(RiskLimits(EXECUTION_MAX_ORDER_UNITS, EXECUTION_MAX_NOTIONAL, min_edge))
+        report = report_to_dict(ExecutionDesk.paper(quotes, risk=risk).execute(order))
+        log_execution_report_to_db(report)
+        reports.append(report)
 
     _append_reports(EXECUTION_LEDGER_PATH, reports)
     detail = f"paper routed {len(reports)} order(s)"

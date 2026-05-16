@@ -118,6 +118,7 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `SGO_GRADER_FETCH_DELAY_SECONDS`
 * `CLV_LOOKBACK_DAYS`
 * `EXECUTION_EV_THRESHOLD`
+* `EXECUTION_CALIBRATION_ORDERS` (Optional paper-only proof-of-write routes when live opportunities do not clear threshold. Default: `0`)
 * `EXECUTION_MAX_ORDERS`
 * `EXECUTION_MAX_ORDER_UNITS`
 * `EXECUTION_MAX_NOTIONAL`
