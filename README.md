@@ -101,6 +101,8 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `UNIFIED_H2H_EV_THRESHOLD`
 * `UNIFIED_TOTAL_EV_THRESHOLD`
 * `UNIFIED_MAX_ALERTS_PER_EVENT_MARKET`
+* `ENABLE_ODDS_SECONDARY_PULL` (Default: `true`)
+* `ENABLE_ODDS_TERTIARY_PULL` (Default: `true`; set `false` to conserve credits)
 * `NEWS_FEED_SPORTS` (Optional comma-separated sports list. Default: `NBA,MLB,NHL,NFL,WNBA,SOCCER`)
 * `LINE_MOVEMENT_MAX_BOOST`
 * `LINE_MOVEMENT_MAX_PENALTY`

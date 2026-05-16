@@ -179,6 +179,13 @@ def run_execution_scan() -> dict:
         f"{len(candidates)} total | {len(selected)} selected | "
         f"calibration_slots={EXECUTION_CALIBRATION_ORDERS}"
     )
+    for index, candidate in enumerate(sorted(candidates, key=lambda item: item["edge"], reverse=True)[:5], start=1):
+        print(
+            "execution_desk top candidate "
+            f"{index}: edge={candidate['edge']:.4%} | "
+            f"{candidate['sport']} | {candidate['market_type']} | "
+            f"{candidate['matchup']} | {candidate['best']['selection']} @ {candidate['best']['price']}"
+        )
 
     for candidate in selected:
         best = candidate["best"]

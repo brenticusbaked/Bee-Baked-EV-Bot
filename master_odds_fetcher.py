@@ -3,6 +3,7 @@ from typing import Dict, List
 
 from db_manager import save_master_cache
 from services.http_client import request
+from utils.config import env_flag
 
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
@@ -23,7 +24,6 @@ SECONDARY_CONFIG = {
     "basketball_nba": "h2h,totals",
     "basketball_wnba": "h2h,totals",
     "icehockey_nhl": "h2h",
-    "baseball_mlb": "h2h_1st_5_innings",
 }
 
 # Tertiary key expands the scan into totals and MLB run-line style markets
@@ -39,6 +39,8 @@ TARGET_BOOKS = os.getenv(
     "ODDS_API_TARGET_BOOKS",
     "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks",
 )
+ENABLE_ODDS_SECONDARY_PULL = env_flag("ENABLE_ODDS_SECONDARY_PULL", True)
+ENABLE_ODDS_TERTIARY_PULL = env_flag("ENABLE_ODDS_TERTIARY_PULL", True)
 
 
 def _credits_for_config(config: Dict[str, str]) -> int:
@@ -134,30 +136,34 @@ def run_fetcher():
     primary_success = _fetch_config(cache, ODDS_API_KEY, PRIMARY_CONFIG, "primary key")
 
     secondary_success = 0
-    if ODDS_API_KEY_2:
+    if ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL:
         print(
             "BEE-BAKED FETCH: Running secondary expansion pull"
             f" ({_credits_for_config(SECONDARY_CONFIG)} credits/run)"
         )
         secondary_success = _fetch_config(cache, ODDS_API_KEY_2, SECONDARY_CONFIG, "secondary key")
+    elif not ENABLE_ODDS_SECONDARY_PULL:
+        print("ENABLE_ODDS_SECONDARY_PULL=false. Skipping secondary expansion pull.")
     else:
         print("ODDS_API_KEY_2 not set. Skipping secondary expansion pull.")
 
     tertiary_success = 0
-    if ODDS_API_KEY_3:
+    if ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL:
         print(
             "BEE-BAKED FETCH: Running tertiary expansion pull"
             f" ({_credits_for_config(TERTIARY_CONFIG)} credits/run)"
         )
         tertiary_success = _fetch_config(cache, ODDS_API_KEY_3, TERTIARY_CONFIG, "tertiary key")
+    elif not ENABLE_ODDS_TERTIARY_PULL:
+        print("ENABLE_ODDS_TERTIARY_PULL=false. Skipping tertiary expansion pull.")
     else:
         print("ODDS_API_KEY_3 not set. Skipping tertiary expansion pull.")
 
     save_master_cache(cache)
     detail = (
         f"fetch complete | primary sports: {primary_success}/{len(PRIMARY_CONFIG)}"
-        f" | secondary sports: {secondary_success}/{len(SECONDARY_CONFIG) if ODDS_API_KEY_2 else 0}"
-        f" | tertiary sports: {tertiary_success}/{len(TERTIARY_CONFIG) if ODDS_API_KEY_3 else 0}"
+        f" | secondary sports: {secondary_success}/{len(SECONDARY_CONFIG) if ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL else 0}"
+        f" | tertiary sports: {tertiary_success}/{len(TERTIARY_CONFIG) if ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL else 0}"
     )
     return {"detail": detail, "count": len(cache), "label": "updates"}
 
