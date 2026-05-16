@@ -47,6 +47,12 @@ Summarize venue performance from Supabase:
 python execution_analytics.py
 ```
 
+Validate that the latest GitHub Actions paper run wrote Supabase execution rows:
+
+```bash
+python execution_healthcheck.py
+```
+
 Or from a local paper ledger:
 
 ```bash

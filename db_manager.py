@@ -385,6 +385,28 @@ def get_venue_metrics(limit: int = 500) -> List[Dict[str, Any]]:
     return _safe_execute(action, [])
 
 
+def get_table_count(table_name: str) -> int:
+    def action():
+        response = supabase.table(table_name).select("*", count="exact").limit(0).execute()
+        return int(response.count or 0)
+
+    return _safe_execute(action, 0)
+
+
+def get_latest_rows(table_name: str, order_column: str, limit: int = 5) -> List[Dict[str, Any]]:
+    def action():
+        return (
+            supabase.table(table_name)
+            .select("*")
+            .order(order_column, desc=True)
+            .limit(limit)
+            .execute()
+            .data
+        )
+
+    return _safe_execute(action, [])
+
+
 def log_bet_to_db(
     matchup,
     market,
