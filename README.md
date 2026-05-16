@@ -23,6 +23,24 @@ The bot is organized into a modular pipeline, communicating seamlessly with a Po
 * **Auto-Grader:** Automatically fetches SGO box scores to grade past bets as a Win, Loss, or Push.
 * **Sharp Metrics (CLV Analyzer):** Analyzes your entire betting history to calculate your "CLV Beaten %" and "Average Edge vs Close"—mathematical proof that the syndicate is beating the house.
 
+### Execution Management & Smart Order Routing
+The repo now includes a paper-trading execution desk that turns +EV signals into parent orders, applies risk limits, splits child orders across multiple venues, simulates fills, and produces transaction-cost analytics.
+
+* **EMS Parent Orders:** `execution.models.ParentOrder` captures symbol, side, quantity, limit/fair price, source signal, and strategy metadata.
+* **Smart Order Router:** `execution.router.SmartOrderRouter` ranks venues by executable price, available quantity, latency, fill probability, and fees. It supports normal lower-price-is-better routing and sports-odds higher-payout-is-better routing.
+* **Multi-Venue Paper Adapters:** `execution.venues.PaperVenueAdapter` provides deterministic venue simulation until real authenticated adapters are intentionally added.
+* **Risk Controls:** `execution.risk.RiskManager` blocks orders that exceed quantity, notional, symbol exposure, or minimum-edge limits.
+* **TCA / Execution Quality:** `execution.tca.execution_metrics` reports fill rate, average fill price, slippage, edge capture, and fees.
+* **Pipeline Bridge:** `execution_scanner.py` consumes the existing master odds cache and paper-routes qualifying +EV opportunities into `execution_ledger.json`.
+
+Run the standalone demo:
+
+```bash
+python execution_desk.py
+```
+
+Run the execution bridge in the scheduled pipeline by setting `ENABLE_EXECUTION_DESK=true`. It is disabled by default and paper-only by design.
+
 ## ⚡ Discord Notifications
 The bot acts as a live dispatcher, pinging your Discord with structured alerts:
 * 🟢 **Routine Alerts:** Standard +EV opportunities and situational model mismatches.
@@ -77,6 +95,11 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `SGO_GRADER_MAX_FETCHES`
 * `SGO_GRADER_FETCH_DELAY_SECONDS`
 * `CLV_LOOKBACK_DAYS`
+* `EXECUTION_EV_THRESHOLD`
+* `EXECUTION_MAX_ORDERS`
+* `EXECUTION_MAX_ORDER_UNITS`
+* `EXECUTION_MAX_NOTIONAL`
+* `EXECUTION_LEDGER_PATH`
 * `MLB_FIP_GAP_THRESHOLD`
 * `MLB_MODEL_EDGE_THRESHOLD`
 * `NBA_MODEL_EDGE_THRESHOLD`
@@ -96,6 +119,7 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ENABLE_MLB_SPREAD_ALERTS` (Default: `true`)
 * `ENABLE_MLB_TOTAL_ALERTS` (Default: `true`)
 * `ENABLE_CLV_TRACKER` (Default: `true`)
+* `ENABLE_EXECUTION_DESK` (Default: `false`, paper-routes qualifying opportunities through the EMS/SOR layer)
 * `ENABLE_SGO_GRADER` (Default: `true`, but disabled in the core workflow so the NBA prop bot gets priority on a single SGO key)
 * `ENABLE_PERFORMANCE_REPORT` (Default: `false`)
 * `ENABLE_PYBASEBALL_FIP_SCRAPER` (Default: `true`, but disabled in the scheduled scraper workflow until capture is stable)

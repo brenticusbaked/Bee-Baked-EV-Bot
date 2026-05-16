@@ -1,2 +1,4 @@
 __pycache__/
 *.py[cod]
+execution_ledger.json
+pending_bets_log.json

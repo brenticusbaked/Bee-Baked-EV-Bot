@@ -47,11 +47,16 @@ def get_parallel_tasks() -> List[PipelineTask]:
 
 
 def get_scan_tasks() -> List[PipelineTask]:
+    tasks: List[PipelineTask] = []
     if env_flag("ENABLE_UNIFIED_SCAN", True):
         from unified_bot import scan_markets
 
-        return [PipelineTask(name="unified_market_scan", func=scan_markets)]
-    return []
+        tasks.append(PipelineTask(name="unified_market_scan", func=scan_markets))
+    if env_flag("ENABLE_EXECUTION_DESK", False):
+        from execution_scanner import run_execution_scan
+
+        tasks.append(PipelineTask(name="execution_desk", func=run_execution_scan))
+    return tasks
 
 
 def get_audit_tasks() -> List[PipelineTask]:
