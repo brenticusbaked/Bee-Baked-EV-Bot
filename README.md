@@ -67,6 +67,17 @@ Before enabling Supabase execution persistence, run `supabase_execution_schema.s
 
 If `bets_log` stops populating after code changes, run `supabase_bets_log_schema_patch.sql` in the Supabase SQL editor. The bot also retries a legacy `bets_log` insert shape so older tables can keep receiving rows.
 
+## Supabase-First Market Cache
+
+The syndicate can now move Odds API ingestion into Supabase so local Codex work and frontend clients query cached tables instead of spending API credits.
+
+* `supabase_market_data_schema.sql` creates `fixtures`, `historical_odds`, `syndicate_bets`, and `odds_ingest_runs`.
+* `supabase/functions/odds-cache-ingest/index.ts` is a Supabase Edge Function that fetches configured markets and upserts snapshots.
+* `supabase_edge_cron_setup.sql` is a pg_cron/pg_net template for a 5-minute schedule.
+* `docs/supabase_ingestion_setup.md` has deployment steps and realtime subscription examples.
+* `docs/codex_orchestration.md` documents the Codex/GitHub/backtesting workflow.
+* `codex_skills/syndicate-quant-analysis` is a repo-local skill for strategy analysis and PR-oriented backtesting.
+
 ## ⚡ Discord Notifications
 The bot acts as a live dispatcher, pinging your Discord with structured alerts:
 * 🟢 **Routine Alerts:** Standard +EV opportunities and situational model mismatches.

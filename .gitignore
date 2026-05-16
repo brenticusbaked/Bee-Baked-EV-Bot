@@ -3,3 +3,6 @@ __pycache__/
 execution_ledger.json
 pending_bets_log.json
 pending_execution_reports.json
+.env
+.env.*
+!.env.example

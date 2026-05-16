@@ -1,0 +1,3 @@
+display_name: Syndicate Quant Analysis
+short_description: Analyze syndicate betting data
+default_prompt: Use syndicate quant analysis to inspect Supabase-backed betting data, design backtests, and propose measurable strategy changes.
