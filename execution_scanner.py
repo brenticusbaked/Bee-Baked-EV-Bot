@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple
 
 from db_manager import get_master_cache, log_execution_report_to_db
 from execution.desk import ExecutionDesk, report_to_dict
+from execution.models import ParentOrder, Side, VenueQuote
 from execution.risk import RiskLimits, RiskManager
 from execution_signal import build_order_from_edge, quote_from_book
 from services.book_weights import get_book_weights
@@ -49,6 +50,36 @@ def _append_reports(path: str, reports: List[dict]) -> None:
         existing = []
     existing.extend(reports)
     ledger_path.write_text(json.dumps(existing, indent=2, default=str), encoding="utf-8")
+
+
+def _synthetic_calibration_report() -> dict:
+    order = ParentOrder(
+        symbol="EXECUTION_DESK_HEALTHCHECK | calibration | persistence",
+        side=Side.BUY,
+        quantity=0.25,
+        limit_price=2.0,
+        fair_price=1.99,
+        strategy="SMART",
+        source_signal="synthetic_calibration",
+        metadata={
+            "edge": 0.005025,
+            "price_mode": "higher_is_better",
+            "calibration": True,
+            "synthetic": True,
+        },
+    )
+    quotes = [
+        VenueQuote(
+            venue_id="paper_healthcheck",
+            symbol=order.symbol,
+            ask_price=2.0,
+            available_quantity=0.25,
+            latency_ms=1,
+            fill_probability=1.0,
+        )
+    ]
+    risk = RiskManager(RiskLimits(EXECUTION_MAX_ORDER_UNITS, EXECUTION_MAX_NOTIONAL, 0.0))
+    return report_to_dict(ExecutionDesk.paper(quotes, risk=risk).execute(order))
 
 
 def run_execution_scan() -> dict:
@@ -130,6 +161,12 @@ def run_execution_scan() -> dict:
             candidate["calibration"] = True
         selected.extend(calibration_candidates)
 
+    print(
+        "execution_desk candidates: "
+        f"{len(candidates)} total | {len(selected)} selected | "
+        f"calibration_slots={EXECUTION_CALIBRATION_ORDERS}"
+    )
+
     for candidate in selected:
         best = candidate["best"]
         order = build_order_from_edge(
@@ -153,6 +190,12 @@ def run_execution_scan() -> dict:
         report = report_to_dict(ExecutionDesk.paper(quotes, risk=risk).execute(order))
         log_execution_report_to_db(report)
         reports.append(report)
+
+    if not reports and EXECUTION_CALIBRATION_ORDERS:
+        report = _synthetic_calibration_report()
+        log_execution_report_to_db(report)
+        reports.append(report)
+        print("execution_desk wrote synthetic calibration order for persistence healthcheck")
 
     _append_reports(EXECUTION_LEDGER_PATH, reports)
     detail = f"paper routed {len(reports)} order(s)"
