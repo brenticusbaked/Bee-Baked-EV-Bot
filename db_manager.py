@@ -454,8 +454,30 @@ def log_bet_to_db(
         _queue_pending_bet_log(payload)
         return False
 
+    legacy_payload = {
+        key: payload[key]
+        for key in (
+            "date",
+            "matchup",
+            "market",
+            "selection",
+            "odds",
+            "edge",
+            "units",
+            "fair_price",
+            "sport",
+            "event_id",
+            "closing_line_pinnacle",
+            "result",
+        )
+    }
+
     def action():
-        supabase.table("bets_log").insert(payload).execute()
+        try:
+            supabase.table("bets_log").insert(payload).execute()
+        except Exception as exc:
+            print(f"Full bets_log insert failed, retrying legacy payload: {exc}")
+            supabase.table("bets_log").insert(legacy_payload).execute()
         return True
 
     success = _safe_execute(action, False)

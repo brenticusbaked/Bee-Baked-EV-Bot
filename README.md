@@ -65,6 +65,8 @@ Run the execution bridge in the scheduled pipeline by setting `ENABLE_EXECUTION_
 
 Before enabling Supabase execution persistence, run `supabase_execution_schema.sql` in the Supabase SQL editor.
 
+If `bets_log` stops populating after code changes, run `supabase_bets_log_schema_patch.sql` in the Supabase SQL editor. The bot also retries a legacy `bets_log` insert shape so older tables can keep receiving rows.
+
 ## ⚡ Discord Notifications
 The bot acts as a live dispatcher, pinging your Discord with structured alerts:
 * 🟢 **Routine Alerts:** Standard +EV opportunities and situational model mismatches.

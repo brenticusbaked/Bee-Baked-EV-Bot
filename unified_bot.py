@@ -82,6 +82,7 @@ def scan_markets():
 
     alerts = []
     near_misses = []
+    scanned_candidates = []
     book_weights = get_book_weights()
     soft_books = ["fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"]
     now = datetime.now(timezone.utc)
@@ -145,6 +146,16 @@ def scan_markets():
                     edge = calculate_edge_from_probability(soft_bet["price"], fair_probability)
                     book_weight = book_weights.get(soft_bet["book"], 1.0)
                     weighted_score = edge * book_weight
+                    scanned_candidates.append(
+                        {
+                            "matchup": matchup,
+                            "selection": f"{soft_bet['name']} {soft_bet['point']}".strip(),
+                            "book": soft_bet["book"],
+                            "edge": edge,
+                            "market": market_type,
+                            "sport": sport,
+                        }
+                    )
 
                     if UNIFIED_NEAR_MISS_THRESHOLD <= edge < market_threshold:
                         near_misses.append(
@@ -262,6 +273,13 @@ def scan_markets():
             for item in near_misses
         )
         near_miss_text = f"; near misses: {total_near_misses} total, top {len(near_misses)} -> {samples}"
+    elif scanned_candidates:
+        top_candidates = sorted(scanned_candidates, key=lambda item: item["edge"], reverse=True)[:3]
+        samples = " | ".join(
+            f"{item['sport']} {item['matchup']} - {item['market'].upper()} - {item['selection']} @ {item['book']} ({item['edge'] * 100:.2f}%)"
+            for item in top_candidates
+        )
+        near_miss_text = f"; no threshold hits; top scanned edges -> {samples}"
 
     return {
         "detail": f"scan complete{near_miss_text}",
