@@ -1,0 +1,25 @@
+name: Odds Edge Alert
+
+on:
+  schedule:
+    # Runs 20 minutes after the core pipeline windows.
+    - cron: '20 10,14,20 * * *'
+  workflow_dispatch:
+
+jobs:
+  odds-edge-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run Odds Edge Alert
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python odds_edge_alert.py --logs ./logs --threshold 0.03 --min-sample 20 --always-notify --allow-missing-logs --json
