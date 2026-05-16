@@ -53,6 +53,8 @@ Validate that the latest GitHub Actions paper run wrote Supabase execution rows:
 python execution_healthcheck.py
 ```
 
+For a no-odds-API proof of Supabase execution persistence, run the **Execution Desk Calibration** workflow in GitHub Actions. It writes one synthetic paper order tagged `synthetic_calibration` and then runs the healthcheck.
+
 Or from a local paper ledger:
 
 ```bash
