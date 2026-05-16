@@ -11,6 +11,14 @@ from utils.thresholds import env_float, env_int
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+SPORT_ALERT_WEBHOOKS = {
+    "basketball_wnba": os.getenv("DISCORD_WNBA_BETS_WEBHOOK_URL")
+    or os.getenv("DISCORD_WNBA_UPDATES_WEBHOOK_URL")
+    or DISCORD_WEBHOOK_URL,
+    "baseball_mlb": os.getenv("DISCORD_MLB_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
+    "icehockey_nhl": os.getenv("DISCORD_NHL_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
+    "basketball_nba": os.getenv("DISCORD_NBA_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
+}
 UNIFIED_EV_THRESHOLD = env_float("UNIFIED_EV_THRESHOLD", 0.02)
 UNIFIED_NEAR_MISS_THRESHOLD = env_float("UNIFIED_NEAR_MISS_THRESHOLD", 0.01)
 UNIFIED_SPREAD_EV_THRESHOLD = env_float("UNIFIED_SPREAD_EV_THRESHOLD", UNIFIED_EV_THRESHOLD)
@@ -213,6 +221,7 @@ def scan_markets():
                     app_link = get_mobile_app_link(final["book_key"], final["id"], event["id"], matchup)
                     alerts.append(
                         {
+                            "sport": sport,
                             "description": (
                                 f"**+EV {market_type.upper()} ALERT**\n\n"
                                 f"**Match:** {matchup}\n"
@@ -240,7 +249,7 @@ def scan_markets():
             source="unified_bot",
             alert_type="bet_alert",
             dedupe_key=alert["description"][:200],
-            webhook_url=DISCORD_WEBHOOK_URL,
+            webhook_url=SPORT_ALERT_WEBHOOKS.get(alert.get("sport"), DISCORD_WEBHOOK_URL),
             add_bee_image=index == len(alerts) - 1,
         )
 

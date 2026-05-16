@@ -12,6 +12,7 @@ ODDS_API_KEY_3 = os.getenv("ODDS_API_KEY_3")
 # Primary key stays on the low-cost core scan.
 PRIMARY_CONFIG = {
     "basketball_nba": "spreads",
+    "basketball_wnba": "spreads",
     "icehockey_nhl": "spreads",
     "baseball_mlb": "h2h",
 }
@@ -20,6 +21,7 @@ PRIMARY_CONFIG = {
 # Cost: NBA 4 + NHL 2 + MLB 2 = 8 credits/run, 16/day at two runs per day.
 SECONDARY_CONFIG = {
     "basketball_nba": "h2h,totals",
+    "basketball_wnba": "h2h,totals",
     "icehockey_nhl": "h2h",
     "baseball_mlb": "h2h_1st_5_innings",
 }
