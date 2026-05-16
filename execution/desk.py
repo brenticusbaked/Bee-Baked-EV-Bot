@@ -17,11 +17,16 @@ class ExecutionDesk:
         self.router = router
 
     @classmethod
-    def paper(cls, quotes: Iterable[VenueQuote], risk: RiskManager | None = None) -> "ExecutionDesk":
+    def paper(
+        cls,
+        quotes: Iterable[VenueQuote],
+        risk: RiskManager | None = None,
+        router: SmartOrderRouter | None = None,
+    ) -> "ExecutionDesk":
         return cls(
             venues=VenueRegistry(PaperVenueAdapter(quote) for quote in quotes),
             risk=risk or RiskManager(),
-            router=SmartOrderRouter(),
+            router=router or SmartOrderRouter(),
         )
 
     def execute(self, order: ParentOrder) -> ExecutionReport:
@@ -57,4 +62,3 @@ def report_to_dict(report: ExecutionReport) -> dict:
     for fill in data["fills"]:
         fill["side"] = fill["side"].value if hasattr(fill["side"], "value") else fill["side"]
     return data
-

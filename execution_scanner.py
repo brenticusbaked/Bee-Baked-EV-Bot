@@ -6,10 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from db_manager import get_master_cache, log_execution_report_to_db
+from db_manager import get_master_cache, get_venue_metrics, log_execution_report_to_db
 from execution.desk import ExecutionDesk, report_to_dict
 from execution.models import ParentOrder, Side, VenueQuote
 from execution.risk import RiskLimits, RiskManager
+from execution.router import SmartOrderRouter
+from execution.venue_scores import build_venue_scores
 from execution_signal import build_order_from_edge, quote_from_book
 from services.book_weights import get_book_weights
 from utils.odds import fair_probabilities_from_prices, quarter_kelly_units
@@ -22,6 +24,9 @@ EXECUTION_CALIBRATION_ORDERS = max(0, env_int("EXECUTION_CALIBRATION_ORDERS", 0)
 EXECUTION_MAX_ORDER_UNITS = env_float("EXECUTION_MAX_ORDER_UNITS", 5.0)
 EXECUTION_MAX_NOTIONAL = env_float("EXECUTION_MAX_NOTIONAL", 1000.0)
 EXECUTION_LEDGER_PATH = os.getenv("EXECUTION_LEDGER_PATH", "execution_ledger.json")
+ENABLE_ADAPTIVE_VENUE_SCORING = os.getenv("ENABLE_ADAPTIVE_VENUE_SCORING", "true").strip().lower() in {"1", "true", "yes", "on"}
+EXECUTION_VENUE_SCORE_LOOKBACK = max(1, env_int("EXECUTION_VENUE_SCORE_LOOKBACK", 500))
+EXECUTION_VENUE_SCORE_MIN_SAMPLE = max(1, env_int("EXECUTION_VENUE_SCORE_MIN_SAMPLE", 3))
 
 
 def _outcome_key(outcome: dict) -> Tuple[str, str]:
@@ -89,6 +94,14 @@ def run_execution_scan() -> dict:
         return {"detail": "cache empty", "count": 0, "label": "executions"}
 
     book_weights = get_book_weights()
+    venue_scores = {}
+    if ENABLE_ADAPTIVE_VENUE_SCORING:
+        scored = build_venue_scores(
+            get_venue_metrics(EXECUTION_VENUE_SCORE_LOOKBACK),
+            min_sample=EXECUTION_VENUE_SCORE_MIN_SAMPLE,
+        )
+        venue_scores = {venue_id: score.score for venue_id, score in scored.items()}
+        print(f"execution_desk adaptive venue scores loaded: {venue_scores}")
     soft_books = {"fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"}
     now = datetime.now(timezone.utc)
     reports: List[dict] = []
@@ -187,7 +200,8 @@ def run_execution_scan() -> dict:
         ]
         min_edge = min(EXECUTION_EV_THRESHOLD, candidate["edge"]) if candidate.get("calibration") else EXECUTION_EV_THRESHOLD
         risk = RiskManager(RiskLimits(EXECUTION_MAX_ORDER_UNITS, EXECUTION_MAX_NOTIONAL, min_edge))
-        report = report_to_dict(ExecutionDesk.paper(quotes, risk=risk).execute(order))
+        router = SmartOrderRouter(venue_scores=venue_scores)
+        report = report_to_dict(ExecutionDesk.paper(quotes, risk=risk, router=router).execute(order))
         log_execution_report_to_db(report)
         reports.append(report)
 

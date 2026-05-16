@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, List
+from typing import Dict, Iterable, List
 
 from execution.models import ChildOrder, ParentOrder, Side, VenueQuote
 
@@ -8,8 +8,9 @@ from execution.models import ChildOrder, ParentOrder, Side, VenueQuote
 class SmartOrderRouter:
     """Splits parent orders across venues using price, liquidity, latency, and fill odds."""
 
-    def __init__(self, max_child_orders: int = 4):
+    def __init__(self, max_child_orders: int = 4, venue_scores: Dict[str, float] | None = None):
         self.max_child_orders = max(1, int(max_child_orders))
+        self.venue_scores = venue_scores or {}
 
     def route(self, order: ParentOrder, quotes: Iterable[VenueQuote]) -> List[ChildOrder]:
         candidates = [
@@ -33,8 +34,9 @@ class SmartOrderRouter:
     def _quote_cost(self, quote: VenueQuote, higher_is_better: bool) -> float:
         latency_penalty = quote.latency_ms / 100000.0
         fill_penalty = max(0.0, 1.0 - quote.fill_probability) / 1000.0
+        venue_penalty = max(0.0, 1.0 - float(self.venue_scores.get(quote.venue_id, 1.0))) / 100.0
         price_component = -quote.effective_ask if higher_is_better else quote.effective_ask
-        return price_component + latency_penalty + fill_penalty
+        return price_component + latency_penalty + fill_penalty + venue_penalty
 
     def _liquidity_weighted(self, order: ParentOrder, ranked: List[VenueQuote]) -> List[ChildOrder]:
         remaining = order.quantity
@@ -77,5 +79,6 @@ class SmartOrderRouter:
                 "fee_bps": quote.fee_bps,
                 "latency_ms": quote.latency_ms,
                 "fill_probability": quote.fill_probability,
+                "venue_score": self.venue_scores.get(quote.venue_id, 1.0),
             },
         )

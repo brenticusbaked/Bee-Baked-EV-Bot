@@ -3,6 +3,7 @@ import unittest
 from execution.desk import ExecutionDesk
 from execution.models import ParentOrder, Side, VenueQuote
 from execution.risk import RiskLimits, RiskManager
+from execution.router import SmartOrderRouter
 
 
 class ExecutionDeskTests(unittest.TestCase):
@@ -62,6 +63,26 @@ class ExecutionDeskTests(unittest.TestCase):
 
         self.assertEqual(report.child_orders[0].venue_id, "higher_payout")
         self.assertGreater(report.metrics["edge_capture"], 0)
+
+    def test_adaptive_venue_score_can_break_near_tie(self):
+        order = ParentOrder(
+            symbol="Bulls @ Heat | totals | Over 210.5",
+            side=Side.BUY,
+            quantity=1.0,
+            limit_price=2.0,
+            fair_price=1.95,
+            metadata={"edge": 0.03, "price_mode": "higher_is_better"},
+        )
+        quotes = [
+            VenueQuote("flaky", order.symbol, ask_price=2.0, available_quantity=1.0, latency_ms=50),
+            VenueQuote("reliable", order.symbol, ask_price=1.999, available_quantity=1.0, latency_ms=50),
+        ]
+        router = SmartOrderRouter(venue_scores={"flaky": 0.25, "reliable": 1.0})
+
+        report = ExecutionDesk.paper(quotes, router=router).execute(order)
+
+        self.assertEqual(report.child_orders[0].venue_id, "reliable")
+        self.assertEqual(report.child_orders[0].metadata["venue_score"], 1.0)
 
 
 if __name__ == "__main__":

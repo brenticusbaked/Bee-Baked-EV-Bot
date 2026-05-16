@@ -121,6 +121,9 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `CLV_LOOKBACK_DAYS`
 * `EXECUTION_EV_THRESHOLD`
 * `EXECUTION_CALIBRATION_ORDERS` (Optional paper-only proof-of-write routes when live opportunities do not clear threshold. Default: `0`)
+* `ENABLE_ADAPTIVE_VENUE_SCORING` (Default: `true`)
+* `EXECUTION_VENUE_SCORE_LOOKBACK`
+* `EXECUTION_VENUE_SCORE_MIN_SAMPLE`
 * `EXECUTION_MAX_ORDERS`
 * `EXECUTION_MAX_ORDER_UNITS`
 * `EXECUTION_MAX_NOTIONAL`
