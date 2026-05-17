@@ -52,7 +52,7 @@ def get_scan_tasks() -> List[PipelineTask]:
         from unified_bot import scan_markets
 
         tasks.append(PipelineTask(name="unified_market_scan", func=scan_markets))
-    if env_flag("ENABLE_EXECUTION_DESK", False):
+    if env_flag("ENABLE_EXECUTION_DESK", True):
         from execution_scanner import run_execution_scan
 
         tasks.append(PipelineTask(name="execution_desk", func=run_execution_scan))
@@ -70,10 +70,14 @@ def get_audit_tasks() -> List[PipelineTask]:
         from sgo_grader import run_grader
 
         tasks.append(PipelineTask(name="sgo_grader", func=run_grader))
-    if env_flag("ENABLE_PERFORMANCE_REPORT", False):
+    if env_flag("ENABLE_PERFORMANCE_REPORT", True):
         from performance_report import send_performance_report
 
         tasks.append(PipelineTask(name="performance_report", func=send_performance_report))
+    if env_flag("ENABLE_MONTE_CARLO", True):
+        from risk_simulation import run_monte_carlo
+
+        tasks.append(PipelineTask(name="monte_carlo_risk", func=run_monte_carlo))
 
     return tasks
 
@@ -89,7 +93,7 @@ def get_scraper_tasks() -> List[PipelineTask]:
         from scraper_draftkings import scrape_dk as scrape_draftkings
 
         tasks.append(PipelineTask(name="scraper_draftkings", func=scrape_draftkings))
-    if env_flag("ENABLE_BETMGM_SCRAPER", False):
+    if env_flag("ENABLE_BETMGM_SCRAPER", True):
         from scraper_betmgm import scrape_betmgm
 
         tasks.append(PipelineTask(name="scraper_betmgm", func=scrape_betmgm))
@@ -101,5 +105,9 @@ def get_scraper_tasks() -> List[PipelineTask]:
         from scraper_prizepicks import scrape_prizepicks
 
         tasks.append(PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks))
+    if env_flag("ENABLE_ODDSHARVESTER", True):
+        from scraper_oddsharvester import scrape_oddsharvester
+
+        tasks.append(PipelineTask(name="scraper_oddsharvester", func=scrape_oddsharvester))
 
     return tasks

@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -520,6 +520,15 @@ def get_all_graded_bets() -> List[Dict[str, Any]]:
     return _safe_execute(action, [])
 
 
+def get_today_bets() -> List[Dict[str, Any]]:
+    today = get_local_date_str()
+
+    def action():
+        return supabase.table("bets_log").select("*").eq("date", today).execute().data
+
+    return _safe_execute(action, [])
+
+
 def get_all_clv_bets() -> List[Dict[str, Any]]:
     def action():
         rows = supabase.table("bets_log").select("*").execute().data
@@ -556,7 +565,7 @@ def update_bet_clv(bet_id, closing_price_american, closing_price_decimal, clv_ed
 def save_odds_cache(cache_data):
     def action():
         supabase.table("odds_cache").upsert(
-            {"id": "master", "data": cache_data, "updated_at": datetime.utcnow().isoformat()}
+            {"id": "master", "data": cache_data, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).execute()
 
     _safe_execute(action, None)
@@ -593,7 +602,7 @@ def save_tracker_state(state_key: str, data, fallback_path: str) -> None:
 
     def action():
         supabase.table("bot_state").upsert(
-            {"id": state_key, "data": data, "updated_at": datetime.utcnow().isoformat()}
+            {"id": state_key, "data": data, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).execute()
 
     _safe_execute(action, None)

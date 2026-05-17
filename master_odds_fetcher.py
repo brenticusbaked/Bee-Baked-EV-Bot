@@ -19,10 +19,10 @@ PRIMARY_CONFIG = {
 }
 
 # Secondary key is used only on markets that add the most useful upside.
-# Cost: NBA 4 + NHL 2 + MLB 2 = 8 credits/run, 16/day at two runs per day.
+# Cost: NBA 4 + NHL 2 = 6 credits/run, 12/day at two runs per day (360/month).
+# WNBA removed to stay within the 500 credit/month free tier.
 SECONDARY_CONFIG = {
     "basketball_nba": "h2h,totals",
-    "basketball_wnba": "h2h,totals",
     "icehockey_nhl": "h2h",
 }
 

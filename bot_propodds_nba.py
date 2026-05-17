@@ -98,11 +98,13 @@ def _parse_target_stats() -> set:
 def to_decimal(price):
     try:
         price = float(price)
-        if price > 100:
+        if price >= 100:
             return (price / 100) + 1
-        if price < -100:
+        if price <= -100:
             return (100 / abs(price)) + 1
-        return price
+        if price > 1.0:
+            return price
+        return 1.909
     except Exception:
         return 1.909
 

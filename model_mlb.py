@@ -232,9 +232,9 @@ def run_mlb_model():
 
         for index, message in enumerate(alerts):
             send_discord_alert({"embeds": [{"description": message, "color": 3066993}]}, "model_mlb", "bet_alert", message[:200], DISCORD_WEBHOOK_URL, index == len(alerts)-1)
-        return {"detail": "mlb model complete", "count": len(alerts)}
+        return {"detail": "mlb model complete", "count": len(alerts), "label": "alerts"}
     except Exception as exc:
-        return {"detail": f"error: {exc}", "count": 0}
+        return {"detail": f"error: {exc}", "count": 0, "label": "alerts"}
 
 if __name__ == "__main__":
     run_mlb_model()

@@ -81,6 +81,34 @@ def _extract_book(notes: str) -> str:
     return match.group(1).strip()
 
 
+def _compute_roi(graded: pd.DataFrame) -> float:
+    if graded.empty or "units" not in graded.columns:
+        return 0.0
+    from utils.odds import profit_for_result
+
+    net = sum(
+        profit_for_result(row.get("odds", 0), row.get("units", 0), row.get("result", ""))
+        for _, row in graded.iterrows()
+    )
+    risked = sum(abs(float(row.get("units", 0))) for _, row in graded.iterrows())
+    return (net / risked * 100.0) if risked > 0 else 0.0
+
+
+def _markdown_table(headers: list, rows: list) -> str:
+    col_widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            col_widths[i] = max(col_widths[i], len(str(cell)))
+
+    header_line = "| " + " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers)) + " |"
+    sep_line = "|" + "|".join("-" * (w + 2) for w in col_widths) + "|"
+    body_lines = [
+        "| " + " | ".join(str(cell).ljust(col_widths[i]) for i, cell in enumerate(row)) + " |"
+        for row in rows
+    ]
+    return "\n".join([header_line, sep_line] + body_lines)
+
+
 def build_performance_report() -> str:
     bets = get_all_bets()
     if not bets:
@@ -105,49 +133,98 @@ def build_performance_report() -> str:
     df["bet_source"] = df.get("bet_source", "unknown").fillna("unknown").astype(str)
     df["sportsbook"] = df.get("notes", "").apply(_extract_book)
 
-    bucket_lines = []
+    overall_graded = df[df["is_graded"]]
+    overall_clv = df.dropna(subset=["clv_edge_num"])
+    overall_roi = _compute_roi(overall_graded)
+    overall_net = _compute_stats(df)["net_units"]
+    overall_clv_beaten = (overall_clv["beat_clv"].mean() * 100.0) if not overall_clv.empty else 0.0
+    avg_clv = overall_clv["clv_edge_num"].mean() if not overall_clv.empty else 0.0
+    win_pct = (overall_graded["is_win"].mean() * 100.0) if not overall_graded.empty else 0.0
+
+    summary = (
+        f"**BEE BAKED PERFORMANCE REPORT**\n"
+        f"Total Bets: {len(df)} | Graded: {len(overall_graded)}\n"
+        f"Record: {int(overall_graded['is_win'].sum()) if not overall_graded.empty else 0}W-"
+        f"{int((overall_graded['result'].astype(str) == 'LOSS').sum()) if not overall_graded.empty else 0}L\n"
+        f"Win%: {win_pct:.1f} | ROI: **{overall_roi:+.1f}%** | Net: **{overall_net:+.2f}u**\n"
+        f"CLV Beaten: **{overall_clv_beaten:.1f}%** | Avg CLV Edge: {avg_clv:+.2f}%\n"
+    )
+
+    bucket_rows = []
     grouped = df.groupby("ev_bucket", dropna=False)
     for label in BUCKET_LABELS:
         group = grouped.get_group(label) if label in grouped.groups else pd.DataFrame()
         if group.empty:
             continue
         stats = _compute_stats(group)
-        bucket_lines.append(_format_bucket_row(label, stats))
+        graded_group = group[group["is_graded"]]
+        roi = _compute_roi(graded_group)
+        bucket_rows.append([
+            label,
+            str(int(stats["bets"])),
+            f"{stats['win_rate']:.1f}",
+            f"{roi:+.1f}",
+            f"{stats['clv_beaten_rate']:.1f}",
+            f"{stats['avg_clv_edge']:+.2f}",
+            f"{stats['net_units']:+.2f}",
+        ])
 
-    source_lines = []
-    for source, group in df.groupby("bet_source", dropna=False):
-        if group.empty:
-            continue
-        stats = _compute_stats(group)
-        source_lines.append((stats["bets"], _format_source_row(source, stats)))
-    source_lines = [line for _, line in sorted(source_lines, key=lambda item: item[0], reverse=True)]
+    bucket_table = _markdown_table(
+        ["Bucket", "Bets", "Win%", "ROI%", "CLV%", "AvgCLV", "Units"],
+        bucket_rows,
+    )
 
-    book_lines = []
+    book_rows = []
     for book, group in df.groupby("sportsbook", dropna=False):
         if group.empty or book == "unknown":
             continue
         stats = _compute_stats(group)
-        book_lines.append((stats["bets"], _format_source_row(book, stats)))
-    book_lines = [line for _, line in sorted(book_lines, key=lambda item: item[0], reverse=True)[:8]]
+        graded_group = group[group["is_graded"]]
+        roi = _compute_roi(graded_group)
+        book_rows.append((stats["bets"], [
+            str(book),
+            str(int(stats["bets"])),
+            f"{stats['win_rate']:.1f}",
+            f"{roi:+.1f}",
+            f"{stats['clv_beaten_rate']:.1f}",
+            f"{stats['net_units']:+.2f}",
+        ]))
+    book_rows = [row for _, row in sorted(book_rows, key=lambda item: item[0], reverse=True)[:8]]
 
-    overall_graded = df[df["is_graded"]]
-    overall_clv = df.dropna(subset=["clv_edge_num"])
-    overall_text = (
-        f"Overall bets={len(df)} "
-        f"win%={(overall_graded['is_win'].mean() * 100.0) if not overall_graded.empty else 0.0:.1f} "
-        f"clv%={(overall_clv['beat_clv'].mean() * 100.0) if not overall_clv.empty else 0.0:.1f} "
-        f"avg_clv={(overall_clv['clv_edge_num'].mean()) if not overall_clv.empty else 0.0:+.2f}%"
-    )
+    book_table = _markdown_table(
+        ["Book", "Bets", "Win%", "ROI%", "CLV%", "Units"],
+        book_rows,
+    ) if book_rows else ""
 
-    return (
-        "**EV Bucket Report**\n"
-        f"{overall_text}\n\n"
-        "**Buckets**\n"
-        + "\n".join(bucket_lines)
-        + "\n\n**Sources**\n"
-        + "\n".join(source_lines)
-        + ("\n\n**Books**\n" + "\n".join(book_lines) if book_lines else "")
-    )
+    source_rows = []
+    for source, group in df.groupby("bet_source", dropna=False):
+        if group.empty:
+            continue
+        stats = _compute_stats(group)
+        graded_group = group[group["is_graded"]]
+        roi = _compute_roi(graded_group)
+        source_rows.append((stats["bets"], [
+            str(source),
+            str(int(stats["bets"])),
+            f"{stats['win_rate']:.1f}",
+            f"{roi:+.1f}",
+            f"{stats['clv_beaten_rate']:.1f}",
+            f"{stats['net_units']:+.2f}",
+        ]))
+    source_rows = [row for _, row in sorted(source_rows, key=lambda item: item[0], reverse=True)]
+
+    source_table = _markdown_table(
+        ["Source", "Bets", "Win%", "ROI%", "CLV%", "Units"],
+        source_rows,
+    ) if source_rows else ""
+
+    sections = [summary, "**EV Buckets**\n" + bucket_table]
+    if book_table:
+        sections.append("**By Book**\n" + book_table)
+    if source_table:
+        sections.append("**By Source**\n" + source_table)
+
+    return "\n\n".join(sections)
 
 
 def send_performance_report() -> str:

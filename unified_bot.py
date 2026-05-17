@@ -1,12 +1,13 @@
 import os
 from datetime import datetime, timezone
-from typing import Dict, List
 
-from db_manager import get_master_cache, is_already_logged, log_bet_to_db
+from db_manager import get_all_graded_bets, get_master_cache, get_today_bets, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
+from utils.kelly import dynamic_kelly_units
 from utils.links import sportsbook_search_link
-from utils.odds import decimal_implied_probability, decimal_to_american, fair_probabilities_from_prices, quarter_kelly_units
+from utils.odds import decimal_implied_probability, decimal_to_american, fair_probabilities_from_prices
+from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
 from utils.thresholds import env_float, env_int
 
 
@@ -85,18 +86,17 @@ def scan_markets():
     scanned_candidates = []
     book_weights = get_book_weights()
     soft_books = ["fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"]
-    now = datetime.now(timezone.utc)
+    graded_bets = get_all_graded_bets()
+    today_bets = get_today_bets()
 
     for sport, events in cache.items():
-        for event in events:
-            commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
-            if now > commence_time:
-                continue
-
+        for event in filter_valid_events(events, sport):
             matchup = f"{event['away_team']} @ {event['home_team']}"
             markets = {}
 
             for bookmaker in event.get("bookmakers", []):
+                if not validate_bookmaker_outcomes(bookmaker):
+                    continue
                 for market in bookmaker.get("markets", []):
                     market_key = market["key"]
                     markets.setdefault(market_key, {"sharp": {}, "soft": []})
@@ -206,7 +206,7 @@ def scan_markets():
                     fair_decimal = candidate["fair_decimal"]
                     fair_probability = candidate["fair_probability"]
                     book_weight = candidate["book_weight"]
-                    units = quarter_kelly_units(edge, offered_price)
+                    units = dynamic_kelly_units(edge, offered_price, graded_bets, today_bets)
                     fair_price_american = decimal_to_american(fair_decimal)
 
                     was_logged = log_bet_to_db(
