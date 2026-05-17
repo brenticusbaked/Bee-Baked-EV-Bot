@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -15,6 +14,7 @@ from execution.venue_scores import build_venue_scores
 from execution_signal import build_order_from_edge, quote_from_book
 from services.book_weights import get_book_weights
 from utils.odds import fair_probabilities_from_prices, quarter_kelly_units
+from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
 from utils.thresholds import env_float, env_int
 
 
@@ -103,19 +103,16 @@ def run_execution_scan() -> dict:
         venue_scores = {venue_id: score.score for venue_id, score in scored.items()}
         print(f"execution_desk adaptive venue scores loaded: {venue_scores}")
     soft_books = {"fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"}
-    now = datetime.now(timezone.utc)
     reports: List[dict] = []
     candidates: List[dict] = []
 
     for sport, events in cache.items():
-        for event in events:
-            commence_time = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
-            if now > commence_time:
-                continue
-
+        for event in filter_valid_events(events, sport):
             matchup = f"{event['away_team']} @ {event['home_team']}"
             markets: Dict[str, dict] = {}
             for bookmaker in event.get("bookmakers", []):
+                if not validate_bookmaker_outcomes(bookmaker):
+                    continue
                 book_key = bookmaker.get("key")
                 for market in bookmaker.get("markets", []):
                     market_key = market["key"]

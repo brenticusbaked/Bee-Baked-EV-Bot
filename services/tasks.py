@@ -74,6 +74,10 @@ def get_audit_tasks() -> List[PipelineTask]:
         from performance_report import send_performance_report
 
         tasks.append(PipelineTask(name="performance_report", func=send_performance_report))
+    if env_flag("ENABLE_MONTE_CARLO", False):
+        from risk_simulation import run_monte_carlo
+
+        tasks.append(PipelineTask(name="monte_carlo_risk", func=run_monte_carlo))
 
     return tasks
 

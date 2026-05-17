@@ -15,6 +15,11 @@ def _extract_book(notes: str) -> str:
     return match.group(1).strip()
 
 
+# Books known for higher liquidity and faster line movement
+HIGH_LIQUIDITY_BOOKS = {"fanduel", "draftkings", "betmgm"}
+LIQUIDITY_BONUS = 0.03
+
+
 def get_book_weights(min_sample: int = 5) -> Dict[str, float]:
     bets = get_all_bets()
     if not bets:
@@ -46,8 +51,10 @@ def get_book_weights(min_sample: int = 5) -> Dict[str, float]:
             win_rate = graded_group["is_win"].mean()
             win_score = max(min((win_rate - 0.5) * 0.2, 0.10), -0.10)
 
+        liquidity_score = LIQUIDITY_BONUS if str(book).lower() in HIGH_LIQUIDITY_BOOKS else 0.0
+
         sample_boost = min(len(group) / 50.0, 1.0)
-        weight = 1.0 + ((clv_score + win_score) * sample_boost)
+        weight = 1.0 + ((clv_score + win_score) * sample_boost) + liquidity_score
         weights[str(book)] = max(0.85, min(weight, 1.20))
 
     return weights
