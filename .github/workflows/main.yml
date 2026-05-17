@@ -2,9 +2,9 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # 10:00/14:00/20:00 UTC = 5 AM/9 AM/3 PM Central during daylight time.
-    # This catches overnight market shape, morning liquidity, and afternoon lineup/steam movement.
-    - cron: '0 10,14,20 * * *'
+    # 14:00/20:00 UTC = 9 AM/3 PM Central during daylight time.
+    # Two runs/day keeps all 3 Odds API keys within the 500 credit/month free tier.
+    - cron: '0 14,20 * * *'
   workflow_dispatch:
 
 jobs:
