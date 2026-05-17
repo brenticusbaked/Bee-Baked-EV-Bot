@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -556,7 +556,7 @@ def update_bet_clv(bet_id, closing_price_american, closing_price_decimal, clv_ed
 def save_odds_cache(cache_data):
     def action():
         supabase.table("odds_cache").upsert(
-            {"id": "master", "data": cache_data, "updated_at": datetime.utcnow().isoformat()}
+            {"id": "master", "data": cache_data, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).execute()
 
     _safe_execute(action, None)
@@ -593,7 +593,7 @@ def save_tracker_state(state_key: str, data, fallback_path: str) -> None:
 
     def action():
         supabase.table("bot_state").upsert(
-            {"id": state_key, "data": data, "updated_at": datetime.utcnow().isoformat()}
+            {"id": state_key, "data": data, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).execute()
 
     _safe_execute(action, None)

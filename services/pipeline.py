@@ -2,9 +2,10 @@ import asyncio
 import inspect
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from time import perf_counter
 from typing import Dict, Iterable, List, Tuple
+
+from utils.time import get_local_now
 
 from db_manager import get_runtime_db_stats, log_workflow_run, reset_runtime_db_stats
 from services.http_client import post_discord
@@ -154,7 +155,7 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
 
 
 def run_master_pipeline() -> None:
-    print(f"BEE-BAKED PIPELINE STARTING - {datetime.now().isoformat()}", flush=True)
+    print(f"BEE-BAKED PIPELINE STARTING - {get_local_now().isoformat()}", flush=True)
     reset_runtime_db_stats()
     all_results: List[TaskResult] = []
 
@@ -183,7 +184,7 @@ def run_master_pipeline() -> None:
 
 
 def run_scraper_pipeline() -> None:
-    print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {datetime.now().isoformat()}", flush=True)
+    print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {get_local_now().isoformat()}", flush=True)
     reset_runtime_db_stats()
     print("--- SCRAPER PHASE: EXECUTING BROWSER SCRAPERS ---", flush=True)
     results = run_parallel(get_scraper_tasks())

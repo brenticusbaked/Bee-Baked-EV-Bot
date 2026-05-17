@@ -63,7 +63,7 @@ def run_nhl_model():
         alerts = []
 
         if "gameWeek" not in schedule or not schedule["gameWeek"]:
-            return
+            return {"detail": "no nhl games scheduled", "count": 0, "label": "alerts"}
 
         for game in schedule["gameWeek"][0].get("games", []):
             away = game["awayTeam"]["placeName"]["default"]
