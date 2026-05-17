@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 # Game statuses that indicate cancellation or postponement
 CANCELLED_STATUSES = {"cancelled", "postponed", "suspended", "canceled"}
 STARTED_STATUSES = {"in_progress", "live", "in_play", "started"}
+COMPLETED_STATUSES = {"completed", "final", "closed", "over", "ended"}
 
 
 def check_event_status(event: dict) -> Tuple[bool, str]:
@@ -14,16 +15,23 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
     status = str(event.get("status", "")).strip().lower()
     if status in CANCELLED_STATUSES:
         return False, f"event {status}"
+    if status in STARTED_STATUSES:
+        return False, f"event {status}"
+    if status in COMPLETED_STATUSES:
+        return False, f"event {status}"
 
-    commence_time_str = event.get("commence_time", "")
-    if commence_time_str:
-        try:
-            commence = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
-            if now > commence:
-                return False, "event already started"
-        except (ValueError, TypeError):
-            pass
+    commence_time_str = event.get("commence_time") or ""
+    if not commence_time_str:
+        return False, "missing commence_time"
+
+    try:
+        commence = datetime.fromisoformat(str(commence_time_str).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False, "unparseable commence_time"
+
+    now = datetime.now(timezone.utc)
+    if now > commence:
+        return False, "event already started"
 
     return True, "ok"
 
