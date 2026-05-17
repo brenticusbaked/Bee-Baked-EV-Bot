@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from db_manager import get_all_graded_bets, get_master_cache, get_today_bets, is_already_logged, log_bet_to_db
 from models.nba_pace import PaceContext, build_pace_context, pace_total_adjustment
+from models.nfl_proe import PROEContext, build_proe_context, proe_spread_adjustment, proe_total_adjustment
 from models.nhl_pdo import PDOContext, build_pdo_context, pdo_total_adjustment
 from models.talent_model import TalentContext, adjusted_fair_probability, build_talent_context
 from services.alerts import send_discord_alert
@@ -22,6 +23,7 @@ SPORT_ALERT_WEBHOOKS = {
     "baseball_mlb": os.getenv("DISCORD_MLB_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "icehockey_nhl": os.getenv("DISCORD_NHL_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "basketball_nba": os.getenv("DISCORD_NBA_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
+    "americanfootball_nfl": os.getenv("DISCORD_NFL_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
 }
 UNIFIED_EV_THRESHOLD = env_float("UNIFIED_EV_THRESHOLD", 0.01)
 UNIFIED_NEAR_MISS_THRESHOLD = env_float("UNIFIED_NEAR_MISS_THRESHOLD", 0.005)
@@ -33,6 +35,9 @@ ENABLE_NBA_TOTAL_ALERTS = os.getenv("ENABLE_NBA_TOTAL_ALERTS", "true").strip().l
 ENABLE_NHL_TOTAL_ALERTS = os.getenv("ENABLE_NHL_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_MLB_SPREAD_ALERTS = os.getenv("ENABLE_MLB_SPREAD_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_MLB_TOTAL_ALERTS = os.getenv("ENABLE_MLB_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_NFL_TOTAL_ALERTS = os.getenv("ENABLE_NFL_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_NFL_SPREAD_ALERTS = os.getenv("ENABLE_NFL_SPREAD_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_NFL_H2H_ALERTS = os.getenv("ENABLE_NFL_H2H_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVENT_MARKET", 3))
 
 
@@ -63,6 +68,12 @@ def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
             (market_key == "h2h" and ENABLE_MLB_H2H_ALERTS)
             or (market_key == "spreads" and ENABLE_MLB_SPREAD_ALERTS)
             or (market_key == "totals" and ENABLE_MLB_TOTAL_ALERTS)
+        )
+    if sport_key == "americanfootball_nfl":
+        return (
+            (market_key == "spreads" and ENABLE_NFL_SPREAD_ALERTS)
+            or (market_key == "totals" and ENABLE_NFL_TOTAL_ALERTS)
+            or (market_key == "h2h" and ENABLE_NFL_H2H_ALERTS)
         )
     return market_key in {"spreads", "totals", "h2h"}
 
@@ -148,6 +159,33 @@ def _resolve_pace_prob(
     return pace_total_adjustment(fair_probability, home_data, away_data, is_over)
 
 
+def _resolve_proe_prob(
+    fair_probability: float,
+    proe_ctx: PROEContext,
+    home_team: str,
+    away_team: str,
+    outcome_name: str,
+    market_type: str,
+) -> float:
+    """Adjust NFL probability using PROE and per-play success signals."""
+    home_data = proe_ctx.get(home_team)
+    away_data = proe_ctx.get(away_team)
+    if home_data is None or away_data is None:
+        return fair_probability
+
+    if market_type == "totals":
+        is_over = outcome_name.strip().lower() == "over"
+        return proe_total_adjustment(fair_probability, home_data, away_data, is_over)
+
+    if market_type in ("spreads", "h2h"):
+        name_lower = outcome_name.strip().lower()
+        home_lower = home_team.strip().lower()
+        is_home = home_lower in name_lower or name_lower in home_lower
+        return proe_spread_adjustment(fair_probability, home_data, away_data, is_home)
+
+    return fair_probability
+
+
 def scan_markets():
     cache = get_master_cache()
     if not cache:
@@ -173,6 +211,10 @@ def scan_markets():
     pace_ctx = PaceContext()
     if "basketball_nba" in cache:
         pace_ctx = build_pace_context()
+
+    proe_ctx = PROEContext()
+    if "americanfootball_nfl" in cache:
+        proe_ctx = build_proe_context()
 
     for sport, events in cache.items():
         for event in filter_valid_events(events, sport):
@@ -244,6 +286,12 @@ def scan_markets():
                             sharp_fair, pace_ctx,
                             event["home_team"], event["away_team"],
                             soft_bet["name"],
+                        )
+                    elif sport == "americanfootball_nfl" and proe_ctx.loaded:
+                        fair_probability = _resolve_proe_prob(
+                            sharp_fair, proe_ctx,
+                            event["home_team"], event["away_team"],
+                            soft_bet["name"], market_type,
                         )
                     else:
                         fair_probability = sharp_fair
