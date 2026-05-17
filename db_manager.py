@@ -520,6 +520,15 @@ def get_all_graded_bets() -> List[Dict[str, Any]]:
     return _safe_execute(action, [])
 
 
+def get_today_bets() -> List[Dict[str, Any]]:
+    today = get_local_date_str()
+
+    def action():
+        return supabase.table("bets_log").select("*").eq("date", today).execute().data
+
+    return _safe_execute(action, [])
+
+
 def get_all_clv_bets() -> List[Dict[str, Any]]:
     def action():
         rows = supabase.table("bets_log").select("*").execute().data

@@ -12,7 +12,7 @@ from utils.config import env_flag
 
 logger = logging.getLogger(__name__)
 
-ENABLE_ODDSHARVESTER = env_flag("ENABLE_ODDSHARVESTER", False)
+ENABLE_ODDSHARVESTER = env_flag("ENABLE_ODDSHARVESTER", True)
 
 # ---------------------------------------------------------------------------
 # Sport / league / market mappings
