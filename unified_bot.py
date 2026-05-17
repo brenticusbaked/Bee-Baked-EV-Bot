@@ -2,6 +2,8 @@ import os
 from datetime import datetime, timezone
 
 from db_manager import get_all_graded_bets, get_master_cache, get_today_bets, is_already_logged, log_bet_to_db
+from models.nba_pace import PaceContext, build_pace_context, pace_total_adjustment
+from models.nhl_pdo import PDOContext, build_pdo_context, pdo_total_adjustment
 from models.talent_model import TalentContext, adjusted_fair_probability, build_talent_context
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
@@ -112,6 +114,40 @@ def _resolve_talent_prob(
     return fair_probability
 
 
+def _resolve_pdo_prob(
+    fair_probability: float,
+    pdo_ctx: PDOContext,
+    home_team: str,
+    away_team: str,
+    outcome_name: str,
+) -> float:
+    """Adjust NHL totals probability using PDO regression signals."""
+    home_data = pdo_ctx.get(home_team)
+    away_data = pdo_ctx.get(away_team)
+    if home_data is None or away_data is None:
+        return fair_probability
+
+    is_over = outcome_name.strip().lower() == "over"
+    return pdo_total_adjustment(fair_probability, home_data, away_data, is_over)
+
+
+def _resolve_pace_prob(
+    fair_probability: float,
+    pace_ctx: PaceContext,
+    home_team: str,
+    away_team: str,
+    outcome_name: str,
+) -> float:
+    """Adjust NBA totals probability using lineup pace signals."""
+    home_data = pace_ctx.get(home_team)
+    away_data = pace_ctx.get(away_team)
+    if home_data is None or away_data is None:
+        return fair_probability
+
+    is_over = outcome_name.strip().lower() == "over"
+    return pace_total_adjustment(fair_probability, home_data, away_data, is_over)
+
+
 def scan_markets():
     cache = get_master_cache()
     if not cache:
@@ -129,6 +165,14 @@ def scan_markets():
     talent_ctx = TalentContext()
     if "baseball_mlb" in cache:
         talent_ctx = build_talent_context()
+
+    pdo_ctx = PDOContext()
+    if "icehockey_nhl" in cache:
+        pdo_ctx = build_pdo_context()
+
+    pace_ctx = PaceContext()
+    if "basketball_nba" in cache:
+        pace_ctx = build_pace_context()
 
     for sport, events in cache.items():
         for event in filter_valid_events(events, sport):
@@ -188,6 +232,18 @@ def scan_markets():
                             sharp_fair, talent_ctx,
                             event["home_team"], event["away_team"],
                             soft_bet["name"], market_type,
+                        )
+                    elif sport == "icehockey_nhl" and pdo_ctx.loaded and market_type == "totals":
+                        fair_probability = _resolve_pdo_prob(
+                            sharp_fair, pdo_ctx,
+                            event["home_team"], event["away_team"],
+                            soft_bet["name"],
+                        )
+                    elif sport == "basketball_nba" and pace_ctx.loaded and market_type == "totals":
+                        fair_probability = _resolve_pace_prob(
+                            sharp_fair, pace_ctx,
+                            event["home_team"], event["away_team"],
+                            soft_bet["name"],
                         )
                     else:
                         fair_probability = sharp_fair
