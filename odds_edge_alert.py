@@ -8,7 +8,9 @@ import csv
 import json
 import os
 import sys
+import time
 import urllib.request
+import urllib.error
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -21,6 +23,11 @@ GROUP_FIELDS = ("sport", "market", "selection", "player", "team", "matchup", "st
 WIN_VALUES = {"win", "won", "hit", "cash", "cashed", "true", "1"}
 LOSS_VALUES = {"loss", "lost", "miss", "false", "0"}
 PUSH_VALUES = {"push", "void", "cancelled", "canceled", "refund", "refunded"}
+
+# Webhook retry configuration
+WEBHOOK_MAX_RETRIES = 3
+WEBHOOK_RETRY_DELAY = 2  # seconds
+WEBHOOK_TIMEOUT = 15
 
 
 def parse_number(value: Any) -> Optional[float]:
@@ -213,6 +220,19 @@ def find_edges(rows: List[Dict[str, Any]], threshold: float, min_sample: int) ->
     return sorted(alerts, key=lambda item: item["edge"], reverse=True)
 
 
+def validate_webhook_url(webhook_url: Optional[str]) -> bool:
+    """Validate Discord webhook URL format and presence."""
+    if not webhook_url or not isinstance(webhook_url, str):
+        return False
+    
+    valid_prefixes = (
+        "https://discordapp.com/api/webhooks/",
+        "https://discord.com/api/webhooks/",
+    )
+    
+    return any(webhook_url.startswith(prefix) for prefix in valid_prefixes)
+
+
 def send_discord_update(
     webhook_url: str,
     alerts: List[Dict[str, Any]],
@@ -220,6 +240,11 @@ def send_discord_update(
     rows_scanned: int,
     note: Optional[str] = None,
 ) -> None:
+    """Send Discord webhook with retry logic and better error handling."""
+    
+    if not validate_webhook_url(webhook_url):
+        raise ValueError(f"Invalid Discord webhook URL format")
+    
     if alerts:
         top_lines = [
             f"**{item['edge_pct']:.2f}% edge** | {item['label']} | odds {item['odds']} | fair {item['fair_probability']:.3f} vs implied {item['implied_probability']:.3f}"
@@ -234,15 +259,64 @@ def send_discord_update(
         "embeds": [{"title": "Odds Edge Update", "description": description}],
     }
     data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        webhook_url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=15) as response:
-        if response.status >= 300:
-            raise RuntimeError(f"Discord webhook returned HTTP {response.status}")
+    
+    last_error = None
+    
+    for attempt in range(WEBHOOK_MAX_RETRIES):
+        try:
+            request = urllib.request.Request(
+                webhook_url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            
+            with urllib.request.urlopen(request, timeout=WEBHOOK_TIMEOUT) as response:
+                if response.status >= 300:
+                    error_msg = f"Discord webhook returned HTTP {response.status}"
+                    
+                    # Retry on server errors (5xx)
+                    if 500 <= response.status < 600 and attempt < WEBHOOK_MAX_RETRIES - 1:
+                        print(f"Attempt {attempt + 1}/{WEBHOOK_MAX_RETRIES}: {error_msg}. Retrying in {WEBHOOK_RETRY_DELAY}s...")
+                        time.sleep(WEBHOOK_RETRY_DELAY)
+                        continue
+                    
+                    # Don't retry on client errors (4xx) - permanent failures
+                    raise RuntimeError(error_msg)
+                
+                print(f"Discord webhook sent successfully (attempt {attempt + 1})")
+                return  # Success
+                
+        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+            last_error = exc
+            status_code = None
+            
+            if isinstance(exc, urllib.error.HTTPError):
+                status_code = exc.code
+            
+            error_detail = f"{type(exc).__name__}: {exc}"
+            if status_code:
+                error_detail = f"HTTP {status_code}: {exc.reason}"
+            
+            # Check if we should retry
+            should_retry = False
+            if isinstance(exc, urllib.error.URLError):
+                should_retry = True  # Retry connection errors
+            elif status_code and status_code >= 500:
+                should_retry = True  # Retry server errors
+            
+            if should_retry and attempt < WEBHOOK_MAX_RETRIES - 1:
+                print(f"Attempt {attempt + 1}/{WEBHOOK_MAX_RETRIES}: Discord webhook failed ({error_detail}). Retrying in {WEBHOOK_RETRY_DELAY}s...")
+                time.sleep(WEBHOOK_RETRY_DELAY)
+                continue
+            
+            if attempt == WEBHOOK_MAX_RETRIES - 1:
+                # Final attempt failed
+                raise RuntimeError(f"Discord webhook failed after {WEBHOOK_MAX_RETRIES} attempts: {error_detail}")
+    
+    # Should not reach here, but just in case
+    if last_error:
+        raise RuntimeError(f"Discord webhook failed: {last_error}")
 
 
 def main() -> int:
@@ -274,14 +348,24 @@ def main() -> int:
             print(f"{item['edge_pct']:.2f}% edge - {item['label']} (odds {item['odds']})")
 
     if args.webhook_url and (alerts or args.always_notify):
-        send_discord_update(args.webhook_url, alerts, args.threshold, len(rows), note=note)
+        if not validate_webhook_url(args.webhook_url):
+            print(f"ERROR: Invalid Discord webhook URL. Check DISCORD_WEBHOOK_URL secret in GitHub.", file=sys.stderr)
+            return 1
+        
+        try:
+            send_discord_update(args.webhook_url, alerts, args.threshold, len(rows), note=note)
+        except Exception as exc:
+            print(f"ERROR: Failed to send Discord webhook: {exc}", file=sys.stderr)
+            print(f"Webhook URL format: {args.webhook_url[:50]}...", file=sys.stderr)
+            return 1
 
     return 0
 
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        exit_code = main()
+        sys.exit(exit_code)
     except Exception as exc:
         print(f"odds_edge_alert failed: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+        sys.exit(1)
