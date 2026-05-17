@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timezone
 
 from db_manager import get_all_graded_bets, get_master_cache, get_today_bets, is_already_logged, log_bet_to_db
+from models.talent_model import TalentContext, adjusted_fair_probability, build_talent_context
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
 from utils.kelly import dynamic_kelly_units
@@ -20,11 +21,11 @@ SPORT_ALERT_WEBHOOKS = {
     "icehockey_nhl": os.getenv("DISCORD_NHL_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "basketball_nba": os.getenv("DISCORD_NBA_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
 }
-UNIFIED_EV_THRESHOLD = env_float("UNIFIED_EV_THRESHOLD", 0.02)
-UNIFIED_NEAR_MISS_THRESHOLD = env_float("UNIFIED_NEAR_MISS_THRESHOLD", 0.01)
+UNIFIED_EV_THRESHOLD = env_float("UNIFIED_EV_THRESHOLD", 0.01)
+UNIFIED_NEAR_MISS_THRESHOLD = env_float("UNIFIED_NEAR_MISS_THRESHOLD", 0.005)
 UNIFIED_SPREAD_EV_THRESHOLD = env_float("UNIFIED_SPREAD_EV_THRESHOLD", UNIFIED_EV_THRESHOLD)
-UNIFIED_H2H_EV_THRESHOLD = env_float("UNIFIED_H2H_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.03))
-UNIFIED_TOTAL_EV_THRESHOLD = env_float("UNIFIED_TOTAL_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.0225))
+UNIFIED_H2H_EV_THRESHOLD = env_float("UNIFIED_H2H_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
+UNIFIED_TOTAL_EV_THRESHOLD = env_float("UNIFIED_TOTAL_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
 ENABLE_MLB_H2H_ALERTS = os.getenv("ENABLE_MLB_H2H_ALERTS", "false").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NBA_TOTAL_ALERTS = os.getenv("ENABLE_NBA_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NHL_TOTAL_ALERTS = os.getenv("ENABLE_NHL_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -75,6 +76,42 @@ def _market_ev_threshold(market_type: str) -> float:
     return UNIFIED_EV_THRESHOLD
 
 
+def _resolve_talent_prob(
+    fair_probability: float,
+    talent_ctx: TalentContext,
+    home_team: str,
+    away_team: str,
+    outcome_name: str,
+    market_type: str,
+) -> float:
+    """Blend sharp fair probability with the talent model for MLB matchups."""
+    adj = talent_ctx.get(home_team, away_team)
+    if adj is None:
+        return fair_probability
+
+    name_lower = outcome_name.strip().lower()
+    home_lower = home_team.strip().lower()
+
+    if market_type == "h2h":
+        is_home = home_lower in name_lower or name_lower in home_lower
+        model_prob = adj["model_prob_home"] if is_home else adj["model_prob_away"]
+        return adjusted_fair_probability(fair_probability, model_prob)
+
+    if market_type == "spreads":
+        is_home = home_lower in name_lower or name_lower in home_lower
+        model_prob = adj["model_prob_home"] if is_home else adj["model_prob_away"]
+        spread_model = 0.50 + (model_prob - 0.50) * 0.50
+        return adjusted_fair_probability(fair_probability, spread_model)
+
+    if market_type == "totals":
+        avg_fatigue = (adj["home_fatigue"] + adj["away_fatigue"]) / 2
+        if name_lower == "over":
+            return fair_probability + (avg_fatigue * 0.02)
+        return fair_probability - (avg_fatigue * 0.02)
+
+    return fair_probability
+
+
 def scan_markets():
     cache = get_master_cache()
     if not cache:
@@ -88,6 +125,10 @@ def scan_markets():
     soft_books = ["fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"]
     graded_bets = get_all_graded_bets()
     today_bets = get_today_bets()
+
+    talent_ctx = TalentContext()
+    if "baseball_mlb" in cache:
+        talent_ctx = build_talent_context()
 
     for sport, events in cache.items():
         for event in filter_valid_events(events, sport):
@@ -138,9 +179,18 @@ def scan_markets():
                         str(soft_bet["name"]).lower().strip(),
                         str(soft_bet.get("point", "")),
                     )
-                    fair_probability = fair_probabilities.get(outcome_key)
-                    if not fair_probability:
+                    sharp_fair = fair_probabilities.get(outcome_key)
+                    if not sharp_fair:
                         continue
+
+                    if sport == "baseball_mlb" and talent_ctx.loaded:
+                        fair_probability = _resolve_talent_prob(
+                            sharp_fair, talent_ctx,
+                            event["home_team"], event["away_team"],
+                            soft_bet["name"], market_type,
+                        )
+                    else:
+                        fair_probability = sharp_fair
 
                     fair_decimal = 1.0 / fair_probability
                     edge = calculate_edge_from_probability(soft_bet["price"], fair_probability)
