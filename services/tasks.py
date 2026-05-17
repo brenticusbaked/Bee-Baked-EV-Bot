@@ -105,5 +105,9 @@ def get_scraper_tasks() -> List[PipelineTask]:
         from scraper_prizepicks import scrape_prizepicks
 
         tasks.append(PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks))
+    if env_flag("ENABLE_ODDSHARVESTER", False):
+        from scraper_oddsharvester import scrape_oddsharvester
+
+        tasks.append(PipelineTask(name="scraper_oddsharvester", func=scrape_oddsharvester))
 
     return tasks
