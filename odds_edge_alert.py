@@ -243,7 +243,7 @@ def send_discord_update(
     """Send Discord webhook with retry logic and better error handling."""
     
     if not validate_webhook_url(webhook_url):
-        raise ValueError(f"Invalid Discord webhook URL format")
+        raise ValueError("Invalid Discord webhook URL format")
     
     if alerts:
         top_lines = [
@@ -319,6 +319,22 @@ def send_discord_update(
         raise RuntimeError(f"Discord webhook failed: {last_error}")
 
 
+def load_supabase_bets() -> List[Dict[str, Any]]:
+    """Pull graded bets from Supabase bets_log for edge analysis."""
+    try:
+        from db_manager import supabase
+    except ImportError:
+        return []
+    if not supabase:
+        return []
+    try:
+        rows = supabase.table("bets_log").select("*").execute().data
+        return rows if isinstance(rows, list) else []
+    except Exception as exc:
+        print(f"Failed to load bets from Supabase: {exc}")
+        return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logs", default="logs", help="Directory containing CSV, JSON, or JSONL betting logs.")
@@ -328,6 +344,7 @@ def main() -> int:
     parser.add_argument("--always-notify", action="store_true", help="Send a Discord update even when no edge clears the threshold.")
     parser.add_argument("--allow-missing-logs", action="store_true", help="Treat a missing logs directory as an empty scan instead of failing.")
     parser.add_argument("--json", action="store_true", help="Print full alert JSON.")
+    parser.add_argument("--supabase", action="store_true", help="Pull bets from Supabase bets_log in addition to local logs.")
     args = parser.parse_args()
 
     note = None
@@ -339,6 +356,14 @@ def main() -> int:
         rows = []
         note = str(exc)
 
+    if args.supabase:
+        sb_rows = load_supabase_bets()
+        if sb_rows:
+            print(f"Loaded {len(sb_rows)} row(s) from Supabase bets_log.")
+            rows.extend(sb_rows)
+        elif not rows:
+            note = (note or "") + " No Supabase rows loaded."
+
     alerts = find_edges(rows, threshold=args.threshold, min_sample=args.min_sample)
 
     if args.json or not alerts:
@@ -349,7 +374,7 @@ def main() -> int:
 
     if args.webhook_url and (alerts or args.always_notify):
         if not validate_webhook_url(args.webhook_url):
-            print(f"ERROR: Invalid Discord webhook URL. Check DISCORD_WEBHOOK_URL secret in GitHub.", file=sys.stderr)
+            print("ERROR: Invalid Discord webhook URL. Check DISCORD_WEBHOOK_URL secret in GitHub.", file=sys.stderr)
             return 1
         
         try:

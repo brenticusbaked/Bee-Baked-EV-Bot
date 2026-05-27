@@ -6,9 +6,9 @@ Use this path to cache market data in Supabase and avoid spending Odds API credi
 
 Run these SQL files in the Supabase SQL editor:
 
-1. `supabase_market_data_schema.sql`
-2. `supabase_bets_log_schema_patch.sql`
-3. `supabase_execution_schema.sql`
+1. `supabase_core_schema.sql` (bets_log, odds_cache, bot_state, alerts_sent, workflow_runs)
+2. `supabase_market_data_schema.sql` (fixtures, historical_odds, syndicate_bets, odds_ingest_runs)
+3. `supabase_execution_schema.sql` (execution_orders, execution_child_orders, execution_fills, venue_metrics)
 
 `supabase_market_data_schema.sql` creates:
 
