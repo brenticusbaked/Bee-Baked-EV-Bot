@@ -4,6 +4,7 @@ from typing import Dict, List
 from db_manager import save_master_cache
 from services.http_client import request
 from utils.config import env_flag
+from utils.seasons import filter_config_in_season
 
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
@@ -129,19 +130,29 @@ def run_fetcher():
         return {"detail": "ODDS_API_KEY missing", "count": 0, "label": "updates"}
 
     cache: Dict[str, List[dict]] = {}
+
+    active_primary = filter_config_in_season(PRIMARY_CONFIG)
+    skipped_primary = set(PRIMARY_CONFIG) - set(active_primary)
+    if skipped_primary:
+        print(f"BEE-BAKED FETCH: Skipping off-season sports (primary): {', '.join(sorted(skipped_primary))}")
+
     print(
         "BEE-BAKED FETCH: Running primary precision pull"
-        f" ({_credits_for_config(PRIMARY_CONFIG)} credits/run)"
+        f" ({_credits_for_config(active_primary)} credits/run)"
     )
-    primary_success = _fetch_config(cache, ODDS_API_KEY, PRIMARY_CONFIG, "primary key")
+    primary_success = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary key")
 
     secondary_success = 0
     if ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL:
+        active_secondary = filter_config_in_season(SECONDARY_CONFIG)
+        skipped_secondary = set(SECONDARY_CONFIG) - set(active_secondary)
+        if skipped_secondary:
+            print(f"BEE-BAKED FETCH: Skipping off-season sports (secondary): {', '.join(sorted(skipped_secondary))}")
         print(
             "BEE-BAKED FETCH: Running secondary expansion pull"
-            f" ({_credits_for_config(SECONDARY_CONFIG)} credits/run)"
+            f" ({_credits_for_config(active_secondary)} credits/run)"
         )
-        secondary_success = _fetch_config(cache, ODDS_API_KEY_2, SECONDARY_CONFIG, "secondary key")
+        secondary_success = _fetch_config(cache, ODDS_API_KEY_2, active_secondary, "secondary key")
     elif not ENABLE_ODDS_SECONDARY_PULL:
         print("ENABLE_ODDS_SECONDARY_PULL=false. Skipping secondary expansion pull.")
     else:
@@ -149,11 +160,15 @@ def run_fetcher():
 
     tertiary_success = 0
     if ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL:
+        active_tertiary = filter_config_in_season(TERTIARY_CONFIG)
+        skipped_tertiary = set(TERTIARY_CONFIG) - set(active_tertiary)
+        if skipped_tertiary:
+            print(f"BEE-BAKED FETCH: Skipping off-season sports (tertiary): {', '.join(sorted(skipped_tertiary))}")
         print(
             "BEE-BAKED FETCH: Running tertiary expansion pull"
-            f" ({_credits_for_config(TERTIARY_CONFIG)} credits/run)"
+            f" ({_credits_for_config(active_tertiary)} credits/run)"
         )
-        tertiary_success = _fetch_config(cache, ODDS_API_KEY_3, TERTIARY_CONFIG, "tertiary key")
+        tertiary_success = _fetch_config(cache, ODDS_API_KEY_3, active_tertiary, "tertiary key")
     elif not ENABLE_ODDS_TERTIARY_PULL:
         print("ENABLE_ODDS_TERTIARY_PULL=false. Skipping tertiary expansion pull.")
     else:
