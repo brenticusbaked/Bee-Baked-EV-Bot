@@ -15,6 +15,7 @@ from execution_signal import build_order_from_edge, quote_from_book
 from services.book_weights import get_book_weights
 from utils.odds import fair_probabilities_from_prices, quarter_kelly_units
 from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
+from utils.shin import shin_fair_probabilities_from_prices
 from utils.thresholds import env_float, env_int
 
 
@@ -25,6 +26,7 @@ EXECUTION_MAX_ORDER_UNITS = env_float("EXECUTION_MAX_ORDER_UNITS", 5.0)
 EXECUTION_MAX_NOTIONAL = env_float("EXECUTION_MAX_NOTIONAL", 1000.0)
 EXECUTION_LEDGER_PATH = os.getenv("EXECUTION_LEDGER_PATH", "execution_ledger.json")
 ENABLE_ADAPTIVE_VENUE_SCORING = os.getenv("ENABLE_ADAPTIVE_VENUE_SCORING", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "true").strip().lower() in {"1", "true", "yes", "on"}
 EXECUTION_VENUE_SCORE_LOOKBACK = max(1, env_int("EXECUTION_VENUE_SCORE_LOOKBACK", 500))
 EXECUTION_VENUE_SCORE_MIN_SAMPLE = max(1, env_int("EXECUTION_VENUE_SCORE_MIN_SAMPLE", 3))
 
@@ -134,7 +136,10 @@ def run_execution_scan() -> dict:
                             )
 
             for market_type, market_data in markets.items():
-                fair_probs = fair_probabilities_from_prices(market_data["sharp"])
+                if ENABLE_SHIN_DEVIG:
+                    fair_probs = shin_fair_probabilities_from_prices(market_data["sharp"])
+                else:
+                    fair_probs = fair_probabilities_from_prices(market_data["sharp"])
                 for key, venues in market_data["venues"].items():
                     fair_probability = fair_probs.get(key)
                     if not fair_probability:
