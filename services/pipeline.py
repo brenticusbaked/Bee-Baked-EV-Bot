@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from utils.time import get_local_now
 
-from db_manager import get_runtime_db_stats, log_workflow_run, reset_runtime_db_stats
+from db_manager import get_runtime_db_stats, log_workflow_run, reset_runtime_db_stats, validate_supabase_connection
 from services.http_client import post_discord
 from services.tasks import (
     PipelineTask,
@@ -157,6 +157,13 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
 def run_master_pipeline() -> None:
     print(f"BEE-BAKED PIPELINE STARTING - {get_local_now().isoformat()}", flush=True)
     reset_runtime_db_stats()
+
+    print("--- SUPABASE HEALTH CHECK ---", flush=True)
+    db_health = validate_supabase_connection()
+    if not db_health["ok"]:
+        for err in db_health.get("errors", []):
+            print(f"  [!] {err}", flush=True)
+
     all_results: List[TaskResult] = []
 
     print("--- PHASE 1: REFRESHING CLOUD CACHE ---", flush=True)
