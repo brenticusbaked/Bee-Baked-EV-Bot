@@ -8,6 +8,7 @@ on:
 jobs:
   send-daily-slips:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
