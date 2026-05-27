@@ -8,11 +8,15 @@ from models.nhl_pdo import PDOContext, build_pdo_context, pdo_total_adjustment
 from models.talent_model import TalentContext, adjusted_fair_probability, build_talent_context
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
+from utils.correlation import ExposureEntry, ExposureTracker, check_exposure
 from utils.kelly import dynamic_kelly_units
 from utils.links import sportsbook_search_link
+from utils.market_efficiency import score_market_efficiency
 from utils.odds import decimal_implied_probability, decimal_to_american, fair_probabilities_from_prices
 from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
+from utils.shin import shin_fair_probabilities_from_prices
 from utils.thresholds import env_float, env_int
+from utils.time_decay import adjusted_threshold, compute_time_decay
 
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
@@ -39,6 +43,11 @@ ENABLE_NFL_TOTAL_ALERTS = os.getenv("ENABLE_NFL_TOTAL_ALERTS", "true").strip().l
 ENABLE_NFL_SPREAD_ALERTS = os.getenv("ENABLE_NFL_SPREAD_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NFL_H2H_ALERTS = os.getenv("ENABLE_NFL_H2H_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVENT_MARKET", 3))
+ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_TIME_DECAY = os.getenv("ENABLE_TIME_DECAY", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_CORRELATION_LIMITS = os.getenv("ENABLE_CORRELATION_LIMITS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_MARKET_EFFICIENCY = os.getenv("ENABLE_MARKET_EFFICIENCY", "true").strip().lower() in {"1", "true", "yes", "on"}
+MIN_EFFICIENCY_SCORE = env_float("MIN_EFFICIENCY_SCORE", 0.30)
 
 
 def get_mobile_app_link(book_key, selection_id, event_id, matchup):
@@ -199,6 +208,7 @@ def scan_markets():
     soft_books = ["fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"]
     graded_bets = get_all_graded_bets()
     today_bets = get_today_bets()
+    exposure_tracker = ExposureTracker() if ENABLE_CORRELATION_LIMITS else None
 
     talent_ctx = TalentContext()
     if "baseball_mlb" in cache:
@@ -258,7 +268,13 @@ def scan_markets():
                 if not sharp:
                     continue
 
-                fair_probabilities = fair_probabilities_from_prices(sharp)
+                if ENABLE_SHIN_DEVIG:
+                    fair_probabilities = shin_fair_probabilities_from_prices(sharp)
+                else:
+                    fair_probabilities = fair_probabilities_from_prices(sharp)
+
+                time_decay = compute_time_decay(event.get("commence_time")) if ENABLE_TIME_DECAY else None
+                sharp_prices_list = list(sharp.values())
                 candidates = []
                 for soft_bet in data["soft"]:
                     outcome_key = (
@@ -300,6 +316,19 @@ def scan_markets():
                     edge = calculate_edge_from_probability(soft_bet["price"], fair_probability)
                     book_weight = book_weights.get(soft_bet["book"], 1.0)
                     weighted_score = edge * book_weight
+
+                    efficiency = None
+                    if ENABLE_MARKET_EFFICIENCY:
+                        soft_prices_for_market = [s["price"] for s in data["soft"]]
+                        efficiency = score_market_efficiency(
+                            sharp_prices_list, soft_prices_for_market, max(edge, 0.0),
+                        )
+                        weighted_score *= (0.5 + 0.5 * efficiency.score)
+
+                    effective_threshold = market_threshold
+                    if time_decay is not None:
+                        effective_threshold = adjusted_threshold(market_threshold, time_decay)
+
                     scanned_candidates.append(
                         {
                             "matchup": matchup,
@@ -308,10 +337,12 @@ def scan_markets():
                             "edge": edge,
                             "market": market_type,
                             "sport": sport,
+                            "efficiency": efficiency.score if efficiency else None,
+                            "time_phase": time_decay.phase if time_decay else None,
                         }
                     )
 
-                    if UNIFIED_NEAR_MISS_THRESHOLD <= edge < market_threshold:
+                    if UNIFIED_NEAR_MISS_THRESHOLD <= edge < effective_threshold:
                         near_misses.append(
                             {
                                 "matchup": matchup,
@@ -323,7 +354,10 @@ def scan_markets():
                             }
                         )
 
-                    if edge >= market_threshold:
+                    if edge >= effective_threshold:
+                        if ENABLE_MARKET_EFFICIENCY and efficiency and efficiency.score < MIN_EFFICIENCY_SCORE:
+                            continue
+
                         candidates.append(
                             {
                                 "edge": edge,
@@ -333,6 +367,8 @@ def scan_markets():
                                 "fair_probability": fair_probability,
                                 "book_weight": book_weight,
                                 "outcome_key": outcome_key,
+                                "efficiency": efficiency,
+                                "time_decay": time_decay,
                             }
                         )
 
@@ -363,6 +399,16 @@ def scan_markets():
                     units = dynamic_kelly_units(edge, offered_price, graded_bets, today_bets)
                     fair_price_american = decimal_to_american(fair_decimal)
 
+                    if exposure_tracker is not None:
+                        teams = (event.get("home_team", ""), event.get("away_team", ""))
+                        exp_decision = check_exposure(
+                            exposure_tracker, str(event["id"]), market_type, units, teams,
+                        )
+                        if not exp_decision.allowed:
+                            print(f"Exposure limit: {selection} -> {exp_decision.reason}")
+                            continue
+                        units = exp_decision.adjusted_units
+
                     was_logged = log_bet_to_db(
                         matchup,
                         market_type,
@@ -383,6 +429,23 @@ def scan_markets():
                         print(f"Skipping alert because DB log failed for {selection}.")
                         continue
 
+                    if exposure_tracker is not None:
+                        teams = (event.get("home_team", ""), event.get("away_team", ""))
+                        exposure_tracker.add(ExposureEntry(
+                            event_id=str(event["id"]),
+                            market_type=market_type,
+                            side=selection,
+                            matchup=matchup,
+                            units=units,
+                            edge=edge,
+                            teams=teams,
+                        ))
+
+                    eff = candidate.get("efficiency")
+                    td = candidate.get("time_decay")
+                    eff_text = f"\n**Mkt Efficiency:** {eff.score:.0%}" if eff else ""
+                    td_text = f"\n**Time Phase:** {td.phase} ({td.hours_to_event:.1f}h)" if td else ""
+
                     app_link = get_mobile_app_link(final["book_key"], final["id"], event["id"], matchup)
                     alerts.append(
                         {
@@ -396,6 +459,7 @@ def scan_markets():
                                 f"**Edge:** {edge * 100:.2f}%\n"
                                 f"**Book Weight:** {book_weight:.2f}x\n"
                                 f"**Suggested:** {units:.2f} Units"
+                                f"{eff_text}{td_text}"
                             )
                         }
                     )
