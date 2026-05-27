@@ -10,13 +10,30 @@ except ImportError:
     Client = Any
     create_client = None
 
-from utils.odds import american_to_decimal, parse_float
+from utils.odds import american_to_decimal
 from utils.time import get_local_date_str, get_local_now
 
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if create_client and SUPABASE_URL and SUPABASE_KEY else None
+supabase: Client = None
+
+if create_client and SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as exc:
+        print(f"[supabase] Failed to create client: {exc}")
+        supabase = None
+else:
+    _missing = []
+    if not create_client:
+        _missing.append("supabase library")
+    if not SUPABASE_URL:
+        _missing.append("SUPABASE_URL")
+    if not SUPABASE_KEY:
+        _missing.append("SUPABASE_KEY")
+    print(f"[supabase] Client disabled — missing: {', '.join(_missing)}")
+
 RUNTIME_DB_STATS = {
     "bet_log_success": 0,
     "bet_log_failure": 0,
@@ -33,7 +50,9 @@ def _safe_execute(action, fallback):
     try:
         return action()
     except Exception as exc:
-        print(f"Supabase operation failed: {exc}")
+        import traceback
+        print(f"[supabase] Operation failed: {exc}")
+        print(f"[supabase] Traceback: {traceback.format_exc()}")
         return fallback
 
 
@@ -134,6 +153,63 @@ def is_already_logged(matchup, market, selection):
         return any(not row.get("result") for row in rows)
 
     return _safe_execute(action, False)
+
+
+REQUIRED_TABLES = [
+    "bets_log",
+    "odds_cache",
+    "bot_state",
+    "alerts_sent",
+    "workflow_runs",
+    "execution_orders",
+    "execution_child_orders",
+    "execution_fills",
+    "venue_metrics",
+]
+
+
+def validate_supabase_connection() -> Dict[str, Any]:
+    """Check Supabase connectivity and verify required tables exist.
+
+    Returns a dict with 'ok', 'connected', 'tables' (table -> exists bool),
+    and 'errors' list.
+    """
+    result: Dict[str, Any] = {
+        "ok": False,
+        "connected": False,
+        "tables": {},
+        "errors": [],
+    }
+
+    if not supabase:
+        result["errors"].append("Supabase client not initialised (missing URL/KEY or library)")
+        return result
+
+    try:
+        supabase.table("bets_log").select("id", count="exact").limit(0).execute()
+        result["connected"] = True
+    except Exception as exc:
+        result["errors"].append(f"Connection test failed: {exc}")
+        return result
+
+    for table_name in REQUIRED_TABLES:
+        try:
+            supabase.table(table_name).select("*", count="exact").limit(0).execute()
+            result["tables"][table_name] = True
+        except Exception as exc:
+            result["tables"][table_name] = False
+            result["errors"].append(f"Table '{table_name}' not accessible: {exc}")
+
+    missing = [t for t, ok in result["tables"].items() if not ok]
+    result["ok"] = result["connected"] and len(missing) == 0
+
+    if missing:
+        print(f"[supabase] WARNING: Missing or inaccessible tables: {', '.join(missing)}")
+        print("[supabase] Run supabase_core_schema.sql and supabase_execution_schema.sql in the SQL editor.")
+    else:
+        print(f"[supabase] All {len(REQUIRED_TABLES)} required tables verified.")
+
+    return result
 
 
 def reset_runtime_db_stats():
