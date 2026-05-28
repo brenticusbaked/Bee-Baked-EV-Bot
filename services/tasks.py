@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Callable, List
 
 from utils.config import env_flag
+from utils.seasons import is_sport_in_season
 
 
 TaskFunc = Callable[[], None]
@@ -27,21 +28,33 @@ def get_parallel_tasks() -> List[PipelineTask]:
 
         tasks.append(PipelineTask(name="injury_news", func=scrape_news))
     if env_flag("ENABLE_NBA_PROP_BOT", True):
-        from bot_propodds_nba import main as run_nba_prop_bot
+        if is_sport_in_season("basketball_nba"):
+            from bot_propodds_nba import main as run_nba_prop_bot
 
-        tasks.append(PipelineTask(name="nba_prop_bot", func=run_nba_prop_bot))
+            tasks.append(PipelineTask(name="nba_prop_bot", func=run_nba_prop_bot))
+        else:
+            print("[seasons] Skipping nba_prop_bot (NBA off-season)")
     if env_flag("ENABLE_NBA_MODEL", True):
-        from model_nba import run_nba_model
+        if is_sport_in_season("basketball_nba"):
+            from model_nba import run_nba_model
 
-        tasks.append(PipelineTask(name="model_nba", func=run_nba_model))
+            tasks.append(PipelineTask(name="model_nba", func=run_nba_model))
+        else:
+            print("[seasons] Skipping model_nba (NBA off-season)")
     if env_flag("ENABLE_NHL_MODEL", True):
-        from model_nhl import run_nhl_model
+        if is_sport_in_season("icehockey_nhl"):
+            from model_nhl import run_nhl_model
 
-        tasks.append(PipelineTask(name="model_nhl", func=run_nhl_model))
+            tasks.append(PipelineTask(name="model_nhl", func=run_nhl_model))
+        else:
+            print("[seasons] Skipping model_nhl (NHL off-season)")
     if env_flag("ENABLE_MLB_MODEL", True):
-        from model_mlb import run_mlb_model
+        if is_sport_in_season("baseball_mlb"):
+            from model_mlb import run_mlb_model
 
-        tasks.append(PipelineTask(name="model_mlb", func=run_mlb_model))
+            tasks.append(PipelineTask(name="model_mlb", func=run_mlb_model))
+        else:
+            print("[seasons] Skipping model_mlb (MLB off-season)")
 
     return tasks
 
@@ -86,9 +99,12 @@ def get_scraper_tasks() -> List[PipelineTask]:
     tasks: List[PipelineTask] = []
 
     if env_flag("ENABLE_PYBASEBALL_FIP_SCRAPER", True):
-        from scraper_pybaseball_fip import run_fip_scraper
+        if is_sport_in_season("baseball_mlb"):
+            from scraper_pybaseball_fip import run_fip_scraper
 
-        tasks.append(PipelineTask(name="scraper_pybaseball_fip", func=run_fip_scraper))
+            tasks.append(PipelineTask(name="scraper_pybaseball_fip", func=run_fip_scraper))
+        else:
+            print("[seasons] Skipping scraper_pybaseball_fip (MLB off-season)")
     if env_flag("ENABLE_DRAFTKINGS_SCRAPER", True):
         from scraper_draftkings import scrape_dk as scrape_draftkings
 
