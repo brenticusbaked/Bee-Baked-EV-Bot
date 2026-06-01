@@ -26,4 +26,8 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           python execution_calibration.py
-          python execution_healthcheck.py
+          HEALTH_JSON=$(python execution_healthcheck.py)
+          if echo "$HEALTH_JSON" | grep -q '"ok": false'; then
+            echo "Healthcheck failed. Supabase persistence is down."
+            exit 1
+          fi
