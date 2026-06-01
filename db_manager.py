@@ -3,6 +3,12 @@ import os
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
+
+from services.http_client import post_discord
+
+# Load local environment variables for manual runs
+load_dotenv()
 
 try:
     from supabase import Client, create_client
@@ -13,11 +19,11 @@ except ImportError:
 from utils.odds import american_to_decimal
 from utils.time import get_local_date_str, get_local_now
 
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = None
+DISCORD_DEAD_LETTER_WEBHOOK_URL = os.getenv("DISCORD_DEAD_LETTER_WEBHOOK_URL") or os.getenv("DISCORD_STATUS_WEBHOOK_URL")
 
+supabase: Client = None
 if create_client and SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -32,7 +38,7 @@ else:
         _missing.append("SUPABASE_URL")
     if not SUPABASE_KEY:
         _missing.append("SUPABASE_KEY")
-    print(f"[supabase] Client disabled — missing: {', '.join(_missing)}")
+    print(f"[supabase] Client disabled missing: {', '.join(_missing)}")
 
 RUNTIME_DB_STATS = {
     "bet_log_success": 0,
@@ -40,9 +46,9 @@ RUNTIME_DB_STATS = {
     "execution_log_success": 0,
     "execution_log_failure": 0,
 }
+
 PENDING_BETS_LOG_PATH = os.getenv("PENDING_BETS_LOG_PATH", "pending_bets_log.json")
 PENDING_EXECUTION_REPORTS_PATH = os.getenv("PENDING_EXECUTION_REPORTS_PATH", "pending_execution_reports.json")
-
 
 def _safe_execute(action, fallback):
     if not supabase:
@@ -55,7 +61,6 @@ def _safe_execute(action, fallback):
         print(f"[supabase] Traceback: {traceback.format_exc()}")
         return fallback
 
-
 def _load_local_json(path: str, default):
     if not path or not os.path.exists(path):
         return default
@@ -66,7 +71,6 @@ def _load_local_json(path: str, default):
         print(f"Local JSON load failed for {path}: {exc}")
         return default
 
-
 def _save_local_json(path: str, data) -> None:
     if not path:
         return
@@ -75,7 +79,6 @@ def _save_local_json(path: str, data) -> None:
             json.dump(data, handle)
     except Exception as exc:
         print(f"Local JSON save failed for {path}: {exc}")
-
 
 def _json_safe(value):
     if isinstance(value, Enum):
@@ -88,7 +91,6 @@ def _json_safe(value):
         return [_json_safe(item) for item in value]
     return value
 
-
 def _parse_decimal_odds(value) -> Optional[float]:
     try:
         if value is None or value == "":
@@ -100,7 +102,6 @@ def _parse_decimal_odds(value) -> Optional[float]:
         return numeric if numeric > 1.0 else None
     except Exception:
         return None
-
 
 def _parse_edge_pct(edge_val) -> Optional[float]:
     if edge_val is None or edge_val == "":
@@ -116,7 +117,6 @@ def _parse_edge_pct(edge_val) -> Optional[float]:
     except (TypeError, ValueError):
         return None
 
-
 def _infer_market_type(market: str) -> str:
     market_key = str(market).strip().lower()
     if market_key in {"h2h", "moneyline", "model_mlb_f5"}:
@@ -129,7 +129,6 @@ def _infer_market_type(market: str) -> str:
         return "player_prop"
     return "other"
 
-
 def _infer_bet_source(market: str, sport: str) -> str:
     market_key = str(market).strip().upper()
     if market_key.startswith("MODEL_"):
@@ -137,7 +136,6 @@ def _infer_bet_source(market: str, sport: str) -> str:
     if sport == "unknown_scraped":
         return "scraper"
     return "market_scan"
-
 
 def is_already_logged(matchup, market, selection):
     def action():
@@ -151,9 +149,7 @@ def is_already_logged(matchup, market, selection):
             .data
         )
         return any(not row.get("result") for row in rows)
-
     return _safe_execute(action, False)
-
 
 REQUIRED_TABLES = [
     "bets_log",
@@ -167,10 +163,8 @@ REQUIRED_TABLES = [
     "venue_metrics",
 ]
 
-
 def validate_supabase_connection() -> Dict[str, Any]:
     """Check Supabase connectivity and verify required tables exist.
-
     Returns a dict with 'ok', 'connected', 'tables' (table -> exists bool),
     and 'errors' list.
     """
@@ -180,18 +174,15 @@ def validate_supabase_connection() -> Dict[str, Any]:
         "tables": {},
         "errors": [],
     }
-
     if not supabase:
         result["errors"].append("Supabase client not initialised (missing URL/KEY or library)")
         return result
-
     try:
         supabase.table("bets_log").select("id", count="exact").limit(0).execute()
         result["connected"] = True
     except Exception as exc:
         result["errors"].append(f"Connection test failed: {exc}")
         return result
-
     for table_name in REQUIRED_TABLES:
         try:
             supabase.table(table_name).select("*", count="exact").limit(0).execute()
@@ -199,18 +190,14 @@ def validate_supabase_connection() -> Dict[str, Any]:
         except Exception as exc:
             result["tables"][table_name] = False
             result["errors"].append(f"Table '{table_name}' not accessible: {exc}")
-
     missing = [t for t, ok in result["tables"].items() if not ok]
     result["ok"] = result["connected"] and len(missing) == 0
-
     if missing:
         print(f"[supabase] WARNING: Missing or inaccessible tables: {', '.join(missing)}")
         print("[supabase] Run supabase_core_schema.sql and supabase_execution_schema.sql in the SQL editor.")
     else:
         print(f"[supabase] All {len(REQUIRED_TABLES)} required tables verified.")
-
     return result
-
 
 def reset_runtime_db_stats():
     RUNTIME_DB_STATS["bet_log_success"] = 0
@@ -220,12 +207,29 @@ def reset_runtime_db_stats():
     flush_pending_bet_logs()
     flush_pending_execution_reports()
 
-
 def get_runtime_db_stats() -> Dict[str, int]:
     return dict(RUNTIME_DB_STATS)
 
+def _send_dead_letter(table_name: str, payload: dict) -> None:
+    if not DISCORD_DEAD_LETTER_WEBHOOK_URL:
+        return
+    try:
+        # Truncate payload safely to fit within Discord's 2000 character limit
+        safe_payload = json.dumps(payload, indent=2, default=str)[:1850]
+        message = (
+            f"**🚨 CRITICAL: SUPABASE INSERT FAILED 🚨**\n"
+            f"**Table:** `{table_name}`\n"
+            f"**Payload:**\n```json\n{safe_payload}\n
+```"
+        )
+        post_discord({"content": message}, webhook_url=DISCORD_DEAD_LETTER_WEBHOOK_URL)
+    except Exception as exc:
+        print(f"Failed to dispatch dead-letter to Discord: {exc}")
 
 def _queue_pending_bet_log(payload: Dict[str, Any]) -> None:
+    # Fire to Discord first
+    _send_dead_letter("bets_log", payload)
+    
     pending = _load_local_json(PENDING_BETS_LOG_PATH, [])
     if not isinstance(pending, list):
         pending = []
@@ -248,34 +252,31 @@ def _queue_pending_bet_log(payload: Dict[str, Any]) -> None:
     pending.append(payload)
     _save_local_json(PENDING_BETS_LOG_PATH, pending)
 
-
 def flush_pending_bet_logs() -> int:
     if not supabase:
         return 0
-
     pending = _load_local_json(PENDING_BETS_LOG_PATH, [])
     if not isinstance(pending, list) or not pending:
         return 0
-
     remaining = []
     flushed = 0
     for payload in pending:
         def action():
             supabase.table("bets_log").insert(payload).execute()
             return True
-
         if _safe_execute(action, False):
             flushed += 1
         else:
             remaining.append(payload)
-
     _save_local_json(PENDING_BETS_LOG_PATH, remaining)
     if flushed:
         print(f"Flushed {flushed} pending bet log(s) to Supabase.")
     return flushed
 
-
 def _queue_pending_execution_report(payload: Dict[str, Any]) -> None:
+    # Fire to Discord first
+    _send_dead_letter("execution_orders", payload)
+    
     pending = _load_local_json(PENDING_EXECUTION_REPORTS_PATH, [])
     if not isinstance(pending, list):
         pending = []
@@ -286,15 +287,12 @@ def _queue_pending_execution_report(payload: Dict[str, Any]) -> None:
     pending.append(_json_safe(payload))
     _save_local_json(PENDING_EXECUTION_REPORTS_PATH, pending)
 
-
 def flush_pending_execution_reports() -> int:
     if not supabase:
         return 0
-
     pending = _load_local_json(PENDING_EXECUTION_REPORTS_PATH, [])
     if not isinstance(pending, list) or not pending:
         return 0
-
     remaining = []
     flushed = 0
     for payload in pending:
@@ -302,12 +300,10 @@ def flush_pending_execution_reports() -> int:
             flushed += 1
         else:
             remaining.append(payload)
-
     _save_local_json(PENDING_EXECUTION_REPORTS_PATH, remaining)
     if flushed:
         print(f"Flushed {flushed} pending execution report(s) to Supabase.")
     return flushed
-
 
 def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
     safe_report = _json_safe(report)
@@ -317,7 +313,6 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
     metrics = safe_report.get("metrics", {})
     order_id = order.get("order_id")
     logged_at = get_local_now().isoformat()
-
     order_payload = {
         "order_id": order_id,
         "symbol": order.get("symbol"),
@@ -341,7 +336,6 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
         "created_at": order.get("created_at"),
         "logged_at": logged_at,
     }
-
     children_payload = []
     for child in child_orders:
         children_payload.append(
@@ -359,7 +353,6 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
                 "logged_at": logged_at,
             }
         )
-
     fills_payload = []
     fills_by_child = {}
     for fill in fills:
@@ -379,7 +372,6 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
                 "filled_at": fill.get("filled_at"),
             }
         )
-
     venue_metrics_payload = []
     for child in child_orders:
         child_fills = fills_by_child.get(child.get("child_order_id"), [])
@@ -408,14 +400,12 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
                 "measured_at": logged_at,
             }
         )
-
     return {
         "order": order_payload,
         "child_orders": children_payload,
         "fills": fills_payload,
         "venue_metrics": venue_metrics_payload,
     }
-
 
 def _insert_execution_payload(payload: Dict[str, Any]) -> bool:
     def action():
@@ -427,9 +417,7 @@ def _insert_execution_payload(payload: Dict[str, Any]) -> bool:
         if payload["venue_metrics"]:
             supabase.table("venue_metrics").upsert(payload["venue_metrics"]).execute()
         return True
-
     return _safe_execute(action, False)
-
 
 def log_execution_report_to_db(report: Dict[str, Any]) -> bool:
     payload = _execution_payload_from_report(report)
@@ -437,7 +425,6 @@ def log_execution_report_to_db(report: Dict[str, Any]) -> bool:
         RUNTIME_DB_STATS["execution_log_failure"] += 1
         _queue_pending_execution_report(payload)
         return False
-
     success = _insert_execution_payload(payload)
     if success:
         RUNTIME_DB_STATS["execution_log_success"] += 1
@@ -445,7 +432,6 @@ def log_execution_report_to_db(report: Dict[str, Any]) -> bool:
         RUNTIME_DB_STATS["execution_log_failure"] += 1
         _queue_pending_execution_report(payload)
     return success
-
 
 def get_venue_metrics(limit: int = 500) -> List[Dict[str, Any]]:
     def action():
@@ -457,17 +443,13 @@ def get_venue_metrics(limit: int = 500) -> List[Dict[str, Any]]:
             .execute()
             .data
         )
-
     return _safe_execute(action, [])
-
 
 def get_table_count(table_name: str) -> int:
     def action():
         response = supabase.table(table_name).select("*", count="exact").limit(0).execute()
         return int(response.count or 0)
-
     return _safe_execute(action, 0)
-
 
 def get_latest_rows(table_name: str, order_column: str, limit: int = 5) -> List[Dict[str, Any]]:
     def action():
@@ -479,9 +461,7 @@ def get_latest_rows(table_name: str, order_column: str, limit: int = 5) -> List[
             .execute()
             .data
         )
-
     return _safe_execute(action, [])
-
 
 def log_bet_to_db(
     matchup,
@@ -501,7 +481,6 @@ def log_bet_to_db(
         print(f"Skipping non-positive edge bet log for {selection}: {edge_pct:.4f}%")
         RUNTIME_DB_STATS["bet_log_failure"] += 1
         return False
-
     odds_decimal = _parse_decimal_odds(odds)
     fair_price_decimal = _parse_decimal_odds(fair_price)
     payload = {
@@ -524,12 +503,10 @@ def log_bet_to_db(
         "market_type": _infer_market_type(market),
         "notes": notes,
     }
-
     if not supabase:
         RUNTIME_DB_STATS["bet_log_failure"] += 1
         _queue_pending_bet_log(payload)
         return False
-
     legacy_payload = {
         key: payload[key]
         for key in (
@@ -547,7 +524,6 @@ def log_bet_to_db(
             "result",
         )
     }
-
     def action():
         try:
             supabase.table("bets_log").insert(payload).execute()
@@ -555,7 +531,6 @@ def log_bet_to_db(
             print(f"Full bets_log insert failed, retrying legacy payload: {exc}")
             supabase.table("bets_log").insert(legacy_payload).execute()
         return True
-
     success = _safe_execute(action, False)
     if success:
         RUNTIME_DB_STATS["bet_log_success"] += 1
@@ -564,63 +539,46 @@ def log_bet_to_db(
         _queue_pending_bet_log(payload)
     return success
 
-
 def get_ungraded_past_bets() -> List[Dict[str, Any]]:
     today = get_local_date_str()
-
     def action():
         return supabase.table("bets_log").select("*").eq("result", "").lt("date", today).execute().data
-
     return _safe_execute(action, [])
-
 
 def get_untracked_bets() -> List[Dict[str, Any]]:
     def action():
         rows = supabase.table("bets_log").select("*").execute().data
         return [row for row in rows if not row.get("closing_line_pinnacle")]
-
     return _safe_execute(action, [])
-
 
 def get_all_bets() -> List[Dict[str, Any]]:
     def action():
         return supabase.table("bets_log").select("*").execute().data
-
     return _safe_execute(action, [])
-
 
 def get_all_graded_bets() -> List[Dict[str, Any]]:
     def action():
         return supabase.table("bets_log").select("*").neq("result", "").execute().data
-
     return _safe_execute(action, [])
-
 
 def get_today_bets() -> List[Dict[str, Any]]:
     today = get_local_date_str()
-
     def action():
         return supabase.table("bets_log").select("*").eq("date", today).execute().data
-
     return _safe_execute(action, [])
-
 
 def get_all_clv_bets() -> List[Dict[str, Any]]:
     def action():
         rows = supabase.table("bets_log").select("*").execute().data
         return [row for row in rows if row.get("closing_line_decimal") or row.get("closing_line_pinnacle")]
-
     return _safe_execute(action, [])
-
 
 def update_result(bet_id, result):
     def action():
         supabase.table("bets_log").update(
             {"result": result, "graded_at": get_local_now().isoformat()}
         ).eq("id", bet_id).execute()
-
     _safe_execute(action, None)
-
 
 def update_bet_clv(bet_id, closing_price_american, closing_price_decimal, clv_edge_pct: Optional[float] = None):
     update_payload = {
@@ -631,37 +589,28 @@ def update_bet_clv(bet_id, closing_price_american, closing_price_decimal, clv_ed
     }
     if clv_edge_pct is not None:
         update_payload["clv_edge_pct"] = clv_edge_pct
-
     def action():
         supabase.table("bets_log").update(update_payload).eq("id", bet_id).execute()
-
     _safe_execute(action, None)
-
 
 def save_odds_cache(cache_data):
     def action():
         supabase.table("odds_cache").upsert(
             {"id": "master", "data": cache_data, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).execute()
-
     _safe_execute(action, None)
-
 
 def get_odds_cache():
     def action():
         response = supabase.table("odds_cache").select("data").eq("id", "master").execute()
         return response.data[0]["data"] if response.data else {}
-
     return _safe_execute(action, {})
-
 
 def save_master_cache(cache_data):
     save_odds_cache(cache_data)
 
-
 def get_master_cache():
     return get_odds_cache()
-
 
 def load_tracker_state(state_key: str, fallback_path: str):
     def action():
@@ -669,20 +618,15 @@ def load_tracker_state(state_key: str, fallback_path: str):
         if response.data:
             return response.data[0].get("data", {})
         return _load_local_json(fallback_path, {})
-
     return _safe_execute(action, _load_local_json(fallback_path, {}))
-
 
 def save_tracker_state(state_key: str, data, fallback_path: str) -> None:
     _save_local_json(fallback_path, data)
-
     def action():
         supabase.table("bot_state").upsert(
             {"id": state_key, "data": data, "updated_at": datetime.now(timezone.utc).isoformat()}
         ).execute()
-
     _safe_execute(action, None)
-
 
 def log_alert_event(
     source: str,
@@ -704,9 +648,7 @@ def log_alert_event(
                 "sent_at": get_local_now().isoformat(),
             }
         ).execute()
-
     _safe_execute(action, None)
-
 
 def log_workflow_run(
     workflow_name: str,
@@ -734,5 +676,4 @@ def log_workflow_run(
                 "run_at": get_local_now().isoformat(),
             }
         ).execute()
-
     _safe_execute(action, None)
