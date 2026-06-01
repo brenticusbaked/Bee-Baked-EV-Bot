@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from services.odds_push import build_connection_config, extract_cache_events, merge_push_message
+from services.odds_push import build_connection_config, build_websocket_connect_kwargs, extract_cache_events, merge_push_message
 
 
 class OddsPushTests(unittest.TestCase):
@@ -11,6 +11,13 @@ class OddsPushTests(unittest.TestCase):
 
         self.assertEqual(headers, {})
         self.assertEqual(url, "wss://parlay-api.com/ws/odds/baseball_mlb?apiKey=secret_key")
+
+    def test_build_connection_config_treats_api_key_mode_as_query(self):
+        with patch.dict("os.environ", {"ODDS_PUSH_AUTH_MODE": "apiKey", "ODDS_PUSH_API_KEY_PARAM": ""}, clear=False):
+            url, headers = build_connection_config("wss://example.com/ws", "secret_key")
+
+        self.assertEqual(headers, {})
+        self.assertEqual(url, "wss://example.com/ws?apiKey=secret_key")
 
     def test_build_connection_config_uses_query_for_parlay_by_default(self):
         with patch.dict("os.environ", {}, clear=True):
@@ -24,6 +31,14 @@ class OddsPushTests(unittest.TestCase):
 
         self.assertEqual(url, "wss://example.com/ws")
         self.assertEqual(headers["X-API-Key"], "secret_key")
+
+    def test_build_websocket_connect_kwargs_supports_subprotocol_api_key(self):
+        with patch.dict("os.environ", {"ODDS_PUSH_AUTH_MODE": "protocol"}, clear=False):
+            url, connect_kwargs = build_websocket_connect_kwargs("wss://example.com/ws", "secret_key")
+
+        self.assertEqual(url, "wss://example.com/ws")
+        self.assertEqual(connect_kwargs["subprotocols"], ["apikey.secret_key"])
+        self.assertNotIn("additional_headers", connect_kwargs)
 
     def test_extracts_the_odds_api_shaped_event_from_wrapper(self):
         message = {

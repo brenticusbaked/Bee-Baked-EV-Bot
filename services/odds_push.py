@@ -113,23 +113,59 @@ def merge_push_message(cache: Cache, message, default_sport: Optional[str] = Non
     return sum(merge_cache_events(cache, sport, events) for sport, events in updates.items())
 
 
+def _url_has_api_key(url: str) -> bool:
+    query = dict(parse_qsl(urlsplit(url).query, keep_blank_values=True))
+    return bool(query.get("apiKey") or query.get("apikey"))
+
+
+def _api_key_param() -> str:
+    return os.getenv("ODDS_PUSH_API_KEY_PARAM", "").strip() or "apiKey"
+
+
+def _resolve_auth_mode(url: str) -> str:
+    provider = os.getenv("ODDS_PUSH_PROVIDER", "").strip().lower()
+    default_auth_mode = "query" if any(token in provider or token in url.lower() for token in ("parlay", "oddspapi")) else "header"
+    raw_mode = os.getenv("ODDS_PUSH_AUTH_MODE", "").strip().lower()
+    auth_mode = raw_mode or default_auth_mode
+
+    if auth_mode in {"query", "querystring", "query-string", "url", "apikey", "api_key", "api-key"}:
+        return "query"
+    if auth_mode in {"protocol", "subprotocol", "sec-websocket-protocol", "websocket-protocol"}:
+        return "protocol"
+    if auth_mode in {"header", "headers", "x-api-key", "x_api_key", "authorization", "bearer"}:
+        return "header"
+    return default_auth_mode
+
+
 def build_connection_config(url: str, api_key: Optional[str] = None) -> tuple[str, dict]:
     headers = {}
     if not api_key:
         return url, headers
 
-    provider = os.getenv("ODDS_PUSH_PROVIDER", "").strip().lower()
-    default_auth_mode = "query" if "parlay" in provider or "parlay-api.com" in url else "header"
-    auth_mode = os.getenv("ODDS_PUSH_AUTH_MODE", default_auth_mode).strip().lower()
+    auth_mode = _resolve_auth_mode(url)
     if auth_mode == "query":
         parts = urlsplit(url)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
-        query.setdefault(os.getenv("ODDS_PUSH_API_KEY_PARAM", "apiKey"), api_key)
+        param = _api_key_param()
+        if not query.get(param):
+            query[param] = api_key
         return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)), headers
+    if auth_mode == "protocol":
+        return url, headers
 
-    auth_header = os.getenv("ODDS_PUSH_AUTH_HEADER", "X-API-Key")
+    auth_header = os.getenv("ODDS_PUSH_AUTH_HEADER", "").strip() or "X-API-Key"
     headers[auth_header] = f"Bearer {api_key}" if auth_header.lower() == "authorization" else api_key
     return url, headers
+
+
+def build_websocket_connect_kwargs(url: str, api_key: Optional[str] = None) -> tuple[str, dict]:
+    url, headers = build_connection_config(url, api_key=api_key)
+    connect_kwargs = {}
+    if api_key and _resolve_auth_mode(url) == "protocol":
+        connect_kwargs["subprotocols"] = [f"apikey.{api_key}"]
+    if headers:
+        connect_kwargs["additional_headers"] = headers
+    return url, connect_kwargs
 
 
 async def stream_push_feed(
@@ -144,18 +180,22 @@ async def stream_push_feed(
     except ImportError as exc:
         raise RuntimeError("Install the optional 'websockets' dependency before running the push feed.") from exc
 
-    url, headers = build_connection_config(url, api_key=api_key)
+    if not api_key and not _url_has_api_key(url):
+        raise RuntimeError("ODDS_PUSH_API_KEY is missing and ODDS_PUSH_WS_URL does not already include ?apiKey=...")
+
+    url, connect_kwargs = build_websocket_connect_kwargs(url, api_key=api_key)
 
     processed = 0
     sent_dedupe_keys: set[str] = set()
     cache = get_master_cache() or {}
-    connect_kwargs = {}
-    if headers:
-        connect_kwargs["additional_headers"] = headers
     try:
         websocket_context = websockets.connect(url, **connect_kwargs)
     except TypeError:
-        websocket_context = websockets.connect(url, extra_headers=headers or None)
+        fallback_kwargs = dict(connect_kwargs)
+        headers = fallback_kwargs.pop("additional_headers", None)
+        if headers:
+            fallback_kwargs["extra_headers"] = headers
+        websocket_context = websockets.connect(url, **fallback_kwargs)
 
     async with websocket_context as websocket:
         if subscribe_payload:
