@@ -126,7 +126,8 @@ async def stream_push_feed(
 
     headers = {}
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+        auth_header = os.getenv("ODDS_PUSH_AUTH_HEADER", "X-API-Key")
+        headers[auth_header] = f"Bearer {api_key}" if auth_header.lower() == "authorization" else api_key
 
     processed = 0
     sent_dedupe_keys: set[str] = set()

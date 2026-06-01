@@ -164,6 +164,7 @@ The GitHub Actions `Tests` workflow runs the same command on pushes and pull req
 * `PENDING_EXECUTION_REPORTS_PATH`
 * `ODDS_PUSH_WS_URL` (Optional: WebSocket URL for an OddsPapi/ParlayAPI-style realtime odds feed)
 * `ODDS_PUSH_API_KEY` (Optional: bearer token used by the realtime odds feed)
+* `ODDS_PUSH_AUTH_HEADER` (Optional: defaults to `X-API-Key`; set to `Authorization` for bearer-token providers)
 * `ODDS_PUSH_PROVIDER` (Optional: provider label used in logs; example: `oddspapi` or `parlayapi`)
 * `ODDS_PUSH_SPORT` (Optional: default sport key when push messages omit `sport_key`)
 * `ODDS_PUSH_SUBSCRIBE_JSON` (Optional: JSON subscription payload sent after connecting)
