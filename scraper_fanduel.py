@@ -6,12 +6,14 @@ from typing import Dict, Optional
 
 from playwright.sync_api import sync_playwright
 
-from db_manager import load_tracker_state, save_tracker_state
+from db_manager import get_master_cache, load_tracker_state, save_tracker_state
+from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import request
 from services.http_client import post_discord
+from services.odds_reference import format_pinnacle_spread_reference
 
 
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 TRACKER_FILE = "fd_lines.json"
 STATE_KEY = "tracker_fanduel_nba"
 PROXY_USERNAME = os.getenv("PROXY_USERNAME")
@@ -34,6 +36,15 @@ def load_previous_lines():
 
 def save_current_lines(lines):
     save_tracker_state(STATE_KEY, lines, TRACKER_FILE)
+
+
+def _pinnacle_reference(current: dict) -> str:
+    return format_pinnacle_spread_reference(
+        get_master_cache() or {},
+        "basketball_nba",
+        str(current.get("matchup", "")),
+        str(current.get("team", "")),
+    )
 
 
 def _proxy_candidates():
@@ -290,6 +301,7 @@ def scrape_fanduel():
                 alerts.append(
                     f"**FD STEAM ALERT:** {current['matchup']}\n"
                     f"**{current['team']} Spread Moved!**\n"
+                    f"**Pinnacle:** {_pinnacle_reference(current)}\n"
                     f"Old Line: {old_line} -> **New Line: {current['line']}**"
                 )
 

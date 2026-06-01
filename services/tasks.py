@@ -27,13 +27,18 @@ def get_parallel_tasks() -> List[PipelineTask]:
         from scraper_bot import scrape_news
 
         tasks.append(PipelineTask(name="injury_news", func=scrape_news))
-    if env_flag("ENABLE_NBA_PROP_BOT", True):
-        if is_sport_in_season("basketball_nba"):
-            from bot_propodds_nba import main as run_nba_prop_bot
+    if env_flag("ENABLE_PLAYER_PROP_BOT", env_flag("ENABLE_NBA_PROP_BOT", True)):
+        active_prop_sports = [
+            sport
+            for sport in ("basketball_nba", "baseball_mlb")
+            if is_sport_in_season(sport)
+        ]
+        if active_prop_sports:
+            from bot_propodds_nba import main as run_player_prop_bot
 
-            tasks.append(PipelineTask(name="nba_prop_bot", func=run_nba_prop_bot))
+            tasks.append(PipelineTask(name="player_prop_bot", func=run_player_prop_bot))
         else:
-            print("[seasons] Skipping nba_prop_bot (NBA off-season)")
+            print("[seasons] Skipping player_prop_bot (NBA/MLB off-season)")
     if env_flag("ENABLE_NBA_MODEL", True):
         if is_sport_in_season("basketball_nba"):
             from model_nba import run_nba_model
@@ -133,13 +138,6 @@ def get_scraper_tasks() -> List[PipelineTask]:
             tasks.append(PipelineTask(name="scraper_fanduel", func=scrape_fanduel))
         except Exception as exc:
             print(f"[scraper-loader] Skipping scraper_fanduel: {exc}")
-    if env_flag("ENABLE_PRIZEPICKS_SCRAPER", True):
-        try:
-            from scraper_prizepicks import scrape_prizepicks
-
-            tasks.append(PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks))
-        except Exception as exc:
-            print(f"[scraper-loader] Skipping scraper_prizepicks: {exc}")
     if env_flag("ENABLE_ODDSHARVESTER", True):
         try:
             from scraper_oddsharvester import scrape_oddsharvester

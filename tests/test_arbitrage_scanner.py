@@ -1,7 +1,7 @@
 import unittest
 
 from arbitrage_scanner import find_arbitrage_opportunities
-from services.odds_reference import format_pinnacle_reference
+from services.odds_reference import format_pinnacle_reference, format_pinnacle_spread_reference
 
 
 def sample_event():
@@ -19,6 +19,13 @@ def sample_event():
                         "outcomes": [
                             {"name": "Aces", "price": 1.91},
                             {"name": "Liberty", "price": 1.91},
+                        ],
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {"name": "Aces", "point": -2.5, "price": 1.91},
+                            {"name": "Liberty", "point": 2.5, "price": 1.91},
                         ],
                     }
                 ],
@@ -53,6 +60,13 @@ class ArbitrageScannerTests(unittest.TestCase):
         reference = format_pinnacle_reference(cache, "basketball_wnba", "evt_1", "h2h", "Aces")
 
         self.assertEqual(reference, "Pinnacle -110")
+
+    def test_formats_pinnacle_spread_reference_by_matchup(self):
+        cache = {"basketball_wnba": [sample_event()]}
+
+        reference = format_pinnacle_spread_reference(cache, "basketball_wnba", "Liberty @ Aces", "Aces")
+
+        self.assertEqual(reference, "Pinnacle Aces -2.5 @ -110")
 
 
 if __name__ == "__main__":

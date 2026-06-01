@@ -1,6 +1,6 @@
 from typing import Dict, Iterable, Optional, Tuple
 
-from services.bet_logic import outcome_matches, parse_selection
+from services.bet_logic import normalize_team_fragment, outcome_matches, parse_selection
 from utils.odds import decimal_to_american
 
 
@@ -69,3 +69,37 @@ def format_pinnacle_reference(cache: Dict[str, list], sport: str, event_id, mark
         return "Pinnacle unavailable"
     book_title, price = reference
     return f"{book_title} {decimal_to_american(price)}"
+
+
+def _event_matches_matchup(event: dict, matchup: str) -> bool:
+    matchup_norm = normalize_team_fragment(matchup)
+    home_norm = normalize_team_fragment(event.get("home_team", ""))
+    away_norm = normalize_team_fragment(event.get("away_team", ""))
+    if home_norm and away_norm and home_norm in matchup_norm and away_norm in matchup_norm:
+        return True
+    return False
+
+
+def format_pinnacle_spread_reference(cache: Dict[str, list], sport: str, matchup: str, team: str) -> str:
+    team_norm = normalize_team_fragment(team)
+    if not team_norm:
+        return "Pinnacle unavailable"
+
+    for event in cache.get(sport, []) or []:
+        if not _event_matches_matchup(event, matchup):
+            continue
+        for book in event.get("bookmakers", []):
+            book_key = str(book.get("key") or book.get("title") or "").lower()
+            if book_key != "pinnacle":
+                continue
+            for market in book.get("markets", []):
+                if str(market.get("key", "")).lower() != "spreads":
+                    continue
+                for outcome in market.get("outcomes", []):
+                    outcome_norm = normalize_team_fragment(outcome.get("name", ""))
+                    if not outcome_norm or not (team_norm == outcome_norm or team_norm in outcome_norm or outcome_norm in team_norm):
+                        continue
+                    point = outcome.get("point", "")
+                    point_text = f" {point}" if point not in (None, "") else ""
+                    return f"{book.get('title') or 'Pinnacle'} {outcome.get('name')}{point_text} @ {decimal_to_american(float(outcome['price']))}"
+    return "Pinnacle unavailable"

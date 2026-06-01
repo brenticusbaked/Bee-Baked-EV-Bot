@@ -11,7 +11,14 @@ from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import request
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
-from utils.prop_pricing import consensus_probabilities, infer_mean_from_over_probability, poisson_prop_probabilities, prop_kelly_units
+from utils.prop_pricing import (
+    consensus_probabilities,
+    infer_mean_from_over_probability,
+    infer_negative_binomial_mean_from_over_probability,
+    negative_binomial_prop_probabilities,
+    poisson_prop_probabilities,
+    uncertainty_adjusted_prop_kelly_units,
+)
 from utils.thresholds import env_float
 
 # Load local environment variables for manual runs
@@ -32,6 +39,12 @@ DEFAULT_TARGET_STATS = [
     "points_rebounds",
     "points_assists",
     "rebounds_assists",
+    "strikeouts",
+    "hits",
+    "runs",
+    "rbis",
+    "total_bases",
+    "home_runs",
 ]
 
 STAT_ALIASES = {
@@ -67,6 +80,37 @@ STAT_ALIASES = {
     "points_assists": "points_assists",
     "ra": "rebounds_assists",
     "rebounds_assists": "rebounds_assists",
+    "k": "strikeouts",
+    "ks": "strikeouts",
+    "so": "strikeouts",
+    "strikeout": "strikeouts",
+    "strikeouts": "strikeouts",
+    "pitcher_ks": "strikeouts",
+    "pitcher_strikeout": "strikeouts",
+    "pitcher_strikeouts": "strikeouts",
+    "hit": "hits",
+    "hits": "hits",
+    "batter_hits": "hits",
+    "player_hits": "hits",
+    "run": "runs",
+    "runs": "runs",
+    "batter_runs": "runs",
+    "player_runs": "runs",
+    "rbi": "rbis",
+    "rbis": "rbis",
+    "runs_batted_in": "rbis",
+    "batter_rbis": "rbis",
+    "player_rbis": "rbis",
+    "tb": "total_bases",
+    "base": "total_bases",
+    "bases": "total_bases",
+    "total_bases": "total_bases",
+    "batter_total_bases": "total_bases",
+    "hr": "home_runs",
+    "hrs": "home_runs",
+    "home_run": "home_runs",
+    "home_runs": "home_runs",
+    "batter_home_runs": "home_runs",
 }
 
 STAT_LABELS = {
@@ -81,6 +125,17 @@ STAT_LABELS = {
     "points_rebounds": "PTS+REB",
     "points_assists": "PTS+AST",
     "rebounds_assists": "REB+AST",
+    "strikeouts": "STRIKEOUTS",
+    "hits": "HITS",
+    "runs": "RUNS",
+    "rbis": "RBIS",
+    "total_bases": "TOTAL BASES",
+    "home_runs": "HOME RUNS",
+}
+
+LEAGUE_SPORT_KEYS = {
+    "NBA": "basketball_nba",
+    "MLB": "baseball_mlb",
 }
 
 PROP_EV_THRESHOLD = env_float("PROP_EV_THRESHOLD", 0.01)
@@ -89,8 +144,34 @@ PROP_CONSENSUS_MIN_BOOKS = max(1, int(os.getenv("PROP_CONSENSUS_MIN_BOOKS", "1")
 PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "multiplicative")
 PROP_KELLY_FRACTION = env_float("PROP_KELLY_FRACTION", 0.125)
 PROP_MAX_UNITS = env_float("PROP_MAX_UNITS", 2.0)
+PROP_CONFIDENCE_FULL_BOOKS = max(1.0, env_float("PROP_CONFIDENCE_FULL_BOOKS", 3.0))
+PROP_UNCERTAINTY_Z = env_float("PROP_UNCERTAINTY_Z", 0.35)
+PROP_UNCERTAINTY_EFFECTIVE_SAMPLES = env_float("PROP_UNCERTAINTY_EFFECTIVE_SAMPLES", 24.0)
+PROP_NEG_BINOMIAL_VARIANCE_MULTIPLIER = max(1.0, env_float("PROP_NEG_BINOMIAL_VARIANCE_MULTIPLIER", 1.35))
+ENABLE_PROP_NEGATIVE_BINOMIAL = os.getenv("ENABLE_PROP_NEGATIVE_BINOMIAL", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-LOW_COUNT_POISSON_STATS = {"assists", "rebounds", "three_pointers", "steals", "blocks", "turnovers"}
+LOW_COUNT_POISSON_STATS = {
+    "assists",
+    "rebounds",
+    "three_pointers",
+    "steals",
+    "blocks",
+    "turnovers",
+    "strikeouts",
+    "hits",
+    "runs",
+    "rbis",
+    "total_bases",
+    "home_runs",
+}
+NEGATIVE_BINOMIAL_STATS = {
+    stat.strip().lower()
+    for stat in os.getenv(
+        "PROP_NEG_BINOMIAL_STATS",
+        "points,assists,rebounds,three_pointers,steals,blocks,turnovers,strikeouts,hits,runs,rbis,total_bases,home_runs",
+    ).split(",")
+    if stat.strip()
+}
 
 SHARP_PROP_BOOKS = {
     book.strip().lower()
@@ -99,7 +180,7 @@ SHARP_PROP_BOOKS = {
 }
 
 def _parse_target_stats() -> set:
-    raw = os.getenv("NBA_PROP_STATS", "")
+    raw = os.getenv("PLAYER_PROP_STATS") or os.getenv("NBA_PROP_STATS", "")
     if not raw.strip():
         return set(DEFAULT_TARGET_STATS)
     parsed = {
@@ -135,6 +216,17 @@ def _normalize_stat_name(value: str) -> Optional[str]:
     return STAT_ALIASES.get(key)
 
 TARGET_STATS = _parse_target_stats()
+
+def _parse_player_prop_leagues() -> List[str]:
+    raw = os.getenv("PLAYER_PROP_LEAGUES", "NBA,MLB")
+    leagues = []
+    for item in raw.split(","):
+        league = item.strip().upper()
+        if league in LEAGUE_SPORT_KEYS:
+            leagues.append(league)
+    return leagues or ["NBA"]
+
+PLAYER_PROP_LEAGUES = _parse_player_prop_leagues()
 
 def _normalize_side(value: str) -> Optional[str]:
     text = str(value or "").lower()
@@ -231,7 +323,26 @@ def _consensus_from_sharp_books(sharp_by_book: Dict[str, Dict[str, dict]], stat_
     source = f"consensus_{PROP_DEVIG_METHOD}"
     if not probabilities:
         return {}, "none", len(book_pairs)
-    if stat_type in LOW_COUNT_POISSON_STATS:
+    if ENABLE_PROP_NEGATIVE_BINOMIAL and stat_type in NEGATIVE_BINOMIAL_STATS:
+        try:
+            line = float(line_value)
+        except (TypeError, ValueError):
+            line = None
+        if line is not None:
+            mean = infer_negative_binomial_mean_from_over_probability(
+                line,
+                probabilities["over"],
+                variance_multiplier=PROP_NEG_BINOMIAL_VARIANCE_MULTIPLIER,
+            )
+            negative_binomial_probabilities = negative_binomial_prop_probabilities(
+                line,
+                mean,
+                variance_multiplier=PROP_NEG_BINOMIAL_VARIANCE_MULTIPLIER,
+            )
+            if negative_binomial_probabilities:
+                probabilities = negative_binomial_probabilities
+                source = f"{source}_negbin"
+    elif stat_type in LOW_COUNT_POISSON_STATS:
         try:
             line = float(line_value)
         except (TypeError, ValueError):
@@ -270,7 +381,6 @@ def get_sgo_edges():
         "caesars",
         "betrivers",
         "bovada",
-        "prizepicks",
         "pick6",
         "novig",
         "dabble",
@@ -280,9 +390,9 @@ def get_sgo_edges():
     near_misses = []
     book_weights = get_book_weights()
     url = "https://api.sportsgameodds.com/v2/events"
-    params = {"apiKey": SGO_API_KEY, "leagueID": "NBA", "oddsAvailable": "true"}
     
     scan_stats = {
+        "leagues": len(PLAYER_PROP_LEAGUES),
         "events": 0,
         "raw_odds": 0,
         "parsed_props": 0,
@@ -292,17 +402,54 @@ def get_sgo_edges():
     }
     
     try:
-        # UPDATED: retry_on_429 set to True to respect rate limits with exponential backoff
-        data = request("GET", url, params=params, timeout=15, retry_on_429=True).json()
-        
-        if isinstance(data, dict):
-            events_list = data.get("events", [])
-        else:
-            events_list = data if isinstance(data, list) else []
-            
-        scan_stats["events"] = len(events_list)
-        
-        for event in events_list:
+        for league in PLAYER_PROP_LEAGUES:
+            params = {"apiKey": SGO_API_KEY, "leagueID": league, "oddsAvailable": "true"}
+            sport_key = LEAGUE_SPORT_KEYS.get(league, league.lower())
+
+            # UPDATED: retry_on_429 set to True to respect rate limits with exponential backoff
+            data = request("GET", url, params=params, timeout=15, retry_on_429=True).json()
+
+            if isinstance(data, dict):
+                events_list = data.get("events", [])
+            else:
+                events_list = data if isinstance(data, list) else []
+
+            scan_stats["events"] += len(events_list)
+
+            for event in events_list:
+                _process_sgo_event(
+                    event,
+                    league,
+                    sport_key,
+                    soft_list,
+                    book_weights,
+                    picks,
+                    near_misses,
+                    scan_stats,
+                )
+
+    except requests.HTTPError as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        print(f"Prop Bot Error: {exc}")
+        if status_code == 429:
+            return [], [], {"reason": "SGO rate limited", "status_code": 429}
+        return [], [], {"reason": f"error: {exc}", "status_code": status_code}
+    except Exception as exc:
+        print(f"Prop Bot Error: {exc}")
+        return [], [], {"reason": f"error: {exc}"}
+
+    return picks, near_misses, scan_stats
+
+def _process_sgo_event(
+    event: dict,
+    league: str,
+    sport_key: str,
+    soft_list: set,
+    book_weights: dict,
+    picks: List[dict],
+    near_misses: List[dict],
+    scan_stats: dict,
+) -> None:
             matchup = event.get("name", "Unknown Matchup")
             market_groups: Dict[Tuple[str, str, str], Dict[str, Dict[str, dict]]] = {}
             odds_map = event.get("odds", {})
@@ -368,7 +515,18 @@ def get_sgo_edges():
                     if is_already_logged(matchup, market, selection):
                         continue
                     
-                    units = prop_kelly_units(edge, soft[side]["price"], fraction=PROP_KELLY_FRACTION, cap=PROP_MAX_UNITS)
+                    confidence = min(1.0, consensus_books / PROP_CONFIDENCE_FULL_BOOKS)
+                    units, adjusted_edge, adjusted_probability = uncertainty_adjusted_prop_kelly_units(
+                        probabilities[side],
+                        soft[side]["price"],
+                        confidence=confidence,
+                        fraction=PROP_KELLY_FRACTION,
+                        cap=PROP_MAX_UNITS,
+                        z_score=PROP_UNCERTAINTY_Z,
+                        effective_samples=PROP_UNCERTAINTY_EFFECTIVE_SAMPLES,
+                    )
+                    if units <= 0:
+                        continue
                     was_logged = log_bet_to_db(
                         matchup.strip(),
                         market,
@@ -377,11 +535,13 @@ def get_sgo_edges():
                         edge,
                         f"{units:.2f}",
                         decimal_to_american(1 / probabilities[side]),
-                        "basketball_nba",
+                        sport_key,
                         str(event.get("id", "")),
                         notes=(
                             f"book={soft[side]['book']};market=prop;stat={stat_type};line={line_value};"
                             f"fair_source={probability_source};consensus_books={consensus_books};"
+                            f"confidence={confidence:.4f};adjusted_edge={adjusted_edge:.4f};"
+                            f"adjusted_probability={adjusted_probability:.4f};"
                             f"prop_kelly_fraction={PROP_KELLY_FRACTION}"
                         ),
                     )
@@ -395,12 +555,13 @@ def get_sgo_edges():
                         {
                             "score": weighted_score,
                             "msg": (
-                                f"**NBA PROP ALERT**\n"
+                                f"**{league} PROP ALERT**\n"
                                 f"**Match:** {matchup}\n"
                                 f"**Prop:** {selection} ({market})\n"
                                 f"**Book:** [{soft[side]['book'].upper()}]({link}) @ {decimal_to_american(soft[side]['price'])}\n"
                                 f"**Sharp Ref:** {sharp_reference}\n"
                                 f"**Edge:** {edge * 100:.2f}%\n"
+                                f"**Adj Edge:** {adjusted_edge * 100:.2f}% ({confidence:.0%} confidence)\n"
                                 f"**Fair Price:** {decimal_to_american(1 / probabilities[side])}\n"
                                 f"**Fair Source:** {probability_source} ({consensus_books} book consensus)\n"
                                 f"**Suggested:** {units:.2f} Units\n"
@@ -408,18 +569,6 @@ def get_sgo_edges():
                             ),
                         }
                     )
-                    
-    except requests.HTTPError as exc:
-        status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        print(f"Prop Bot Error: {exc}")
-        if status_code == 429:
-            return [], [], {"reason": "SGO rate limited", "status_code": 429}
-        return [], [], {"reason": f"error: {exc}", "status_code": status_code}
-    except Exception as exc:
-        print(f"Prop Bot Error: {exc}")
-        return [], [], {"reason": f"error: {exc}"}
-        
-    return picks, near_misses, scan_stats
 
 def _near_miss_summary(near_misses: List[dict]) -> str:
     if not near_misses:
@@ -433,7 +582,7 @@ def _near_miss_summary(near_misses: List[dict]) -> str:
 
 def main():
     if not SGO_API_KEY:
-        print("SGO_API_KEY missing. Skipping NBA prop bot.")
+        print("SGO_API_KEY missing. Skipping player prop bot.")
         return {"detail": "SGO_API_KEY missing", "count": 0, "label": "alerts"}
         
     picks, near_misses, scan_stats = get_sgo_edges()
@@ -454,7 +603,8 @@ def main():
         detail = reason
     else:
         detail = (
-            f"prop bot scanned {scan_stats.get('events', 0)} events, "
+            f"prop bot scanned {scan_stats.get('events', 0)} events "
+            f"across {scan_stats.get('leagues', 0)} leagues, "
             f"{scan_stats.get('parsed_props', 0)} parsed props, "
             f"{scan_stats.get('qualified_groups', 0)} sharp markets"
         )

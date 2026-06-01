@@ -34,6 +34,7 @@ jobs:
         env:
           PYTHONUNBUFFERED: "1"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -42,8 +43,8 @@ jobs:
           ENABLE_DRAFTKINGS_SCRAPER: "true"
           ENABLE_BETMGM_SCRAPER: "true"
           ENABLE_FANDUEL_SCRAPER: "true"
-          ENABLE_PRIZEPICKS_SCRAPER: "true"
           ENABLE_ODDSHARVESTER: "true"
+          BETMGM_ENABLE_BROWSER_FALLBACK: "true"
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
