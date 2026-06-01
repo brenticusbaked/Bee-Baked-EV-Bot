@@ -4,7 +4,7 @@ This repository contains a fully automated, high-frequency sports betting ecosys
 
 By combining real-time API scanning, headless browser scraping, and advanced situational models into a **serverless cloud database**, the Bee-Baked system operates as a professional-grade betting syndicate on autopilot.
 
-## 🚀 The Core Architecture
+## Core Architecture
 The bot is organized into a modular pipeline, communicating seamlessly with a PostgreSQL cloud backend (Supabase) to completely eliminate file-locking bottlenecks:
 
 ### Data Acquisition (The Scanners)
@@ -21,7 +21,7 @@ The bot is organized into a modular pipeline, communicating seamlessly with a Po
 * **Cloud DB Manager:** All models route through `db_manager.py` to seamlessly push and pull data from a Supabase cloud ledger, allowing infinite parallel scaling.
 * **CLV Tracker:** Monitors Pinnacle (the sharpest book) to log the Closing Line Value for every bet.
 * **Auto-Grader:** Automatically fetches SGO box scores to grade past bets as a Win, Loss, or Push.
-* **Sharp Metrics (CLV Analyzer):** Analyzes your entire betting history to calculate your "CLV Beaten %" and "Average Edge vs Close"—mathematical proof that the syndicate is beating the house.
+* **Sharp Metrics (CLV Analyzer):** Analyzes your entire betting history to calculate your "CLV Beaten %" and "Average Edge vs Close" - mathematical proof that the syndicate is beating the house.
 
 ### Execution Management & Smart Order Routing
 The repo now includes a paper-trading execution desk that turns +EV signals into parent orders, applies risk limits, splits child orders across multiple venues, simulates fills, and produces transaction-cost analytics.
@@ -78,16 +78,24 @@ The syndicate can now move Odds API ingestion into Supabase so local Codex work 
 * `docs/codex_orchestration.md` documents the Codex/GitHub/backtesting workflow.
 * `codex_skills/syndicate-quant-analysis` is a repo-local skill for strategy analysis and PR-oriented backtesting.
 
-## ⚡ Discord Notifications
+## Discord Notifications
 The bot acts as a live dispatcher, pinging your Discord with structured alerts:
-* 🟢 **Routine Alerts:** Standard +EV opportunities and situational model mismatches.
-* 🔴 **Emergency Alerts:** Detected prop edges greater than 6% that require immediate hammering.
-* 🚑 **Breaking News:** Live injury updates and lineup scratches intercepted from RSS feeds.
+* **Routine Alerts:** Standard +EV opportunities and situational model mismatches.
+* **Emergency Alerts:** Detected prop edges greater than 6% that require immediate hammering.
+* **Breaking News:** Live injury updates and lineup scratches intercepted from RSS feeds.
 
-## 🛠️ Setup & Deployment
+## Setup & Deployment
 This syndicate is designed to run completely serverless using GitHub Actions, while staying 100% within the free tiers of The Odds API and SportsGameOdds.
 
 **Requirements:** Install the environment using `pip install -r requirements.txt`. Playwright is required for headless scraping.
+
+**Local Validation:** Run the unit suite with the standard library test runner:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+The GitHub Actions `Tests` workflow runs the same command on pushes and pull requests, so runtime workflows are not the first place regressions are caught.
 
 **Environment Variables:** Add the following to your GitHub Repository Secrets:
 * `ODDS_API_KEY`
