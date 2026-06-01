@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 
@@ -12,7 +13,7 @@ def decimal_implied_probability(decimal_odds: float) -> float:
         return 0.0
 
 
-def fair_probabilities_from_prices(prices_by_outcome: dict) -> dict:
+def _group_prices_by_point(prices_by_outcome: dict) -> dict:
     grouped = {}
     for outcome_key, price in prices_by_outcome.items():
         point = outcome_key[1] if isinstance(outcome_key, tuple) and len(outcome_key) > 1 else ""
@@ -21,19 +22,83 @@ def fair_probabilities_from_prices(prices_by_outcome: dict) -> dict:
         except (TypeError, ValueError):
             pass
         grouped.setdefault(point, []).append((outcome_key, price))
+    return grouped
+
+
+def multiplicative_unvig(implied_probabilities: list[float]) -> list[float]:
+    overround = sum(implied_probabilities)
+    if not implied_probabilities:
+        return []
+    if overround <= 0:
+        return [0.0 for _ in implied_probabilities]
+    if len(implied_probabilities) == 1:
+        return [1.0]
+    return [probability / overround for probability in implied_probabilities]
+
+
+def power_unvig(implied_probabilities: list[float], tol: float = 1e-12, max_iter: int = 100) -> list[float]:
+    if not implied_probabilities:
+        return []
+    if len(implied_probabilities) == 1:
+        return [1.0]
+    if any(probability <= 0 for probability in implied_probabilities):
+        return multiplicative_unvig(implied_probabilities)
+
+    total = sum(implied_probabilities)
+    if total <= 0:
+        return [0.0 for _ in implied_probabilities]
+    if abs(total - 1.0) <= tol:
+        return list(implied_probabilities)
+
+    low = 0.01
+    high = 10.0
+    for _ in range(max_iter):
+        mid = (low + high) / 2.0
+        powered_total = sum(probability ** mid for probability in implied_probabilities)
+        if abs(powered_total - 1.0) <= tol:
+            break
+        if powered_total > 1.0:
+            low = mid
+        else:
+            high = mid
+
+    exponent = (low + high) / 2.0
+    fair = [probability ** exponent for probability in implied_probabilities]
+    fair_total = sum(fair)
+    if fair_total <= 0:
+        return multiplicative_unvig(implied_probabilities)
+    return [probability / fair_total for probability in fair]
+
+
+def devig_probabilities(implied_probabilities: list[float], method: str = "power") -> list[float]:
+    method_key = str(method or "power").strip().lower()
+    if method_key in {"multiplicative", "mult", "proportional", "normalize"}:
+        return multiplicative_unvig(implied_probabilities)
+    if method_key in {"shin"}:
+        from utils.shin import shin_probabilities
+        return shin_probabilities(implied_probabilities)
+    return power_unvig(implied_probabilities)
+
+
+def fair_probabilities_from_prices(prices_by_outcome: dict, method: Optional[str] = None) -> dict:
+    method_key = method or os.getenv("DEVIG_METHOD", "power")
+    grouped = _group_prices_by_point(prices_by_outcome)
 
     fair_probabilities = {}
     for outcomes in grouped.values():
-        implied = [
-            (outcome_key, decimal_implied_probability(price))
-            for outcome_key, price in outcomes
-        ]
-        overround = sum(prob for _, prob in implied)
-        for outcome_key, probability in implied:
-            if overround > 0 and len(implied) >= 2:
-                fair_probabilities[outcome_key] = probability / overround
-            else:
-                fair_probabilities[outcome_key] = probability
+        keys = []
+        implied = []
+        for outcome_key, price in outcomes:
+            keys.append(outcome_key)
+            implied.append(decimal_implied_probability(price))
+
+        if len(implied) >= 2:
+            fair = devig_probabilities(implied, method_key)
+        else:
+            fair = implied
+
+        for outcome_key, probability in zip(keys, fair):
+            fair_probabilities[outcome_key] = probability
     return fair_probabilities
 
 

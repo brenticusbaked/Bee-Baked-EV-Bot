@@ -113,14 +113,24 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `UNIFIED_SPREAD_EV_THRESHOLD`
 * `UNIFIED_H2H_EV_THRESHOLD`
 * `UNIFIED_TOTAL_EV_THRESHOLD`
+* `UNIFIED_ALT_MARKET_EV_THRESHOLD`
+* `UNIFIED_PARTIAL_MARKET_EV_THRESHOLD`
 * `UNIFIED_MAX_ALERTS_PER_EVENT_MARKET`
+* `DEVIG_METHOD` (Default: `power`; options: `power`, `multiplicative`, `shin`)
+* `ENABLE_SHIN_DEVIG` (Legacy override; when `true`, uses Shin regardless of `DEVIG_METHOD`)
 * `ENABLE_ODDS_SECONDARY_PULL` (Default: `true`)
 * `ENABLE_ODDS_TERTIARY_PULL` (Default: `true`; set `false` to conserve credits)
+* `ENABLE_ODDS_PARTIAL_MARKET_PULL` (Default: `false`; enables high-credit alternate and partial-game odds pulls)
 * `NEWS_FEED_SPORTS` (Optional comma-separated sports list. Default: `NBA,MLB,NHL,NFL,WNBA,SOCCER`)
 * `LINE_MOVEMENT_MAX_BOOST`
 * `LINE_MOVEMENT_MAX_PENALTY`
 * `PROP_EV_THRESHOLD`
 * `PROP_NEAR_MISS_THRESHOLD`
+* `PROP_CONSENSUS_MIN_BOOKS`
+* `PROP_DEVIG_METHOD` (Default: `multiplicative`; options: `multiplicative`, `power`, `shin`)
+* `PROP_SHARP_BOOKS` (Default: `pinnacle,bookmaker,cris,betonline`)
+* `PROP_KELLY_FRACTION` (Default: `0.125`, eighth-Kelly sizing for higher-variance props)
+* `PROP_MAX_UNITS` (Default: `2.0`)
 * `NBA_PROP_STATS` (Optional comma-separated override. Example: `points,assists,rebounds,three_pointers,steals,blocks,turnovers,points_rebounds_assists`)
 * `SCRAPER_PROXY_ATTEMPTS`
 * `BETMGM_SCRAPER_PROXY_ATTEMPTS`
@@ -158,6 +168,8 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ENABLE_MLB_MODEL` (Default: `true`)
 * `ENABLE_UNIFIED_SCAN` (Default: `true`)
 * `ENABLE_MLB_H2H_ALERTS` (Default: `false`)
+* `ENABLE_ALTERNATE_MARKET_ALERTS` (Default: `true`)
+* `ENABLE_PARTIAL_GAME_MARKET_ALERTS` (Default: `true`)
 * `ENABLE_NBA_TOTAL_ALERTS` (Default: `true`)
 * `ENABLE_NHL_TOTAL_ALERTS` (Default: `true`)
 * `ENABLE_MLB_SPREAD_ALERTS` (Default: `true`)
@@ -174,4 +186,4 @@ This syndicate is designed to run completely serverless using GitHub Actions, wh
 * `ENABLE_FANDUEL_SCRAPER` (Default: `true`, and re-enabled in the scheduled scraper workflow with a direct content-managed fallback plus broader payload capture)
 * `ENABLE_PRIZEPICKS_SCRAPER` (Default: `true`)
 
-**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 14,20 * * *`) that executes `master_run.py` twice daily. During Central daylight time, that lands at roughly 9:00 AM and 3:00 PM CT to catch morning liquidity and afternoon lineup/steam movement. Scrapers run separately in `.github/workflows/scrapers.yml` at `30 14,20 * * *`, 30 minutes after each core run. The odds edge alert workflow runs at `20 14,20 * * *`, 20 minutes after each core run. The scheduled scraper workflow enables FanDuel, DraftKings, BetMGM, PrizePicks, pybaseball/FIP, and OddsHarvester by default, while the core pipeline keeps API/model scans separate from browser scraping so scraper instability does not block live EV detection. A master odds cache is pulled at the beginning of each core run using NBA spreads, WNBA spreads, NHL spreads, and MLB H2H, which keeps the primary footprint to 8 API credits per execution (16 per day). If `ODDS_API_KEY_2` is provided, a secondary expansion pull is merged into the same cache using NBA H2H + totals, WNBA H2H + totals, NHL H2H, and MLB first-5 H2H for 12 additional credits per execution (24 per day on the second key). If `ODDS_API_KEY_3` is provided, a tertiary expansion pull is merged into the same cache using NHL totals plus MLB spreads and totals for 6 additional credits per execution (12 per day on the third key). MLB H2H remains available for the MLB model, but unified MLB H2H alerts are off by default unless `ENABLE_MLB_H2H_ALERTS=true`. NBA totals, WNBA markets, NHL totals, MLB spreads, and MLB totals can all be scanned by the unified +EV engine. The SGO grader runs best as its own dedicated `.github/workflows/sgo_grader.yml` workflow with a small fetch budget by default, which helps preserve a single SGO key for the NBA prop bot during the core live run. The daily slips summary runs once per day from `.github/workflows/daily_slips.yml` at `13:15 UTC` and reports slips placed, bets settled, and CLV updates based on their actual timestamps instead of only the original bet date.
+**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 14,20 * * *`) that executes `master_run.py` twice daily. During Central daylight time, that lands at roughly 9:00 AM and 3:00 PM CT to catch morning liquidity and afternoon lineup/steam movement without spending paid odds credits through every evening live window. Scrapers run separately in `.github/workflows/scrapers.yml` at `30 14,20 * * *`, 30 minutes after each core run, plus a credit-free live-window cadence at `15,45 23,0,1,2,3 * * *`. The odds edge alert workflow runs at `20 14,20 * * *`, 20 minutes after each core run, plus live-window summaries at `10,40 23,0,1,2,3 * * *`. The scheduled scraper workflow enables FanDuel, DraftKings, BetMGM, PrizePicks, pybaseball/FIP, and OddsHarvester by default, while the core pipeline keeps API/model scans separate from browser scraping so scraper instability does not block live EV detection. A master odds cache is pulled at the beginning of each core run using NBA spreads, WNBA spreads, NHL spreads, and MLB H2H, which keeps the primary footprint to 8 API credits per execution (16 per day). If `ODDS_API_KEY_2` is provided, a secondary expansion pull is merged into the same cache using NBA H2H + totals, WNBA H2H + totals, and NHL H2H for 10 additional credits per execution (20 per day on the second key). If `ODDS_API_KEY_3` is provided, a tertiary expansion pull is merged into the same cache using NHL totals plus MLB spreads and totals for 6 additional credits per execution (12 per day on the third key). Partial-game and alternate markets are supported by the scanner but the paid `ENABLE_ODDS_PARTIAL_MARKET_PULL` is disabled by default because it is high-credit; turn it on only for targeted testing or funded keys. MLB H2H remains available for the MLB model, and the core workflow enables unified MLB H2H alerts. NBA totals, WNBA markets, NHL totals, MLB H2H, MLB spreads, and MLB totals can all be scanned by the unified +EV engine. The SGO grader runs best as its own dedicated `.github/workflows/sgo_grader.yml` workflow with a small fetch budget by default, which helps preserve a single SGO key for the NBA prop bot during the core live run. The daily slips summary runs once per day from `.github/workflows/daily_slips.yml` at `13:15 UTC` and reports slips placed, bets settled, and CLV updates based on their actual timestamps instead of only the original bet date.

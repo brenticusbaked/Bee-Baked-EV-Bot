@@ -14,7 +14,6 @@ from utils.links import sportsbook_search_link
 from utils.market_efficiency import score_market_efficiency
 from utils.odds import decimal_implied_probability, decimal_to_american, fair_probabilities_from_prices
 from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
-from utils.shin import shin_fair_probabilities_from_prices
 from utils.thresholds import env_float, env_int
 from utils.time_decay import adjusted_threshold, compute_time_decay
 
@@ -34,6 +33,8 @@ UNIFIED_NEAR_MISS_THRESHOLD = env_float("UNIFIED_NEAR_MISS_THRESHOLD", 0.005)
 UNIFIED_SPREAD_EV_THRESHOLD = env_float("UNIFIED_SPREAD_EV_THRESHOLD", UNIFIED_EV_THRESHOLD)
 UNIFIED_H2H_EV_THRESHOLD = env_float("UNIFIED_H2H_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
 UNIFIED_TOTAL_EV_THRESHOLD = env_float("UNIFIED_TOTAL_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
+UNIFIED_ALT_MARKET_EV_THRESHOLD = env_float("UNIFIED_ALT_MARKET_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
+UNIFIED_PARTIAL_MARKET_EV_THRESHOLD = env_float("UNIFIED_PARTIAL_MARKET_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
 ENABLE_MLB_H2H_ALERTS = os.getenv("ENABLE_MLB_H2H_ALERTS", "false").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NBA_TOTAL_ALERTS = os.getenv("ENABLE_NBA_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NHL_TOTAL_ALERTS = os.getenv("ENABLE_NHL_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -42,8 +43,11 @@ ENABLE_MLB_TOTAL_ALERTS = os.getenv("ENABLE_MLB_TOTAL_ALERTS", "true").strip().l
 ENABLE_NFL_TOTAL_ALERTS = os.getenv("ENABLE_NFL_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NFL_SPREAD_ALERTS = os.getenv("ENABLE_NFL_SPREAD_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NFL_H2H_ALERTS = os.getenv("ENABLE_NFL_H2H_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_ALTERNATE_MARKET_ALERTS = os.getenv("ENABLE_ALTERNATE_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_PARTIAL_GAME_MARKET_ALERTS = os.getenv("ENABLE_PARTIAL_GAME_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVENT_MARKET", 3))
-ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "true").strip().lower() in {"1", "true", "yes", "on"}
+DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
+ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_TIME_DECAY = os.getenv("ENABLE_TIME_DECAY", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_CORRELATION_LIMITS = os.getenv("ENABLE_CORRELATION_LIMITS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_MARKET_EFFICIENCY = os.getenv("ENABLE_MARKET_EFFICIENCY", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -64,36 +68,60 @@ def calculate_edge_from_probability(offered_price: float, fair_probability: floa
     return (float(offered_price) * float(fair_probability)) - 1.0
 
 
+def _market_family(market_type: str) -> str:
+    market_key = str(market_type).strip().lower()
+    if market_key.startswith("alternate_"):
+        return "alternate"
+    if any(token in market_key for token in ("_q1", "_1q", "_h1", "_1h", "_1st_5", "_first_5", "_1st_period", "_1p")):
+        return "partial"
+    if market_key.startswith("spreads"):
+        return "spreads"
+    if market_key.startswith("totals"):
+        return "totals"
+    if market_key.startswith("h2h"):
+        return "h2h"
+    return market_key
+
+
 def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
     sport_key = str(sport).strip().lower()
-    market_key = str(market_type).strip().lower()
+    market_family = _market_family(market_type)
+
+    if market_family == "alternate":
+        return ENABLE_ALTERNATE_MARKET_ALERTS
+    if market_family == "partial":
+        return ENABLE_PARTIAL_GAME_MARKET_ALERTS
 
     if sport_key == "basketball_nba":
-        return market_key == "spreads" or (market_key == "totals" and ENABLE_NBA_TOTAL_ALERTS)
+        return market_family == "spreads" or (market_family == "totals" and ENABLE_NBA_TOTAL_ALERTS)
     if sport_key == "icehockey_nhl":
-        return market_key == "spreads" or (market_key == "totals" and ENABLE_NHL_TOTAL_ALERTS)
+        return market_family == "spreads" or (market_family == "totals" and ENABLE_NHL_TOTAL_ALERTS)
     if sport_key == "baseball_mlb":
         return (
-            (market_key == "h2h" and ENABLE_MLB_H2H_ALERTS)
-            or (market_key == "spreads" and ENABLE_MLB_SPREAD_ALERTS)
-            or (market_key == "totals" and ENABLE_MLB_TOTAL_ALERTS)
+            (market_family == "h2h" and ENABLE_MLB_H2H_ALERTS)
+            or (market_family == "spreads" and ENABLE_MLB_SPREAD_ALERTS)
+            or (market_family == "totals" and ENABLE_MLB_TOTAL_ALERTS)
         )
     if sport_key == "americanfootball_nfl":
         return (
-            (market_key == "spreads" and ENABLE_NFL_SPREAD_ALERTS)
-            or (market_key == "totals" and ENABLE_NFL_TOTAL_ALERTS)
-            or (market_key == "h2h" and ENABLE_NFL_H2H_ALERTS)
+            (market_family == "spreads" and ENABLE_NFL_SPREAD_ALERTS)
+            or (market_family == "totals" and ENABLE_NFL_TOTAL_ALERTS)
+            or (market_family == "h2h" and ENABLE_NFL_H2H_ALERTS)
         )
-    return market_key in {"spreads", "totals", "h2h"}
+    return market_family in {"spreads", "totals", "h2h"}
 
 
 def _market_ev_threshold(market_type: str) -> float:
-    market_key = str(market_type).strip().lower()
-    if market_key == "spreads":
+    market_family = _market_family(market_type)
+    if market_family == "alternate":
+        return UNIFIED_ALT_MARKET_EV_THRESHOLD
+    if market_family == "partial":
+        return UNIFIED_PARTIAL_MARKET_EV_THRESHOLD
+    if market_family == "spreads":
         return UNIFIED_SPREAD_EV_THRESHOLD
-    if market_key == "h2h":
+    if market_family == "h2h":
         return UNIFIED_H2H_EV_THRESHOLD
-    if market_key == "totals":
+    if market_family == "totals":
         return UNIFIED_TOTAL_EV_THRESHOLD
     return UNIFIED_EV_THRESHOLD
 
@@ -268,10 +296,8 @@ def scan_markets():
                 if not sharp:
                     continue
 
-                if ENABLE_SHIN_DEVIG:
-                    fair_probabilities = shin_fair_probabilities_from_prices(sharp)
-                else:
-                    fair_probabilities = fair_probabilities_from_prices(sharp)
+                devig_method = "shin" if ENABLE_SHIN_DEVIG else DEVIG_METHOD
+                fair_probabilities = fair_probabilities_from_prices(sharp, method=devig_method)
 
                 time_decay = compute_time_decay(event.get("commence_time")) if ENABLE_TIME_DECAY else None
                 sharp_prices_list = list(sharp.values())

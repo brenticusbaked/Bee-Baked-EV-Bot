@@ -4,6 +4,8 @@ on:
   schedule:
     # Runs 20 minutes after the core pipeline windows.
     - cron: '20 14,20 * * *'
+    # More frequent alert summaries during evening live windows.
+    - cron: '10,40 23,0,1,2,3 * * *'
   workflow_dispatch:
 
 jobs:

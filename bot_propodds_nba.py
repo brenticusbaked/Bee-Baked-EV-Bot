@@ -9,7 +9,8 @@ from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
 from services.http_client import request
 from utils.links import sportsbook_search_link
-from utils.odds import decimal_to_american, quarter_kelly_units
+from utils.odds import decimal_to_american
+from utils.prop_pricing import consensus_probabilities, infer_mean_from_over_probability, poisson_prop_probabilities, prop_kelly_units
 from utils.thresholds import env_float
 
 
@@ -81,6 +82,16 @@ STAT_LABELS = {
 
 PROP_EV_THRESHOLD = env_float("PROP_EV_THRESHOLD", 0.01)
 PROP_NEAR_MISS_THRESHOLD = env_float("PROP_NEAR_MISS_THRESHOLD", 0.005)
+PROP_CONSENSUS_MIN_BOOKS = max(1, int(os.getenv("PROP_CONSENSUS_MIN_BOOKS", "1")))
+PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "multiplicative")
+PROP_KELLY_FRACTION = env_float("PROP_KELLY_FRACTION", 0.125)
+PROP_MAX_UNITS = env_float("PROP_MAX_UNITS", 2.0)
+LOW_COUNT_POISSON_STATS = {"assists", "rebounds", "three_pointers", "steals", "blocks", "turnovers"}
+SHARP_PROP_BOOKS = {
+    book.strip().lower()
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,cris,betonline").split(",")
+    if book.strip()
+}
 
 
 def _parse_target_stats() -> set:
@@ -226,6 +237,34 @@ def _parse_prop_offer(odd_key: str, odd_obj: dict) -> Optional[dict]:
     }
 
 
+def _consensus_from_sharp_books(sharp_by_book: Dict[str, Dict[str, dict]], stat_type: str, line_value: str) -> tuple[Dict[str, float], str, int]:
+    book_pairs = [
+        sides for sides in sharp_by_book.values()
+        if "over" in sides and "under" in sides
+    ]
+    if len(book_pairs) < PROP_CONSENSUS_MIN_BOOKS:
+        return {}, "none", len(book_pairs)
+
+    probabilities = consensus_probabilities(book_pairs, method=PROP_DEVIG_METHOD)
+    source = f"consensus_{PROP_DEVIG_METHOD}"
+    if not probabilities:
+        return {}, "none", len(book_pairs)
+
+    if stat_type in LOW_COUNT_POISSON_STATS:
+        try:
+            line = float(line_value)
+        except (TypeError, ValueError):
+            line = None
+        if line is not None:
+            mean = infer_mean_from_over_probability(line, probabilities["over"])
+            poisson_probabilities = poisson_prop_probabilities(line, mean)
+            if poisson_probabilities:
+                probabilities = poisson_probabilities
+                source = f"{source}_poisson"
+
+    return probabilities, source, len(book_pairs)
+
+
 def get_sgo_edges():
     if not SGO_API_KEY:
         return [], [], {"reason": "SGO_API_KEY missing"}
@@ -289,8 +328,8 @@ def get_sgo_edges():
                 market_key = (offer["player"], offer["stat"], offer["line"])
                 market_groups.setdefault(market_key, {"sharp": {}, "soft": {}})
 
-                if offer["book"] == "pinnacle":
-                    market_groups[market_key]["sharp"][offer["side"]] = offer
+                if offer["book"] in SHARP_PROP_BOOKS:
+                    market_groups[market_key]["sharp"].setdefault(offer["book"], {})[offer["side"]] = offer
                     scan_stats["sharp_sides"] += 1
                 elif offer["book"] in soft_list:
                     current = market_groups[market_key]["soft"].get(offer["side"])
@@ -300,17 +339,14 @@ def get_sgo_edges():
 
             for (player_name, stat_type, line_value), value in market_groups.items():
                 sharp, soft = value["sharp"], value["soft"]
-                if "over" not in sharp or "under" not in sharp:
-                    continue
                 if not soft:
                     continue
 
+                probabilities, probability_source, consensus_books = _consensus_from_sharp_books(sharp, stat_type, line_value)
+                if not probabilities:
+                    continue
+
                 scan_stats["qualified_groups"] += 1
-                vig = (1 / sharp["over"]["price"]) + (1 / sharp["under"]["price"])
-                probabilities = {
-                    "over": (1 / sharp["over"]["price"]) / vig,
-                    "under": (1 / sharp["under"]["price"]) / vig,
-                }
 
                 for side in ("over", "under"):
                     if side not in soft:
@@ -338,7 +374,7 @@ def get_sgo_edges():
                     if is_already_logged(matchup, market, selection):
                         continue
 
-                    units = quarter_kelly_units(edge, soft[side]["price"])
+                    units = prop_kelly_units(edge, soft[side]["price"], fraction=PROP_KELLY_FRACTION, cap=PROP_MAX_UNITS)
                     was_logged = log_bet_to_db(
                         matchup.strip(),
                         market,
@@ -349,7 +385,11 @@ def get_sgo_edges():
                         decimal_to_american(1 / probabilities[side]),
                         "basketball_nba",
                         str(event.get("id", "")),
-                        notes=f"book={soft[side]['book']};market=prop;stat={stat_type};line={line_value}",
+                        notes=(
+                            f"book={soft[side]['book']};market=prop;stat={stat_type};line={line_value};"
+                            f"fair_source={probability_source};consensus_books={consensus_books};"
+                            f"prop_kelly_fraction={PROP_KELLY_FRACTION}"
+                        ),
                     )
                     if not was_logged:
                         continue
@@ -365,6 +405,7 @@ def get_sgo_edges():
                                 f"**Book:** [{soft[side]['book'].upper()}]({link}) @ {decimal_to_american(soft[side]['price'])}\n"
                                 f"**Edge:** {edge * 100:.2f}%\n"
                                 f"**Fair Price:** {decimal_to_american(1 / probabilities[side])}\n"
+                                f"**Fair Source:** {probability_source} ({consensus_books} book consensus)\n"
                                 f"**Suggested:** {units:.2f} Units\n"
                                 f"**Book Weight:** {book_weight:.2f}x"
                             ),

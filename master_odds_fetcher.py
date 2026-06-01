@@ -19,11 +19,11 @@ PRIMARY_CONFIG = {
     "baseball_mlb": "h2h",
 }
 
-# Secondary key is used only on markets that add the most useful upside.
-# Cost: NBA 4 + NHL 2 = 6 credits/run, 12/day at two runs per day (360/month).
-# WNBA removed to stay within the 500 credit/month free tier.
+# Secondary key is used only on full-game markets that add the most useful upside.
+# WNBA H2H/totals add more bet candidates during summer without the cost of alternate ladders.
 SECONDARY_CONFIG = {
     "basketball_nba": "h2h,totals",
+    "basketball_wnba": "h2h,totals",
     "icehockey_nhl": "h2h",
 }
 
@@ -42,6 +42,14 @@ TARGET_BOOKS = os.getenv(
 )
 ENABLE_ODDS_SECONDARY_PULL = env_flag("ENABLE_ODDS_SECONDARY_PULL", True)
 ENABLE_ODDS_TERTIARY_PULL = env_flag("ENABLE_ODDS_TERTIARY_PULL", True)
+ENABLE_ODDS_PARTIAL_MARKET_PULL = env_flag("ENABLE_ODDS_PARTIAL_MARKET_PULL", False)
+
+PARTIAL_GAME_CONFIG = {
+    "basketball_nba": "alternate_spreads,alternate_totals,spreads_q1,totals_q1,h2h_q1,spreads_h1,totals_h1,h2h_h1",
+    "icehockey_nhl": "alternate_spreads,alternate_totals,spreads_1st_period,totals_1st_period,h2h_1st_period",
+    "baseball_mlb": "alternate_spreads,alternate_totals,h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings",
+    "americanfootball_nfl": "alternate_spreads,alternate_totals,spreads_q1,totals_q1,h2h_q1,spreads_h1,totals_h1,h2h_h1",
+}
 
 
 def _credits_for_config(config: Dict[str, str]) -> int:
@@ -174,11 +182,28 @@ def run_fetcher():
     else:
         print("ODDS_API_KEY_3 not set. Skipping tertiary expansion pull.")
 
+    partial_success = 0
+    if ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL:
+        active_partial = filter_config_in_season(PARTIAL_GAME_CONFIG)
+        skipped_partial = set(PARTIAL_GAME_CONFIG) - set(active_partial)
+        if skipped_partial:
+            print(f"BEE-BAKED FETCH: Skipping off-season sports (partial/alternate): {', '.join(sorted(skipped_partial))}")
+        print(
+            "BEE-BAKED FETCH: Running partial-game and alternate-market pull"
+            f" ({_credits_for_config(active_partial)} credits/run)"
+        )
+        partial_success = _fetch_config(cache, ODDS_API_KEY_3, active_partial, "partial/alternate key")
+    elif not ENABLE_ODDS_PARTIAL_MARKET_PULL:
+        print("ENABLE_ODDS_PARTIAL_MARKET_PULL=false. Skipping partial-game and alternate-market pull.")
+    else:
+        print("ODDS_API_KEY_3 not set. Skipping partial-game and alternate-market pull.")
+
     save_master_cache(cache)
     detail = (
         f"fetch complete | primary sports: {primary_success}/{len(PRIMARY_CONFIG)}"
         f" | secondary sports: {secondary_success}/{len(SECONDARY_CONFIG) if ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL else 0}"
         f" | tertiary sports: {tertiary_success}/{len(TERTIARY_CONFIG) if ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL else 0}"
+        f" | partial/alternate sports: {partial_success}/{len(PARTIAL_GAME_CONFIG) if ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL else 0}"
     )
     return {"detail": detail, "count": len(cache), "label": "updates"}
 

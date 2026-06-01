@@ -4,6 +4,8 @@ on:
   schedule:
     # Runs 30 minutes after the core pipeline so the odds cache is refreshed first.
     - cron: '30 14,20 * * *'
+    # Live-window scraper cadence during evening game windows.
+    - cron: '15,45 23,0,1,2,3 * * *'
   workflow_dispatch:
 
 jobs:

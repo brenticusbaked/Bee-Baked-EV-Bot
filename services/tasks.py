@@ -100,30 +100,48 @@ def get_scraper_tasks() -> List[PipelineTask]:
 
     if env_flag("ENABLE_PYBASEBALL_FIP_SCRAPER", True):
         if is_sport_in_season("baseball_mlb"):
-            from scraper_pybaseball_fip import run_fip_scraper
+            try:
+                from scraper_pybaseball_fip import run_fip_scraper
 
-            tasks.append(PipelineTask(name="scraper_pybaseball_fip", func=run_fip_scraper))
+                tasks.append(PipelineTask(name="scraper_pybaseball_fip", func=run_fip_scraper))
+            except Exception as exc:
+                print(f"[scraper-loader] Skipping scraper_pybaseball_fip: {exc}")
         else:
             print("[seasons] Skipping scraper_pybaseball_fip (MLB off-season)")
     if env_flag("ENABLE_DRAFTKINGS_SCRAPER", True):
-        from scraper_draftkings import scrape_dk as scrape_draftkings
+        try:
+            from scraper_draftkings import scrape_dk as scrape_draftkings
 
-        tasks.append(PipelineTask(name="scraper_draftkings", func=scrape_draftkings))
+            tasks.append(PipelineTask(name="scraper_draftkings", func=scrape_draftkings))
+        except Exception as exc:
+            print(f"[scraper-loader] Skipping scraper_draftkings: {exc}")
     if env_flag("ENABLE_BETMGM_SCRAPER", True):
-        from scraper_betmgm import scrape_betmgm
+        try:
+            from scraper_betmgm import scrape_betmgm
 
-        tasks.append(PipelineTask(name="scraper_betmgm", func=scrape_betmgm))
+            tasks.append(PipelineTask(name="scraper_betmgm", func=scrape_betmgm))
+        except Exception as exc:
+            print(f"[scraper-loader] Skipping scraper_betmgm: {exc}")
     if env_flag("ENABLE_FANDUEL_SCRAPER", True):
-        from scraper_fanduel import scrape_fanduel
+        try:
+            from scraper_fanduel import scrape_fanduel
 
-        tasks.append(PipelineTask(name="scraper_fanduel", func=scrape_fanduel))
+            tasks.append(PipelineTask(name="scraper_fanduel", func=scrape_fanduel))
+        except Exception as exc:
+            print(f"[scraper-loader] Skipping scraper_fanduel: {exc}")
     if env_flag("ENABLE_PRIZEPICKS_SCRAPER", True):
-        from scraper_prizepicks import scrape_prizepicks
+        try:
+            from scraper_prizepicks import scrape_prizepicks
 
-        tasks.append(PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks))
+            tasks.append(PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks))
+        except Exception as exc:
+            print(f"[scraper-loader] Skipping scraper_prizepicks: {exc}")
     if env_flag("ENABLE_ODDSHARVESTER", True):
-        from scraper_oddsharvester import scrape_oddsharvester
+        try:
+            from scraper_oddsharvester import scrape_oddsharvester
 
-        tasks.append(PipelineTask(name="scraper_oddsharvester", func=scrape_oddsharvester))
+            tasks.append(PipelineTask(name="scraper_oddsharvester", func=scrape_oddsharvester))
+        except Exception as exc:
+            print(f"[scraper-loader] Skipping scraper_oddsharvester: {exc}")
 
     return tasks
