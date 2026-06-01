@@ -216,12 +216,15 @@ def _send_dead_letter(table_name: str, payload: dict) -> None:
     try:
         # Truncate payload safely to fit within Discord's 2000 character limit
         safe_payload = json.dumps(payload, indent=2, default=str)[:1850]
-        message = (
-            f"**🚨 CRITICAL: SUPABASE INSERT FAILED 🚨**\n"
-            f"**Table:** `{table_name}`\n"
-            f"**Payload:**\n```json\n{safe_payload}\n
-```"
-        )
+        
+        # Safely formatting the multi-line string using triple quotes
+        message = f"""**🚨 CRITICAL: SUPABASE INSERT FAILED 🚨**
+**Table:** `{table_name}`
+**Payload:**
+```json
+{safe_payload}
+```"""
+        
         post_discord({"content": message}, webhook_url=DISCORD_DEAD_LETTER_WEBHOOK_URL)
     except Exception as exc:
         print(f"Failed to dispatch dead-letter to Discord: {exc}")
