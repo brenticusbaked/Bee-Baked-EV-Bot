@@ -65,6 +65,10 @@ def get_scan_tasks() -> List[PipelineTask]:
         from unified_bot import scan_markets
 
         tasks.append(PipelineTask(name="unified_market_scan", func=scan_markets))
+    if env_flag("ENABLE_ARBITRAGE_SCAN", True):
+        from arbitrage_scanner import run_arbitrage_scan
+
+        tasks.append(PipelineTask(name="arbitrage_scan", func=run_arbitrage_scan))
     if env_flag("ENABLE_EXECUTION_DESK", True):
         from execution_scanner import run_execution_scan
 

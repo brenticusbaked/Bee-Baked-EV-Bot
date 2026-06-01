@@ -244,6 +244,18 @@ def _consensus_from_sharp_books(sharp_by_book: Dict[str, Dict[str, dict]], stat_
                 source = f"{source}_poisson"
     return probabilities, source, len(book_pairs)
 
+def _sharp_prop_reference(sharp_by_book: Dict[str, Dict[str, dict]], side: str) -> str:
+    candidates = []
+    for book, sides in sharp_by_book.items():
+        offer = sides.get(side)
+        if offer:
+            candidates.append((book, offer["price"]))
+    if not candidates:
+        return "unavailable"
+    candidates = sorted(candidates, key=lambda item: (item[0] != "pinnacle", item[0]))
+    book, price = candidates[0]
+    return f"{book.upper()} {decimal_to_american(price)}"
+
 def get_sgo_edges():
     if not SGO_API_KEY:
         return [], [], {"reason": "SGO_API_KEY missing"}
@@ -378,6 +390,7 @@ def get_sgo_edges():
                         continue
                     
                     link = soft[side].get("prop_link") or get_dynamic_link(soft[side]["book"], player_name)
+                    sharp_reference = _sharp_prop_reference(sharp, side)
                     picks.append(
                         {
                             "score": weighted_score,
@@ -386,6 +399,7 @@ def get_sgo_edges():
                                 f"**Match:** {matchup}\n"
                                 f"**Prop:** {selection} ({market})\n"
                                 f"**Book:** [{soft[side]['book'].upper()}]({link}) @ {decimal_to_american(soft[side]['price'])}\n"
+                                f"**Sharp Ref:** {sharp_reference}\n"
                                 f"**Edge:** {edge * 100:.2f}%\n"
                                 f"**Fair Price:** {decimal_to_american(1 / probabilities[side])}\n"
                                 f"**Fair Source:** {probability_source} ({consensus_books} book consensus)\n"

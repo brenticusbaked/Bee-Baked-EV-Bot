@@ -47,6 +47,7 @@ jobs:
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
+          DISCORD_ARBITRAGE_WEBHOOK_URL: ${{ secrets.DISCORD_ARBITRAGE_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           DISCORD_RESULTS_WEBHOOK_URL: ${{ secrets.DISCORD_RESULTS_WEBHOOK_URL }}
           DISCORD_INJURY_WEBHOOK_URL: ${{ secrets.DISCORD_INJURY_WEBHOOK_URL }}
@@ -65,6 +66,7 @@ jobs:
           ENABLE_NHL_MODEL: "true"
           ENABLE_MLB_MODEL: "true"
           ENABLE_UNIFIED_SCAN: "true"
+          ENABLE_ARBITRAGE_SCAN: "true"
           ENABLE_CLV_TRACKER: "true"
           ENABLE_SGO_GRADER: "false"
           ENABLE_EXECUTION_DESK: "true"

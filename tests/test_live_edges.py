@@ -59,6 +59,7 @@ class LiveEdgesTests(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts[0]["lane"], "watchlist")
         self.assertIn("WATCHLIST", alerts[0]["payload"]["embeds"][0]["description"])
+        self.assertIn("Pinnacle", alerts[0]["payload"]["embeds"][0]["description"])
 
     def test_send_live_edge_alerts_dedupes_in_memory(self):
         current = {"basketball_nba": [event_with_prices("evt_1", 1.80, 2.20, 2.05)]}
