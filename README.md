@@ -110,9 +110,9 @@ The GitHub Actions `Tests` workflow runs the same command on pushes and pull req
 * `DISCORD_MLB_UPDATES_WEBHOOK_URL` (Optional: routes MLB starters, lineups, and injury updates)
 * `DISCORD_NHL_UPDATES_WEBHOOK_URL` (Optional: routes NHL injury/news updates)
 * `DISCORD_NFL_UPDATES_WEBHOOK_URL` (Optional: routes NFL injury/news updates)
-* `DISCORD_WNBA_UPDATES_WEBHOOK_URL` (Optional: routes WNBA injury/news updates)
+* `DISCORD_WNBA_UPDATES_WEBHOOK_URL` (Optional: routes WNBA injury/news/player-status updates only)
 * `DISCORD_SOCCER_UPDATES_WEBHOOK_URL` (Optional: routes soccer injury/news updates)
-* `DISCORD_WNBA_BETS_WEBHOOK_URL` (Optional: routes WNBA +EV bet alerts; falls back to WNBA updates, then default alerts)
+* `DISCORD_WNBA_BETS_WEBHOOK_URL` (Optional: routes WNBA +EV bet alerts; falls back to the positive-EV alerts webhook)
 * `DISCORD_DAILY_SLIPS_WEBHOOK_URL` (Optional: sends the daily CLV + win/loss slip report to a separate Discord channel)
 * `SUPABASE_URL`
 * `SUPABASE_KEY` (Use the `service_role` key to bypass Row-Level Security)

@@ -21,9 +21,7 @@ from utils.time_decay import adjusted_threshold, compute_time_decay
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 SPORT_ALERT_WEBHOOKS = {
-    "basketball_wnba": os.getenv("DISCORD_WNBA_BETS_WEBHOOK_URL")
-    or os.getenv("DISCORD_WNBA_UPDATES_WEBHOOK_URL")
-    or DISCORD_WEBHOOK_URL,
+    "basketball_wnba": os.getenv("DISCORD_WNBA_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "baseball_mlb": os.getenv("DISCORD_MLB_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "icehockey_nhl": os.getenv("DISCORD_NHL_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "basketball_nba": os.getenv("DISCORD_NBA_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
