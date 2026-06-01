@@ -168,6 +168,13 @@ The GitHub Actions `Tests` workflow runs the same command on pushes and pull req
 * `ODDS_PUSH_SPORT` (Optional: default sport key when push messages omit `sport_key`)
 * `ODDS_PUSH_SUBSCRIBE_JSON` (Optional: JSON subscription payload sent after connecting)
 * `ODDS_PUSH_MAX_MESSAGES` (Optional: stop after this many messages; useful for smoke tests)
+* `DISCORD_LIVE_HAMMER_WEBHOOK_URL` (Optional: routes high-edge confirmed stale-line live alerts)
+* `DISCORD_WATCHLIST_WEBHOOK_URL` (Optional: routes lower-confidence positive live edges)
+* `LIVE_HAMMER_EDGE_THRESHOLD` (Default: `0.03`)
+* `WATCHLIST_EDGE_THRESHOLD` (Default: `0.01`)
+* `LIVE_STALE_MIN_SCORE` (Default: `0.50`)
+* `LIVE_SHARP_BOOKS` (Default: `pinnacle,bookmaker,circa,cris`)
+* `LIVE_SOFT_BOOKS` (Default: `fanduel,draftkings,betmgm,bet365,caesars,bovada,prizepicks`)
 * `MLB_FIP_GAP_THRESHOLD`
 * `MLB_MODEL_EDGE_THRESHOLD`
 * `NBA_MODEL_EDGE_THRESHOLD`

@@ -1,9 +1,11 @@
 import asyncio
+import copy
 import json
 import os
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from db_manager import get_master_cache, save_master_cache
+from services.live_edges import find_live_edge_alerts, send_live_edge_alerts
 
 
 Cache = Dict[str, List[dict]]
@@ -127,6 +129,7 @@ async def stream_push_feed(
         headers["Authorization"] = f"Bearer {api_key}"
 
     processed = 0
+    sent_dedupe_keys: set[str] = set()
     cache = get_master_cache() or {}
     connect_kwargs = {}
     if headers:
@@ -142,10 +145,16 @@ async def stream_push_feed(
 
         while max_messages is None or processed < max_messages:
             message = await websocket.recv()
-            merged = merge_push_message(cache, message, default_sport=default_sport)
+            previous_cache = copy.deepcopy(cache)
+            updates = extract_cache_events(message, default_sport=default_sport)
+            merged = sum(merge_cache_events(cache, sport, events) for sport, events in updates.items())
             if merged:
                 save_master_cache(cache)
+                alerts = find_live_edge_alerts(previous_cache, cache, updates)
+                sent = send_live_edge_alerts(alerts, sent_dedupe_keys=sent_dedupe_keys)
                 print(f"odds_push merged {merged} event update(s)")
+                if alerts:
+                    print(f"odds_push live edge alerts: {sent}/{len(alerts)} sent")
             processed += 1
     return processed
 
