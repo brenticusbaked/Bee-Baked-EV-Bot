@@ -162,11 +162,23 @@ The GitHub Actions `Tests` workflow runs the same command on pushes and pull req
 * `EXECUTION_MAX_NOTIONAL`
 * `EXECUTION_LEDGER_PATH`
 * `PENDING_EXECUTION_REPORTS_PATH`
+* `ODDS_PUSH_WS_URL` (Optional: WebSocket URL for an OddsPapi/ParlayAPI-style realtime odds feed)
+* `ODDS_PUSH_API_KEY` (Optional: bearer token used by the realtime odds feed)
+* `ODDS_PUSH_PROVIDER` (Optional: provider label used in logs; example: `oddspapi` or `parlayapi`)
+* `ODDS_PUSH_SPORT` (Optional: default sport key when push messages omit `sport_key`)
+* `ODDS_PUSH_SUBSCRIBE_JSON` (Optional: JSON subscription payload sent after connecting)
+* `ODDS_PUSH_MAX_MESSAGES` (Optional: stop after this many messages; useful for smoke tests)
 * `MLB_FIP_GAP_THRESHOLD`
 * `MLB_MODEL_EDGE_THRESHOLD`
 * `NBA_MODEL_EDGE_THRESHOLD`
 * `NHL_GD_GAP_THRESHOLD`
 * `NHL_MODEL_EDGE_THRESHOLD`
+
+Run a configured realtime push feed with:
+
+```bash
+python odds_push_feed.py
+```
 
 **Optional Feature Flags:**
 * `ENABLE_NEWS` (Default: `true`)
