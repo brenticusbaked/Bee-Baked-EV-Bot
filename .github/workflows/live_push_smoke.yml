@@ -1,21 +1,19 @@
-name: Environment Healthcheck
+name: Live Push Smoke Test
 
 on:
   workflow_dispatch:
     inputs:
-      check_live:
-        description: "Require live WebSocket push feed variables"
+      max_messages:
+        description: "Stop after this many WebSocket messages"
         required: false
-        default: true
-        type: boolean
-      show_optional:
-        description: "Show optional variable status"
+        default: "3"
+      timeout_seconds:
+        description: "Kill the smoke test after this many seconds"
         required: false
-        default: true
-        type: boolean
+        default: "90"
 
 jobs:
-  env-healthcheck:
+  live-push-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -26,18 +24,18 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
 
-      - name: Check Environment
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Live Push Smoke Test
         env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          ODDS_API_KEY_2: ${{ secrets.ODDS_API_KEY_2 }}
-          ODDS_API_KEY_3: ${{ secrets.ODDS_API_KEY_3 }}
-          SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
-          DISCORD_INJURY_WEBHOOK_URL: ${{ secrets.DISCORD_INJURY_WEBHOOK_URL }}
           DISCORD_LIVE_HAMMER_WEBHOOK_URL: ${{ secrets.DISCORD_LIVE_HAMMER_WEBHOOK_URL }}
           DISCORD_WATCHLIST_WEBHOOK_URL: ${{ secrets.DISCORD_WATCHLIST_WEBHOOK_URL }}
           ODDS_PUSH_WS_URL: ${{ secrets.ODDS_PUSH_WS_URL }}
@@ -48,17 +46,10 @@ jobs:
           ODDS_PUSH_API_KEY_PARAM: ${{ secrets.ODDS_PUSH_API_KEY_PARAM }}
           ODDS_PUSH_SPORT: ${{ secrets.ODDS_PUSH_SPORT }}
           ODDS_PUSH_SUBSCRIBE_JSON: ${{ secrets.ODDS_PUSH_SUBSCRIBE_JSON }}
+          ODDS_PUSH_MAX_MESSAGES: ${{ inputs.max_messages }}
           LIVE_HAMMER_EDGE_THRESHOLD: ${{ vars.LIVE_HAMMER_EDGE_THRESHOLD }}
           WATCHLIST_EDGE_THRESHOLD: ${{ vars.WATCHLIST_EDGE_THRESHOLD }}
           LIVE_STALE_MIN_SCORE: ${{ vars.LIVE_STALE_MIN_SCORE }}
           LIVE_SHARP_BOOKS: ${{ vars.LIVE_SHARP_BOOKS }}
           LIVE_SOFT_BOOKS: ${{ vars.LIVE_SOFT_BOOKS }}
-        run: |
-          args=""
-          if [ "${{ inputs.check_live }}" = "true" ]; then
-            args="$args --live"
-          fi
-          if [ "${{ inputs.show_optional }}" = "true" ]; then
-            args="$args --optional"
-          fi
-          python env_healthcheck.py $args
+        run: timeout "${{ inputs.timeout_seconds }}" python odds_push_feed.py

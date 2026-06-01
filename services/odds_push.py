@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import os
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from db_manager import get_master_cache, save_master_cache
@@ -112,6 +113,23 @@ def merge_push_message(cache: Cache, message, default_sport: Optional[str] = Non
     return sum(merge_cache_events(cache, sport, events) for sport, events in updates.items())
 
 
+def build_connection_config(url: str, api_key: Optional[str] = None) -> tuple[str, dict]:
+    headers = {}
+    if not api_key:
+        return url, headers
+
+    auth_mode = os.getenv("ODDS_PUSH_AUTH_MODE", "header").strip().lower()
+    if auth_mode == "query":
+        parts = urlsplit(url)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query.setdefault(os.getenv("ODDS_PUSH_API_KEY_PARAM", "apiKey"), api_key)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)), headers
+
+    auth_header = os.getenv("ODDS_PUSH_AUTH_HEADER", "X-API-Key")
+    headers[auth_header] = f"Bearer {api_key}" if auth_header.lower() == "authorization" else api_key
+    return url, headers
+
+
 async def stream_push_feed(
     url: str,
     api_key: Optional[str] = None,
@@ -124,10 +142,7 @@ async def stream_push_feed(
     except ImportError as exc:
         raise RuntimeError("Install the optional 'websockets' dependency before running the push feed.") from exc
 
-    headers = {}
-    if api_key:
-        auth_header = os.getenv("ODDS_PUSH_AUTH_HEADER", "X-API-Key")
-        headers[auth_header] = f"Bearer {api_key}" if auth_header.lower() == "authorization" else api_key
+    url, headers = build_connection_config(url, api_key=api_key)
 
     processed = 0
     sent_dedupe_keys: set[str] = set()

@@ -1,9 +1,23 @@
 import unittest
+from unittest.mock import patch
 
-from services.odds_push import extract_cache_events, merge_push_message
+from services.odds_push import build_connection_config, extract_cache_events, merge_push_message
 
 
 class OddsPushTests(unittest.TestCase):
+    def test_build_connection_config_supports_query_api_key(self):
+        with patch.dict("os.environ", {"ODDS_PUSH_AUTH_MODE": "query"}, clear=False):
+            url, headers = build_connection_config("wss://parlay-api.com/ws/odds/baseball_mlb", "secret_key")
+
+        self.assertEqual(headers, {})
+        self.assertEqual(url, "wss://parlay-api.com/ws/odds/baseball_mlb?apiKey=secret_key")
+
+    def test_build_connection_config_defaults_to_header_api_key(self):
+        url, headers = build_connection_config("wss://example.com/ws", "secret_key")
+
+        self.assertEqual(url, "wss://example.com/ws")
+        self.assertEqual(headers["X-API-Key"], "secret_key")
+
     def test_extracts_the_odds_api_shaped_event_from_wrapper(self):
         message = {
             "sport_key": "basketball_nba",
