@@ -41,7 +41,7 @@ jobs:
           ODDS_PUSH_WS_URL: ${{ secrets.ODDS_PUSH_WS_URL }}
           ODDS_PUSH_API_KEY: ${{ secrets.ODDS_PUSH_API_KEY }}
           ODDS_PUSH_PROVIDER: ${{ secrets.ODDS_PUSH_PROVIDER }}
-          ODDS_PUSH_AUTH_MODE: ${{ secrets.ODDS_PUSH_AUTH_MODE }}
+          ODDS_PUSH_AUTH_MODE: ${{ secrets.ODDS_PUSH_AUTH_MODE || 'query' }}
           ODDS_PUSH_AUTH_HEADER: ${{ secrets.ODDS_PUSH_AUTH_HEADER }}
           ODDS_PUSH_API_KEY_PARAM: ${{ secrets.ODDS_PUSH_API_KEY_PARAM }}
           ODDS_PUSH_SPORT: ${{ secrets.ODDS_PUSH_SPORT }}
