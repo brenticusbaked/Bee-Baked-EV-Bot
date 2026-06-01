@@ -4,6 +4,7 @@ from db_manager import get_master_cache, is_already_logged, log_bet_to_db, load_
 from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import get_json
+from services.odds_reference import format_pinnacle_reference
 from utils.links import sportsbook_search_link
 from utils.model_pricing import fair_american_from_probability, model_edge_from_probability
 from utils.odds import decimal_to_american, quarter_kelly_units, american_to_decimal
@@ -171,6 +172,13 @@ def run_mlb_model():
 
             book, odds, link, event_id, selected_market = get_best_f5_moneyline(better_team)
             if not book or not event_id: continue
+            pinnacle_reference = format_pinnacle_reference(
+                get_master_cache() or {},
+                "baseball_mlb",
+                event_id,
+                "MODEL_MLB_F5",
+                better_team,
+            )
 
             # Core Model Probabilities
             prob = min(0.53 + max(fip_diff - MLB_FIP_GAP_THRESHOLD, 0.0) * 0.03, 0.64)
@@ -225,6 +233,7 @@ def run_mlb_model():
                     f"**{home_p['fullName']}** FIP: **{h_mod_fip:.2f}** | ERA: **{h_era:.2f}** ({h_source})\n"
                     f"**FIP Gap:** {fip_diff:.2f}\n"
                     f"**Price:** [{book}]({link}) @ {odds}\n"
+                    f"**Pinnacle:** {pinnacle_reference}\n"
                     f"**Model Edge:** {edge * 100:.2f}% | **Fair:** {fair_p}\n"
                     f"**Primary Bet:** {u_size:.2f} Units\n\n"
                     f"{angles_text}"

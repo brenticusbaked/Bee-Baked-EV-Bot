@@ -5,6 +5,7 @@ from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import get_json
+from services.odds_reference import format_pinnacle_reference
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
 from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
@@ -81,6 +82,13 @@ def run_nba_model():
         selection = f"{home} {line}"
         if not book or is_already_logged(f"{away} @ {home}", "MODEL_NBA_SPREAD", selection):
             continue
+        pinnacle_reference = format_pinnacle_reference(
+            get_master_cache() or {},
+            "basketball_nba",
+            event_id,
+            "MODEL_NBA_SPREAD",
+            selection,
+        )
 
         # Baseline rested-home-vs-road-B2B edge with a small home spread bump.
         spread_abs = abs(float(line)) if line not in (None, "") else 0.0
@@ -114,6 +122,7 @@ def run_nba_model():
                             f"**NBA FATIGUE ALERT**\n"
                             f"Advantage: **{home}** vs {away} (Road B2B)\n"
                             f"Odds: [{book}]({link}) @ {odds}\n"
+                            f"**Pinnacle:** {pinnacle_reference}\n"
                             f"**Fair Value:** {fair_price}\n"
                             f"**Model Edge:** {edge * 100:.2f}%\n"
                             f"**Suggested:** {units:.2f} Units"

@@ -107,6 +107,7 @@ def _build_alert(
     quote: dict,
     edge: float,
     fair_price: float,
+    sharp_price: Optional[float],
     staleness: Optional[StalenessSignal],
 ) -> dict:
     matchup = f"{event.get('away_team', 'Away')} @ {event.get('home_team', 'Home')}"
@@ -141,6 +142,7 @@ def _build_alert(
                         f"**Market:** {quote['market'].upper()}\n"
                         f"**Bet:** {_selection(quote['outcome'])}\n"
                         f"**Book:** {quote['book']} @ {decimal_to_american(quote['price'])}\n"
+                        f"**Pinnacle:** {decimal_to_american(sharp_price) if sharp_price else 'unavailable'}\n"
                         f"**Fair:** {decimal_to_american(fair_price)}\n"
                         f"**Edge:** {edge * 100:.2f}%"
                         f"{stale_text}"
@@ -199,6 +201,7 @@ def find_live_edge_alerts(previous_cache: Cache, current_cache: Cache, updated_c
                             quote=soft_quote,
                             edge=edge,
                             fair_price=1.0 / fair_probability,
+                            sharp_price=quotes["sharp"].get(soft_quote["outcome_key"]),
                             staleness=staleness,
                         )
                     )

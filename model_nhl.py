@@ -4,6 +4,7 @@ from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import get_json
+from services.odds_reference import format_pinnacle_reference
 from utils.links import sportsbook_search_link
 from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
 from utils.odds import decimal_to_american
@@ -92,6 +93,13 @@ def run_nhl_model():
             best_book, best_odds, bet_link, event_id = get_best_puckline(better_team)
             if not best_book or not event_id:
                 continue
+            pinnacle_reference = format_pinnacle_reference(
+                get_master_cache() or {},
+                "icehockey_nhl",
+                event_id,
+                "MODEL_NHL_PUCKLINE",
+                selection,
+            )
 
             excess_gap = max(gd_diff - NHL_GD_GAP_THRESHOLD, 0.0)
             model_probability = min(0.54 + (excess_gap * 0.0025), 0.62)
@@ -125,6 +133,7 @@ def run_nhl_model():
                     f"{worse_team} GD: **{worse_gd}**\n"
                     f"**Net Gap:** {gd_diff} Goals\n"
                     f"**Best Puck Line:** [{best_book}]({bet_link}) | **-1.5 ({best_odds})**\n"
+                    f"**Pinnacle:** {pinnacle_reference}\n"
                     f"**Fair Value:** {fair_price}\n"
                     f"**Model Edge:** {edge * 100:.2f}%\n"
                     f"**Suggested:** {units:.2f} Units"

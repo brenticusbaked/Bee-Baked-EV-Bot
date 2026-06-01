@@ -388,6 +388,7 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
                                 "edge": edge,
                                 "score": weighted_score,
                                 "bet": soft_bet,
+                                "pinnacle_price": sharp.get(outcome_key),
                                 "fair_decimal": fair_decimal,
                                 "fair_probability": fair_probability,
                                 "book_weight": book_weight,
@@ -421,6 +422,12 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
                     fair_decimal = candidate["fair_decimal"]
                     fair_probability = candidate["fair_probability"]
                     book_weight = candidate["book_weight"]
+                    pinnacle_price = candidate.get("pinnacle_price")
+                    pinnacle_text = (
+                        f"**Pinnacle:** {decimal_to_american(pinnacle_price)}\n"
+                        if pinnacle_price
+                        else "**Pinnacle:** unavailable\n"
+                    )
                     units = dynamic_kelly_units(edge, offered_price, graded_bets, today_bets)
                     fair_price_american = decimal_to_american(fair_decimal)
 
@@ -480,6 +487,7 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
                                 f"**Match:** {matchup}\n"
                                 f"**Bet:** {selection}\n"
                                 f"**Book:** [{final['book']}]({app_link}) @ {decimal_to_american(offered_price)}\n"
+                                f"{pinnacle_text}"
                                 f"**Fair Value:** {fair_price_american}\n"
                                 f"**Edge:** {edge * 100:.2f}%\n"
                                 f"**Book Weight:** {book_weight:.2f}x\n"
