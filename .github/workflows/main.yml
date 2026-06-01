@@ -2,9 +2,11 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # 14:00/20:00 UTC = 9 AM/3 PM Central during daylight time.
+    # 11:30/18:30 UTC = 6:30 AM/1:30 PM Central during daylight time.
+    # Scheduled off the top of the hour because GitHub Actions queues :00 crons
+    # heaviest, which was delaying morning results toward noon.
     # Two runs/day keeps all 3 Odds API keys within the 500 credit/month free tier.
-    - cron: '0 14,20 * * *'
+    - cron: '30 11,18 * * *'
   workflow_dispatch:
 
 jobs:

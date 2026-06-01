@@ -34,6 +34,13 @@ def get_parallel_tasks() -> List[PipelineTask]:
             tasks.append(PipelineTask(name="nba_prop_bot", func=run_nba_prop_bot))
         else:
             print("[seasons] Skipping nba_prop_bot (NBA off-season)")
+    if env_flag("ENABLE_MLB_PROP_BOT", True):
+        if is_sport_in_season("baseball_mlb"):
+            from bot_propodds_mlb import main as run_mlb_prop_bot
+
+            tasks.append(PipelineTask(name="mlb_prop_bot", func=run_mlb_prop_bot))
+        else:
+            print("[seasons] Skipping mlb_prop_bot (MLB off-season)")
     if env_flag("ENABLE_NBA_MODEL", True):
         if is_sport_in_season("basketball_nba"):
             from model_nba import run_nba_model

@@ -2,8 +2,8 @@ name: Odds Edge Alert
 
 on:
   schedule:
-    # Runs 20 minutes after the core pipeline windows.
-    - cron: '20 14,20 * * *'
+    # Runs 20 minutes after the core pipeline windows (11:30/18:30 UTC).
+    - cron: '50 11,18 * * *'
   workflow_dispatch:
 
 jobs:
