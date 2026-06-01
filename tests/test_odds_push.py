@@ -12,6 +12,13 @@ class OddsPushTests(unittest.TestCase):
         self.assertEqual(headers, {})
         self.assertEqual(url, "wss://parlay-api.com/ws/odds/baseball_mlb?apiKey=secret_key")
 
+    def test_build_connection_config_uses_query_for_parlay_by_default(self):
+        with patch.dict("os.environ", {}, clear=True):
+            url, headers = build_connection_config("wss://parlay-api.com/ws/odds/baseball_mlb", "secret_key")
+
+        self.assertEqual(headers, {})
+        self.assertEqual(url, "wss://parlay-api.com/ws/odds/baseball_mlb?apiKey=secret_key")
+
     def test_build_connection_config_defaults_to_header_api_key(self):
         url, headers = build_connection_config("wss://example.com/ws", "secret_key")
 

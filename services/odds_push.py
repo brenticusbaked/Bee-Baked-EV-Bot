@@ -118,7 +118,9 @@ def build_connection_config(url: str, api_key: Optional[str] = None) -> tuple[st
     if not api_key:
         return url, headers
 
-    auth_mode = os.getenv("ODDS_PUSH_AUTH_MODE", "header").strip().lower()
+    provider = os.getenv("ODDS_PUSH_PROVIDER", "").strip().lower()
+    default_auth_mode = "query" if "parlay" in provider or "parlay-api.com" in url else "header"
+    auth_mode = os.getenv("ODDS_PUSH_AUTH_MODE", default_auth_mode).strip().lower()
     if auth_mode == "query":
         parts = urlsplit(url)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
