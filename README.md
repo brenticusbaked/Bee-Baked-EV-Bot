@@ -187,6 +187,19 @@ Run a configured realtime push feed with:
 python odds_push_feed.py
 ```
 
+Preview live alert classification without a provider or Discord webhook:
+
+```bash
+python live_edge_replay.py
+```
+
+Check local environment readiness without printing secrets:
+
+```bash
+python env_healthcheck.py
+python env_healthcheck.py --live --optional
+```
+
 **Optional Feature Flags:**
 * `ENABLE_NEWS` (Default: `true`)
 * `ENABLE_NBA_PROP_BOT` (Default: `true`)
