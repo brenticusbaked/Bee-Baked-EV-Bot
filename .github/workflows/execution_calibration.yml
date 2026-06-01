@@ -20,12 +20,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Write Synthetic Execution Calibration
+      - name: Write Synthetic Execution Calibration & Healthcheck
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           python execution_calibration.py
+          
+          # Run healthcheck, parse JSON, and intentionally fail job if 'ok' is false
           HEALTH_JSON=$(python execution_healthcheck.py)
           if echo "$HEALTH_JSON" | grep -q '"ok": false'; then
             echo "Healthcheck failed. Supabase persistence is down."
