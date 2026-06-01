@@ -1,14 +1,15 @@
-name: SGO Grader
+name: Pregame Window Scans
 
 on:
   schedule:
-    - cron: '20 13 * * *'
+    # Day/early-evening pregame watcher. Uses the latest cached odds by default.
+    - cron: '*/15 16-22 * * *'
   workflow_dispatch:
 
 jobs:
-  run-grader:
+  pregame-scans:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -24,15 +25,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run SGO Grader
+      - name: Run Pregame Window Scan
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
-          DISCORD_RESULTS_WEBHOOK_URL: ${{ secrets.DISCORD_RESULTS_WEBHOOK_URL }}
-          DISCORD_DAILY_SLIPS_WEBHOOK_URL: ${{ secrets.DISCORD_DAILY_SLIPS_WEBHOOK_URL }}
-          SGO_GRADER_MAX_FETCHES: "2"
-          SGO_GRADER_FETCH_DELAY_SECONDS: "2.5"
-        run: python sgo_grader.py
+          PREGAME_SCAN_WINDOWS: "90,45,15"
+          PREGAME_SCAN_TOLERANCE_MINUTES: "7"
+          PREGAME_STATUS_NOTIFY: "true"
+          PREGAME_REFRESH_ODDS: "false"
+        run: python pregame_scan.py

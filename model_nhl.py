@@ -2,6 +2,7 @@ import os
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
+from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import get_json
 from utils.links import sportsbook_search_link
 from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
@@ -10,7 +11,7 @@ from utils.thresholds import env_float
 from utils.time import get_local_now
 
 
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 NHL_GD_GAP_THRESHOLD = env_float("NHL_GD_GAP_THRESHOLD", 40.0)
 NHL_MODEL_EDGE_THRESHOLD = env_float("NHL_MODEL_EDGE_THRESHOLD", 0.01)
 

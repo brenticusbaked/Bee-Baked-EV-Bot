@@ -1,26 +1,76 @@
 import os
 from datetime import timedelta
 
-from db_manager import get_master_cache, get_untracked_bets, update_bet_clv
+from db_manager import get_all_bets, get_master_cache, update_bet_clv
+from services.alerts import send_discord_alert
 from services.bet_logic import outcome_matches, parse_selection
+from services.discord_channels import RESULTS_WEBHOOK_URL
 from utils.odds import american_to_decimal, decimal_to_american, parse_float
+from utils.config import env_flag
 from utils.time import get_local_now
 
 
 CLV_LOOKBACK_DAYS = int(os.getenv("CLV_LOOKBACK_DAYS", "2"))
+CLV_NOTIFY_MIN_CHANGE_PCT = float(os.getenv("CLV_NOTIFY_MIN_CHANGE_PCT", "0.75"))
+CLV_MAX_ALERTS = int(os.getenv("CLV_MAX_ALERTS", "10"))
+
+
+def _send_clv_update(bet: dict, closing_price_american: str, clv_edge_pct: float, previous_clv) -> bool:
+    if not RESULTS_WEBHOOK_URL or not env_flag("CLV_SEND_DISCORD_UPDATES", True):
+        return False
+    previous_numeric = parse_float(previous_clv)
+    previous_text = "first track" if previous_numeric is None else f"was {previous_numeric:+.2f}%"
+    payload = {
+        "embeds": [
+            {
+                "description": (
+                    "**CLV MOVEMENT UPDATE**\n\n"
+                    f"**Match:** {bet.get('matchup')}\n"
+                    f"**Bet:** {bet.get('selection')}\n"
+                    f"**Market:** {bet.get('market')}\n"
+                    f"**Alerted Odds:** {bet.get('odds')}\n"
+                    f"**Pinnacle Now:** {closing_price_american}\n"
+                    f"**CLV Edge:** {clv_edge_pct:+.2f}% ({previous_text})"
+                ),
+                "color": 5763719 if clv_edge_pct >= 0 else 15158332,
+            }
+        ]
+    }
+    return send_discord_alert(
+        payload,
+        source="clv_tracker",
+        alert_type="clv_movement",
+        dedupe_key=f"{bet.get('id')}:{closing_price_american}:{clv_edge_pct:.2f}",
+        webhook_url=RESULTS_WEBHOOK_URL,
+    )
+
+
+def _placed_decimal(bet: dict):
+    parsed = parse_float(bet.get("odds_decimal"))
+    if parsed:
+        return parsed
+    try:
+        return american_to_decimal(bet.get("odds", 0))
+    except (TypeError, ValueError):
+        return None
 
 
 def run_clv_tracker():
-    untracked = get_untracked_bets()
+    bets = get_all_bets()
     cache = get_master_cache()
     tracked_count = 0
+    alert_count = 0
 
-    if not untracked or not cache:
+    if not bets or not cache:
         print("CLV Audit: Nothing to track or cache empty.")
         return {"detail": "nothing to track", "count": 0, "label": "tracked"}
 
     cutoff_date = (get_local_now() - timedelta(days=CLV_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    eligible_bets = [bet for bet in untracked if str(bet.get("date", "")) >= cutoff_date]
+    eligible_bets = [
+        bet
+        for bet in bets
+        if str(bet.get("date", "")) >= cutoff_date and not str(bet.get("result", "")).strip()
+    ]
 
     if not eligible_bets:
         print("CLV Audit: No recent bets eligible for tracking.")
@@ -109,14 +159,24 @@ def run_clv_tracker():
             print(f"CLV: Invalid price {closing_price_decimal} for {bet['selection']}. Skipping.")
             continue
 
-        placed_decimal = parse_float(bet.get("odds_decimal")) or american_to_decimal(bet.get("odds", 0))
+        placed_decimal = _placed_decimal(bet)
+        if not placed_decimal:
+            print(f"CLV: Invalid placed odds for {bet['selection']}. Skipping.")
+            continue
         clv_edge_pct = ((placed_decimal / closing_price_decimal) - 1.0) * 100.0
         closing_price_american = decimal_to_american(closing_price_decimal)
+        previous_clv = bet.get("clv_edge_pct")
         update_bet_clv(bet["id"], closing_price_american, closing_price_decimal, round(clv_edge_pct, 4))
         print(f"CLV Updated for {bet['selection']}: {clv_edge_pct:.2f}%")
         tracked_count += 1
 
-    return {"detail": "clv audit complete", "count": tracked_count, "label": "tracked"}
+        previous_numeric = parse_float(previous_clv)
+        should_alert = previous_numeric is None or abs(previous_numeric - clv_edge_pct) >= CLV_NOTIFY_MIN_CHANGE_PCT
+        if should_alert and alert_count < CLV_MAX_ALERTS:
+            if _send_clv_update(bet, closing_price_american, clv_edge_pct, previous_clv):
+                alert_count += 1
+
+    return {"detail": f"clv audit complete | movement alerts={alert_count}", "count": tracked_count, "label": "tracked"}
 
 
 if __name__ == "__main__":

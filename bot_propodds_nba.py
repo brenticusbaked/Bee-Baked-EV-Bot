@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from db_manager import is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
+from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import request
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
@@ -16,7 +17,7 @@ from utils.thresholds import env_float
 # Load local environment variables for manual runs
 load_dotenv()
 
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 SGO_API_KEY = os.getenv("SGO_API_KEY")
 
 DEFAULT_TARGET_STATS = [

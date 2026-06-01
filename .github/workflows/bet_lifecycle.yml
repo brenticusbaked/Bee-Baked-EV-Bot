@@ -1,14 +1,15 @@
-name: SGO Grader
+name: Bet Lifecycle And CLV
 
 on:
   schedule:
-    - cron: '20 13 * * *'
+    # Tracks open bets and CLV movement across the active betting day.
+    - cron: '5,35 14-23,0-3 * * *'
   workflow_dispatch:
 
 jobs:
-  run-grader:
+  bet-lifecycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -24,15 +25,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run SGO Grader
+      - name: Run Bet Lifecycle And CLV Updates
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           DISCORD_RESULTS_WEBHOOK_URL: ${{ secrets.DISCORD_RESULTS_WEBHOOK_URL }}
           DISCORD_DAILY_SLIPS_WEBHOOK_URL: ${{ secrets.DISCORD_DAILY_SLIPS_WEBHOOK_URL }}
-          SGO_GRADER_MAX_FETCHES: "2"
-          SGO_GRADER_FETCH_DELAY_SECONDS: "2.5"
-        run: python sgo_grader.py
+          BET_LIFECYCLE_PLAYABLE_EDGE: "0.005"
+          BET_LIFECYCLE_MOVEMENT_NOTIFY_PCT: "1.0"
+          BET_LIFECYCLE_NOTIFY_INITIAL: "false"
+          CLV_SEND_DISCORD_UPDATES: "true"
+          CLV_NOTIFY_MIN_CHANGE_PCT: "0.75"
+          CLV_MAX_ALERTS: "10"
+        run: |
+          python bet_lifecycle_monitor.py
+          python clv_tracker.py

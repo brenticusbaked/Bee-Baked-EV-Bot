@@ -15,6 +15,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from services.discord_channels import BET_ALERTS_WEBHOOK_URL
+
 
 ODDS_FIELDS = ("odds", "price", "american_odds", "decimal_odds", "book_odds")
 PROB_FIELDS = ("model_probability", "fair_probability", "probability", "win_probability")
@@ -340,7 +342,7 @@ def main() -> int:
     parser.add_argument("--logs", default="logs", help="Directory containing CSV, JSON, or JSONL betting logs.")
     parser.add_argument("--threshold", type=float, default=0.03, help="Minimum edge as a decimal. 0.03 means 3%%.")
     parser.add_argument("--min-sample", type=int, default=20, help="Minimum graded historical rows for empirical probability.")
-    parser.add_argument("--webhook-url", default=os.getenv("DISCORD_WEBHOOK_URL"), help="Discord webhook URL. Defaults to DISCORD_WEBHOOK_URL.")
+    parser.add_argument("--webhook-url", default=BET_ALERTS_WEBHOOK_URL, help="Discord webhook URL. Defaults to DISCORD_BET_ALERTS_WEBHOOK_URL or DISCORD_WEBHOOK_URL.")
     parser.add_argument("--always-notify", action="store_true", help="Send a Discord update even when no edge clears the threshold.")
     parser.add_argument("--allow-missing-logs", action="store_true", help="Treat a missing logs directory as an empty scan instead of failing.")
     parser.add_argument("--json", action="store_true", help="Print full alert JSON.")

@@ -5,11 +5,12 @@ import requests
 
 from db_manager import get_ungraded_past_bets, update_result
 from services.bet_logic import grade_game_bet, normalize_text, parse_selection
+from services.discord_channels import RESULTS_WEBHOOK_URL
 from services.http_client import post_discord, request
 from utils.odds import profit_for_result
 
 
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = RESULTS_WEBHOOK_URL
 SGO_API_KEY = os.getenv("SGO_API_KEY")
 SGO_GRADER_MAX_FETCHES = int(os.getenv("SGO_GRADER_MAX_FETCHES", "6"))
 SGO_GRADER_FETCH_DELAY_SECONDS = float(os.getenv("SGO_GRADER_FETCH_DELAY_SECONDS", "1.25"))

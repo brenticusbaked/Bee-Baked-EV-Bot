@@ -1,14 +1,14 @@
-import os
 import re
 from typing import Dict
 
 import pandas as pd
 
 from db_manager import get_all_bets
+from services.discord_channels import RESULTS_WEBHOOK_URL
 from services.http_client import post_discord
 
 
-DISCORD_STATUS_WEBHOOK_URL = os.getenv("DISCORD_STATUS_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_STATUS_WEBHOOK_URL = RESULTS_WEBHOOK_URL
 
 
 BUCKET_LABELS = [

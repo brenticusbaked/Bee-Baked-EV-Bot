@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from services.alerts import send_discord_alert
+from services.discord_channels import LIVE_HAMMER_WEBHOOK_URL, WATCHLIST_WEBHOOK_URL
 from utils.odds import decimal_to_american, fair_probabilities_from_prices
 from utils.stale_line import StalenessSignal, detect_stale_line
 from utils.thresholds import env_float
@@ -13,8 +14,6 @@ OutcomeKey = Tuple[str, str]
 PriceIndex = Dict[Tuple[str, str, OutcomeKey], float]
 
 
-LIVE_HAMMER_WEBHOOK_URL = os.getenv("DISCORD_LIVE_HAMMER_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
-WATCHLIST_WEBHOOK_URL = os.getenv("DISCORD_WATCHLIST_WEBHOOK_URL") or os.getenv("DISCORD_STATUS_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URL")
 LIVE_HAMMER_EDGE_THRESHOLD = env_float("LIVE_HAMMER_EDGE_THRESHOLD", 0.03)
 WATCHLIST_EDGE_THRESHOLD = env_float("WATCHLIST_EDGE_THRESHOLD", 0.01)
 LIVE_STALE_MIN_SCORE = env_float("LIVE_STALE_MIN_SCORE", 0.50)

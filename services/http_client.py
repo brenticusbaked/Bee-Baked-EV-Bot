@@ -1,4 +1,3 @@
-import os
 from typing import Optional
 
 import requests
@@ -6,11 +5,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from db_manager import load_tracker_state, save_tracker_state
+from services.discord_channels import DEFAULT_WEBHOOK_URL
 from utils.time import get_local_date_str
 
 
 DEFAULT_TIMEOUT = 20
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = DEFAULT_WEBHOOK_URL
 BEE_IMAGE_URL = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 BEE_IMAGE_STATE_KEY = "bee_image_daily_limit"
 BEE_IMAGE_STATE_FILE = "bee_image_state.json"

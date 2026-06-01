@@ -8,6 +8,7 @@ from models.nhl_pdo import PDOContext, build_pdo_context, pdo_total_adjustment
 from models.talent_model import TalentContext, adjusted_fair_probability, build_talent_context
 from services.alerts import send_discord_alert
 from services.book_weights import get_book_weights
+from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from utils.correlation import ExposureEntry, ExposureTracker, check_exposure
 from utils.kelly import dynamic_kelly_units
 from utils.links import sportsbook_search_link
@@ -18,7 +19,7 @@ from utils.thresholds import env_float, env_int
 from utils.time_decay import adjusted_threshold, compute_time_decay
 
 
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 SPORT_ALERT_WEBHOOKS = {
     "basketball_wnba": os.getenv("DISCORD_WNBA_BETS_WEBHOOK_URL")
     or os.getenv("DISCORD_WNBA_UPDATES_WEBHOOK_URL")
@@ -223,8 +224,8 @@ def _resolve_proe_prob(
     return fair_probability
 
 
-def scan_markets():
-    cache = get_master_cache()
+def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: str = "bet_alert"):
+    cache = cache_override if cache_override is not None else get_master_cache()
     if not cache:
         print("Cloud cache is empty. Run fetcher first.")
         return {"detail": "cache empty", "count": 0, "label": "alerts"}
@@ -501,8 +502,8 @@ def scan_markets():
                     }
                 ]
             },
-            source="unified_bot",
-            alert_type="bet_alert",
+            source=source,
+            alert_type=alert_type,
             dedupe_key=alert["description"][:200],
             webhook_url=SPORT_ALERT_WEBHOOKS.get(alert.get("sport"), DISCORD_WEBHOOK_URL),
             add_bee_image=index == len(alerts) - 1,

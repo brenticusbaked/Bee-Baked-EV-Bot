@@ -28,6 +28,7 @@ jobs:
       - name: Run Odds Edge Alert
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |

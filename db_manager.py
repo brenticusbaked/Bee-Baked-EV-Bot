@@ -5,8 +5,6 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
-from services.http_client import post_discord
-
 # Load local environment variables for manual runs
 load_dotenv()
 
@@ -214,8 +212,7 @@ def _send_dead_letter(table_name: str, payload: dict) -> None:
     if not DISCORD_DEAD_LETTER_WEBHOOK_URL:
         return
     try:
-        # LAZY IMPORT: Placed inside the function to break the circular dependency
-        from services.http_client import post_discord 
+        from services.http_client import post_discord
         
         # Truncate payload safely to fit within Discord's 2000 character limit
         safe_payload = json.dumps(payload, indent=2, default=str)[:1850]
@@ -227,10 +224,6 @@ def _send_dead_letter(table_name: str, payload: dict) -> None:
 {safe_payload}
 ```"""
 
-        post_discord({"content": message}, webhook_url=DISCORD_DEAD_LETTER_WEBHOOK_URL)
-    except Exception as exc:
-        print(f"Failed to dispatch dead-letter to Discord: {exc}")
-        
         post_discord({"content": message}, webhook_url=DISCORD_DEAD_LETTER_WEBHOOK_URL)
     except Exception as exc:
         print(f"Failed to dispatch dead-letter to Discord: {exc}")

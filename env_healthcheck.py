@@ -30,6 +30,8 @@ OPTIONAL_VARS = [
     EnvVar("ODDS_API_KEY_2", "secondary scheduled odds fetcher", optional=True),
     EnvVar("ODDS_API_KEY_3", "tertiary scheduled odds fetcher", optional=True),
     EnvVar("SGO_API_KEY", "SportsGameOdds props/grading", optional=True),
+    EnvVar("DISCORD_BET_ALERTS_WEBHOOK_URL", "dedicated bet-alert Discord lane", optional=True, expected_prefix="https://discord.com/api/webhooks/"),
+    EnvVar("DISCORD_RESULTS_WEBHOOK_URL", "dedicated results/CLV Discord lane", optional=True, expected_prefix="https://discord.com/api/webhooks/"),
     EnvVar("DISCORD_STATUS_WEBHOOK_URL", "status Discord alerts", optional=True, expected_prefix="https://discord.com/api/webhooks/"),
     EnvVar("DISCORD_INJURY_WEBHOOK_URL", "injury/news Discord alerts", optional=True, expected_prefix="https://discord.com/api/webhooks/"),
     EnvVar("ODDS_PUSH_PROVIDER", "live feed provider label", optional=True),

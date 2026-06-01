@@ -1,6 +1,5 @@
 import asyncio
 import inspect
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import perf_counter
 from typing import Dict, Iterable, List, Tuple
@@ -8,6 +7,7 @@ from typing import Dict, Iterable, List, Tuple
 from utils.time import get_local_now
 
 from db_manager import get_runtime_db_stats, log_workflow_run, reset_runtime_db_stats, validate_supabase_connection
+from services.discord_channels import STATUS_WEBHOOK_URL
 from services.http_client import post_discord
 from services.tasks import (
     PipelineTask,
@@ -20,8 +20,7 @@ from services.tasks import (
 
 
 TaskResult = Tuple[str, bool, str, float, int, str, Dict[str, str]]
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-DISCORD_STATUS_WEBHOOK_URL = os.getenv("DISCORD_STATUS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL
+DISCORD_STATUS_WEBHOOK_URL = STATUS_WEBHOOK_URL
 
 
 def _normalize_task_output(output) -> Tuple[str, int, str, Dict[str, str]]:

@@ -1,19 +1,15 @@
-import os
 from datetime import timedelta
 
 import pandas as pd
 
 from db_manager import get_all_bets
+from services.discord_channels import DAILY_SLIPS_WEBHOOK_URL
 from services.http_client import post_discord
 from utils.odds import profit_for_result
 from utils.time import DEFAULT_TZ, get_local_now
 
 
-DISCORD_DAILY_SLIPS_WEBHOOK_URL = (
-    os.getenv("DISCORD_DAILY_SLIPS_WEBHOOK_URL")
-    or os.getenv("DISCORD_STATUS_WEBHOOK_URL")
-    or os.getenv("DISCORD_WEBHOOK_URL")
-)
+DISCORD_DAILY_SLIPS_WEBHOOK_URL = DAILY_SLIPS_WEBHOOK_URL
 
 
 def _safe_numeric(series):

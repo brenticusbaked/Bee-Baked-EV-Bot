@@ -1,23 +1,15 @@
-name: Environment Healthcheck
+name: Live Hammer Watchlist
 
 on:
+  schedule:
+    # Evening live window: 6 PM-10:45 PM Central during daylight time.
+    - cron: '*/15 23,0,1,2,3 * * *'
   workflow_dispatch:
-    inputs:
-      check_live:
-        description: "Require live WebSocket push feed variables"
-        required: false
-        default: true
-        type: boolean
-      show_optional:
-        description: "Show optional variable status"
-        required: false
-        default: true
-        type: boolean
 
 jobs:
-  env-healthcheck:
+  live-edge-window:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -26,20 +18,24 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
 
-      - name: Check Environment
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Live Hammer/Watchlist Window
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           ODDS_API_KEY_2: ${{ secrets.ODDS_API_KEY_2 }}
           ODDS_API_KEY_3: ${{ secrets.ODDS_API_KEY_3 }}
-          SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           DISCORD_RESULTS_WEBHOOK_URL: ${{ secrets.DISCORD_RESULTS_WEBHOOK_URL }}
-          DISCORD_INJURY_WEBHOOK_URL: ${{ secrets.DISCORD_INJURY_WEBHOOK_URL }}
           DISCORD_LIVE_HAMMER_WEBHOOK_URL: ${{ secrets.DISCORD_LIVE_HAMMER_WEBHOOK_URL }}
           DISCORD_WATCHLIST_WEBHOOK_URL: ${{ secrets.DISCORD_WATCHLIST_WEBHOOK_URL }}
           ODDS_PUSH_WS_URL: ${{ secrets.ODDS_PUSH_WS_URL }}
@@ -55,12 +51,23 @@ jobs:
           LIVE_STALE_MIN_SCORE: ${{ vars.LIVE_STALE_MIN_SCORE }}
           LIVE_SHARP_BOOKS: ${{ vars.LIVE_SHARP_BOOKS }}
           LIVE_SOFT_BOOKS: ${{ vars.LIVE_SOFT_BOOKS }}
+          LIVE_EDGE_STATUS_NOTIFY: "true"
+          PREGAME_STATUS_NOTIFY: "true"
+          PREGAME_REFRESH_ODDS: "false"
+          ENABLE_ODDS_SECONDARY_PULL: "false"
+          ENABLE_ODDS_TERTIARY_PULL: "false"
+          ENABLE_ODDS_PARTIAL_MARKET_PULL: "false"
         run: |
-          args=""
-          if [ "${{ inputs.check_live }}" = "true" ]; then
-            args="$args --live"
+          if [ -n "${ODDS_PUSH_WS_URL}" ]; then
+            set +e
+            timeout 840 python odds_push_feed.py
+            code=$?
+            set -e
+            if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
+              echo "Live push feed failed with $code; running polling fallback."
+              python live_edge_poll.py
+            fi
+          else
+            python live_edge_poll.py
           fi
-          if [ "${{ inputs.show_optional }}" = "true" ]; then
-            args="$args --optional"
-          fi
-          python env_healthcheck.py $args
+          python pregame_scan.py
