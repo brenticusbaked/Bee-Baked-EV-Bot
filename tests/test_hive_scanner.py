@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import time
 import unittest
 
 from hive_scanner import (
@@ -12,12 +13,19 @@ from hive_scanner import (
     decimal_to_american,
     devig,
     filter_new_alerts,
+    hours_until_next_game,
     implied_probability,
     multiplicative_devig,
+    polling_interval_seconds,
     power_devig,
     quarter_kelly,
+    should_poll_sport,
     _devig_market,
     _extract_pinnacle_lines,
+    _get_cached_odds,
+    _prune_seen_bets,
+    _seen_bet_hash,
+    _store_cached_odds,
 )
 
 
@@ -304,47 +312,274 @@ class TestExtractPinnacle(unittest.TestCase):
         # FanDuel should NOT appear
         self.assertEqual(len(result["abc123"]["h2h"]), 2)
 
+    def test_extract_spread_market(self):
+        """Pinnacle spread lines should be extracted with point values."""
+        events = [
+            {
+                "id": "spread1",
+                "bookmakers": [
+                    {
+                        "key": "pinnacle",
+                        "markets": [
+                            {
+                                "key": "spreads",
+                                "outcomes": [
+                                    {"name": "Team A", "price": 1.91, "point": -3.5},
+                                    {"name": "Team B", "price": 1.91, "point": 3.5},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        result = _extract_pinnacle_lines(events)
+        self.assertIn("spreads", result["spread1"])
+        self.assertIn(("team a", "-3.5"), result["spread1"]["spreads"])
+        self.assertIn(("team b", "3.5"), result["spread1"]["spreads"])
+
+    def test_extract_totals_market(self):
+        """Pinnacle totals lines should be extracted with point values."""
+        events = [
+            {
+                "id": "total1",
+                "bookmakers": [
+                    {
+                        "key": "pinnacle",
+                        "markets": [
+                            {
+                                "key": "totals",
+                                "outcomes": [
+                                    {"name": "Over", "price": 1.87, "point": 215.5},
+                                    {"name": "Under", "price": 1.95, "point": 215.5},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        result = _extract_pinnacle_lines(events)
+        self.assertIn("totals", result["total1"])
+        self.assertIn(("over", "215.5"), result["total1"]["totals"])
+        self.assertIn(("under", "215.5"), result["total1"]["totals"])
+
 
 # ---------------------------------------------------------------------------
-# 7. Dedup Cache
+# 7. Dynamic Polling Scheduler
 # ---------------------------------------------------------------------------
 
 
-class TestDedupCache(unittest.TestCase):
+class TestPollingScheduler(unittest.TestCase):
+    def test_post_game_skipped(self):
+        """Negative hours => no polling."""
+        self.assertIsNone(polling_interval_seconds(-1))
+
+    def test_far_future_skipped(self):
+        """> 24h out => no polling."""
+        self.assertIsNone(polling_interval_seconds(30))
+
+    def test_12_to_24_hours(self):
+        """12-24h => poll every 60 min (3600s)."""
+        self.assertEqual(polling_interval_seconds(18), 3600)
+
+    def test_2_to_12_hours(self):
+        """2-12h => poll every 30 min (1800s)."""
+        self.assertEqual(polling_interval_seconds(6), 1800)
+
+    def test_under_2_hours(self):
+        """< 2h => poll every 5 min (300s)."""
+        self.assertEqual(polling_interval_seconds(1), 300)
+
+    def test_boundary_24h(self):
+        """Exactly 24h => should be in the 12-24h band."""
+        self.assertEqual(polling_interval_seconds(24), 3600)
+
+    def test_boundary_12h(self):
+        """Exactly 12h => should be in the 2-12h band."""
+        self.assertEqual(polling_interval_seconds(12), 1800)
+
+    def test_boundary_2h(self):
+        """Exactly 2h => should be in the aggressive band (5 min)."""
+        self.assertEqual(polling_interval_seconds(2), 300)
+
+
+class TestHoursUntilNextGame(unittest.TestCase):
+    def test_no_events(self):
+        """Empty schedule returns inf."""
+        self.assertEqual(hours_until_next_game({}, "basketball_nba"), float("inf"))
+
+    def test_with_future_event(self):
+        """An event 5 hours from now should return ~5."""
+        from datetime import timedelta
+        future = (
+            __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            + timedelta(hours=5)
+        ).isoformat()
+        schedule = {"basketball_nba": [{"commence_time": future}]}
+        hours = hours_until_next_game(schedule, "basketball_nba")
+        self.assertAlmostEqual(hours, 5.0, delta=0.1)
+
+    def test_should_poll_in_window(self):
+        """A game 3 hours out should be polled (2-12h band)."""
+        from datetime import timedelta
+        future = (
+            __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            + timedelta(hours=3)
+        ).isoformat()
+        schedule = {"basketball_nba": [{"commence_time": future}]}
+        should, interval, hours = should_poll_sport(schedule, "basketball_nba")
+        self.assertTrue(should)
+        self.assertEqual(interval, 1800)
+
+    def test_should_not_poll_far_future(self):
+        """A game 48 hours out should NOT be polled."""
+        from datetime import timedelta
+        future = (
+            __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            + timedelta(hours=48)
+        ).isoformat()
+        schedule = {"basketball_nba": [{"commence_time": future}]}
+        should, interval, hours = should_poll_sport(schedule, "basketball_nba")
+        self.assertFalse(should)
+        self.assertIsNone(interval)
+
+
+# ---------------------------------------------------------------------------
+# 8. API Response Cache
+# ---------------------------------------------------------------------------
+
+
+class TestAPICache(unittest.TestCase):
     def setUp(self):
         self._tmpfile = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
         self._tmpfile.close()
-        # Patch the cache path
         import hive_scanner
-        self._orig_path = hive_scanner.ALERT_CACHE_PATH
-        hive_scanner.ALERT_CACHE_PATH = self._tmpfile.name
+        self._orig_path = hive_scanner.API_CACHE_PATH
+        hive_scanner.API_CACHE_PATH = self._tmpfile.name
 
     def tearDown(self):
         import hive_scanner
-        hive_scanner.ALERT_CACHE_PATH = self._orig_path
+        hive_scanner.API_CACHE_PATH = self._orig_path
+        os.unlink(self._tmpfile.name)
+
+    def test_cache_miss_returns_none(self):
+        result = _get_cached_odds("basketball_nba", "eu", max_age_seconds=300)
+        self.assertIsNone(result)
+
+    def test_cache_hit_returns_data(self):
+        data = [{"id": "ev1", "bookmakers": []}]
+        _store_cached_odds("basketball_nba", "eu", data)
+        result = _get_cached_odds("basketball_nba", "eu", max_age_seconds=300)
+        self.assertEqual(result, data)
+
+    def test_expired_cache_returns_none(self):
+        import hive_scanner
+        data = [{"id": "ev1"}]
+        _store_cached_odds("basketball_nba", "eu", data)
+        # Manually backdate the timestamp
+        cache = hive_scanner._load_json(hive_scanner.API_CACHE_PATH)
+        cache["basketball_nba|eu"]["ts"] = time.time() - 600
+        hive_scanner._save_json(hive_scanner.API_CACHE_PATH, cache)
+        result = _get_cached_odds("basketball_nba", "eu", max_age_seconds=300)
+        self.assertIsNone(result)
+
+    def test_different_sports_independent(self):
+        data_nba = [{"id": "nba1"}]
+        data_mlb = [{"id": "mlb1"}]
+        _store_cached_odds("basketball_nba", "eu", data_nba)
+        _store_cached_odds("baseball_mlb", "eu", data_mlb)
+        self.assertEqual(_get_cached_odds("basketball_nba", "eu", 300), data_nba)
+        self.assertEqual(_get_cached_odds("baseball_mlb", "eu", 300), data_mlb)
+
+
+# ---------------------------------------------------------------------------
+# 9. Seen-Bets Dedup (seen_bets.json)
+# ---------------------------------------------------------------------------
+
+
+class TestSeenBetsDedup(unittest.TestCase):
+    def setUp(self):
+        self._tmpfile = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmpfile.close()
+        import hive_scanner
+        self._orig_path = hive_scanner.SEEN_BETS_PATH
+        hive_scanner.SEEN_BETS_PATH = self._tmpfile.name
+
+    def tearDown(self):
+        import hive_scanner
+        hive_scanner.SEEN_BETS_PATH = self._orig_path
         os.unlink(self._tmpfile.name)
 
     def test_first_alert_passes(self):
-        alerts = [{"matchup": "A @ B", "market": "h2h", "selection": "A", "book_key": "fanduel"}]
+        alerts = [{
+            "matchup": "A @ B", "market": "h2h", "selection": "A",
+            "book_key": "fanduel", "offered_odds_am": "+150",
+        }]
         result = filter_new_alerts(alerts)
         self.assertEqual(len(result), 1)
 
     def test_duplicate_filtered(self):
-        alerts = [{"matchup": "A @ B", "market": "h2h", "selection": "A", "book_key": "fanduel"}]
+        alerts = [{
+            "matchup": "A @ B", "market": "h2h", "selection": "A",
+            "book_key": "fanduel", "offered_odds_am": "+150",
+        }]
         filter_new_alerts(alerts)
         result = filter_new_alerts(alerts)
         self.assertEqual(len(result), 0)
 
     def test_different_alert_passes(self):
-        a1 = [{"matchup": "A @ B", "market": "h2h", "selection": "A", "book_key": "fanduel"}]
-        a2 = [{"matchup": "C @ D", "market": "h2h", "selection": "C", "book_key": "draftkings"}]
+        a1 = [{
+            "matchup": "A @ B", "market": "h2h", "selection": "A",
+            "book_key": "fanduel", "offered_odds_am": "+150",
+        }]
+        a2 = [{
+            "matchup": "C @ D", "market": "h2h", "selection": "C",
+            "book_key": "draftkings", "offered_odds_am": "+120",
+        }]
         filter_new_alerts(a1)
         result = filter_new_alerts(a2)
         self.assertEqual(len(result), 1)
 
+    def test_same_game_different_odds_passes(self):
+        """If odds change, treat it as a new alert."""
+        a1 = [{
+            "matchup": "A @ B", "market": "h2h", "selection": "A",
+            "book_key": "fanduel", "offered_odds_am": "+150",
+        }]
+        a2 = [{
+            "matchup": "A @ B", "market": "h2h", "selection": "A",
+            "book_key": "fanduel", "offered_odds_am": "+160",
+        }]
+        filter_new_alerts(a1)
+        result = filter_new_alerts(a2)
+        self.assertEqual(len(result), 1)
+
+    def test_hash_includes_odds(self):
+        """Hash should differ when odds differ."""
+        alert1 = {
+            "matchup": "A @ B", "market": "h2h", "selection": "A",
+            "book_key": "fanduel", "offered_odds_am": "+150",
+        }
+        alert2 = {
+            "matchup": "A @ B", "market": "h2h", "selection": "A",
+            "book_key": "fanduel", "offered_odds_am": "+160",
+        }
+        self.assertNotEqual(_seen_bet_hash(alert1), _seen_bet_hash(alert2))
+
+    def test_prune_removes_old_entries(self):
+        """Entries older than TTL should be pruned."""
+        import hive_scanner
+        old_ttl = hive_scanner.SEEN_BETS_TTL_MINUTES
+        hive_scanner.SEEN_BETS_TTL_MINUTES = 1  # 1 minute TTL
+        seen = {"old_hash": {"ts": time.time() - 120}}  # 2 min old
+        pruned = _prune_seen_bets(seen)
+        self.assertEqual(len(pruned), 0)
+        hive_scanner.SEEN_BETS_TTL_MINUTES = old_ttl
+
 
 # ---------------------------------------------------------------------------
-# 8. Discord Embed Formatting
+# 10. Discord Embed Formatting
 # ---------------------------------------------------------------------------
 
 
@@ -376,6 +611,48 @@ class TestDiscordEmbed(unittest.TestCase):
         self.assertIn("1.25%", embed["description"])  # Quarter-Kelly
         self.assertIn("FanDuel", embed["description"])
         self.assertIn("Celtics", embed["description"])
+
+    def test_spread_market_display(self):
+        """Spread alerts should display 'Spread' as market type."""
+        alert = {
+            "sport": "basketball_nba",
+            "matchup": "Celtics @ Lakers",
+            "market": "spreads",
+            "selection": "Celtics -3.5",
+            "book": "DraftKings",
+            "book_key": "draftkings",
+            "offered_odds_dec": 1.95,
+            "offered_odds_am": "-105",
+            "sharp_odds_am": "-110",
+            "true_prob": 0.52,
+            "fair_value_am": "-108",
+            "ev_pct": 0.03,
+            "quarter_kelly_pct": 0.8,
+            "commence_time": "2025-01-01T00:00:00Z",
+        }
+        payload = build_discord_embed(alert)
+        self.assertIn("Spread", payload["embeds"][0]["description"])
+
+    def test_totals_market_display(self):
+        """Total alerts should display 'Total' as market type."""
+        alert = {
+            "sport": "basketball_nba",
+            "matchup": "Celtics @ Lakers",
+            "market": "totals",
+            "selection": "Over 215.5",
+            "book": "BetMGM",
+            "book_key": "betmgm",
+            "offered_odds_dec": 1.95,
+            "offered_odds_am": "-105",
+            "sharp_odds_am": "-110",
+            "true_prob": 0.52,
+            "fair_value_am": "-108",
+            "ev_pct": 0.03,
+            "quarter_kelly_pct": 0.8,
+            "commence_time": "2025-01-01T00:00:00Z",
+        }
+        payload = build_discord_embed(alert)
+        self.assertIn("Total", payload["embeds"][0]["description"])
 
 
 if __name__ == "__main__":
