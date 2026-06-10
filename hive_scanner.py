@@ -10,8 +10,16 @@ Architecture:
   4. Compare recreational prices against the true line.
   5. Flag +EV bets, size with Quarter-Kelly, alert Discord.
 
+Optimizations:
+  - Dynamic time-to-match polling: adjusts scan frequency based on how
+    close each sport's next game is.  Saves API credits by not polling
+    stale lines far from game time.
+  - Market expansion: pulls h2h, spreads, totals in a single unified call.
+  - API response caching: skips redundant API calls when fresh data exists.
+  - seen_bets.json dedup: prevents Discord spam on identical alerts.
+
 Run once:   python hive_scanner.py
-Loop mode:  python hive_scanner.py --loop --interval 300
+Loop mode:  python hive_scanner.py --loop
 """
 
 import argparse
@@ -48,14 +56,16 @@ SPORTS = [
     if s.strip()
 ]
 
-# Markets to scan per sport.
+# Markets to scan per sport — batched in a single API call.
 MARKETS = os.getenv("HIVE_MARKETS", "h2h,spreads,totals")
 
 # US recreational sportsbooks we compare against Pinnacle.
+# Expanded to maximise surface area for slow-moving lines.
 SOFT_BOOKS = {
     b.strip()
     for b in os.getenv(
-        "HIVE_SOFT_BOOKS", "draftkings,fanduel,betmgm,caesars,bet365"
+        "HIVE_SOFT_BOOKS",
+        "draftkings,fanduel,betmgm,caesars,bet365,betrivers",
     ).split(",")
     if b.strip()
 }
@@ -66,14 +76,27 @@ DEVIG_METHOD = os.getenv("HIVE_DEVIG_METHOD", "power")
 # Quarter-Kelly cap (max bankroll % per bet).
 KELLY_CAP = float(os.getenv("HIVE_KELLY_CAP", "5.0"))
 
-# Local JSON file for alert dedup.
-ALERT_CACHE_PATH = os.getenv("HIVE_ALERT_CACHE", "hive_alert_cache.json")
-
-# How many hours to keep entries in the dedup cache.
-CACHE_TTL_HOURS = float(os.getenv("HIVE_CACHE_TTL_HOURS", "12"))
-
 # Embed colour (green).
 EMBED_COLOR = 0x2ECC71
+
+# ---------------------------------------------------------------------------
+# Cache / Dedup paths
+# ---------------------------------------------------------------------------
+
+# API response cache: stores raw odds JSON with timestamps.
+API_CACHE_PATH = os.getenv("HIVE_API_CACHE", "hive_api_cache.json")
+
+# Seen-bets dedup: hashes of (game+market+book+odds) with timestamps.
+SEEN_BETS_PATH = os.getenv("HIVE_SEEN_BETS", "seen_bets.json")
+
+# How many minutes before a seen-bet hash can be re-alerted.
+SEEN_BETS_TTL_MINUTES = float(os.getenv("HIVE_SEEN_BETS_TTL_MINUTES", "60"))
+
+# Game schedule cache: stores commence_time per event.
+SCHEDULE_CACHE_PATH = os.getenv("HIVE_SCHEDULE_CACHE", "hive_schedule_cache.json")
+
+# How often (in hours) to refresh the full game schedule.
+SCHEDULE_REFRESH_HOURS = float(os.getenv("HIVE_SCHEDULE_REFRESH_HOURS", "12"))
 
 # ---------------------------------------------------------------------------
 # Mathematical Primitives
@@ -183,15 +206,183 @@ def quarter_kelly(true_prob: float, decimal_odds: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# JSON Helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_json(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_json(path: str, data: dict) -> None:
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f)
+    except OSError as exc:
+        print(f"[hive] JSON save error ({path}): {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Strategy 1: Dynamic Time-to-Match Polling
+# ---------------------------------------------------------------------------
+
+
+def polling_interval_seconds(hours_to_match: float) -> Optional[int]:
+    """Return the recommended polling interval (seconds) based on time to match.
+
+    Returns None if the sport should NOT be polled (> 24h out or post-game).
+    """
+    if hours_to_match < 0:
+        return None  # Post-game
+    if hours_to_match > 24:
+        return None  # Too far out
+    if hours_to_match > 12:
+        return 3600  # 60 min
+    if hours_to_match > 2:
+        return 1800  # 30 min
+    return 300  # 5 min
+
+
+def _fetch_schedule(sport: str) -> List[dict]:
+    """Fetch upcoming events for a sport (no odds, just schedule). Free call."""
+    if not ODDS_API_KEY:
+        return []
+    url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
+    params = {"apiKey": ODDS_API_KEY}
+    try:
+        resp = requests.get(url, params=params, timeout=20)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as exc:
+        print(f"[hive] Schedule fetch error for {sport}: {exc}")
+        return []
+
+
+def refresh_schedule_cache() -> dict:
+    """Refresh game schedule from API and cache it.
+
+    Returns {sport: [{id, commence_time, home_team, away_team}, ...]}
+    """
+    cache = _load_json(SCHEDULE_CACHE_PATH)
+    last_refresh = cache.get("_last_refresh", 0)
+    now = time.time()
+
+    if now - last_refresh < SCHEDULE_REFRESH_HOURS * 3600:
+        print(f"[hive] Schedule cache is fresh ({(now - last_refresh) / 3600:.1f}h old). Skipping refresh.")
+        return cache
+
+    print("[hive] Refreshing game schedule ...")
+    for sport in SPORTS:
+        events = _fetch_schedule(sport)
+        cache[sport] = [
+            {
+                "id": ev.get("id"),
+                "commence_time": ev.get("commence_time", ""),
+                "home_team": ev.get("home_team", ""),
+                "away_team": ev.get("away_team", ""),
+            }
+            for ev in events
+        ]
+        print(f"[hive] {sport}: {len(events)} upcoming events cached")
+
+    cache["_last_refresh"] = now
+    _save_json(SCHEDULE_CACHE_PATH, cache)
+    return cache
+
+
+def hours_until_next_game(schedule: dict, sport: str) -> float:
+    """Return hours until the soonest upcoming game for the sport.
+
+    Returns float('inf') if no games found.
+    """
+    events = schedule.get(sport, [])
+    now = datetime.now(timezone.utc)
+    min_hours = float("inf")
+    for ev in events:
+        ct = ev.get("commence_time", "")
+        if not ct:
+            continue
+        try:
+            start = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+            delta_hours = (start - now).total_seconds() / 3600
+            if delta_hours > -2:  # Include games that started < 2h ago (live)
+                min_hours = min(min_hours, delta_hours)
+        except (ValueError, TypeError):
+            continue
+    return min_hours
+
+
+def should_poll_sport(schedule: dict, sport: str) -> Tuple[bool, Optional[int], float]:
+    """Check if a sport should be polled now.
+
+    Returns (should_poll, interval_seconds, hours_to_next_game).
+    """
+    hours = hours_until_next_game(schedule, sport)
+    interval = polling_interval_seconds(hours)
+    return interval is not None, interval, hours
+
+
+# ---------------------------------------------------------------------------
+# Strategy 3: API Response Cache
+# ---------------------------------------------------------------------------
+
+
+def _api_cache_key(sport: str, region: str) -> str:
+    return f"{sport}|{region}"
+
+
+def _get_cached_odds(sport: str, region: str, max_age_seconds: int) -> Optional[List[dict]]:
+    """Return cached API response if it's fresh enough, else None."""
+    cache = _load_json(API_CACHE_PATH)
+    key = _api_cache_key(sport, region)
+    entry = cache.get(key)
+    if not entry:
+        return None
+    age = time.time() - entry.get("ts", 0)
+    if age > max_age_seconds:
+        return None
+    print(f"[hive] Cache hit for {sport}/{region} ({age:.0f}s old)")
+    return entry.get("data", [])
+
+
+def _store_cached_odds(sport: str, region: str, data: List[dict]) -> None:
+    """Store API response in the local cache."""
+    cache = _load_json(API_CACHE_PATH)
+    key = _api_cache_key(sport, region)
+    cache[key] = {"ts": time.time(), "data": data}
+    _save_json(API_CACHE_PATH, cache)
+
+
+# ---------------------------------------------------------------------------
 # Data Ingestion
 # ---------------------------------------------------------------------------
 
 
-def _fetch_odds(sport: str, region: str, bookmakers: Optional[str] = None) -> List[dict]:
-    """Pull odds from The Odds API for a single sport + region."""
+def _fetch_odds(
+    sport: str,
+    region: str,
+    bookmakers: Optional[str] = None,
+    cache_max_age: int = 0,
+) -> List[dict]:
+    """Pull odds from The Odds API for a single sport + region.
+
+    If cache_max_age > 0, returns cached data when available and fresh.
+    """
+    if cache_max_age > 0:
+        cached = _get_cached_odds(sport, region, cache_max_age)
+        if cached is not None:
+            return cached
+
     if not ODDS_API_KEY:
         print("[hive] ODDS_API_KEY not set - skipping fetch")
         return []
+
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
     params = {
         "apiKey": ODDS_API_KEY,
@@ -204,18 +395,27 @@ def _fetch_odds(sport: str, region: str, bookmakers: Optional[str] = None) -> Li
     try:
         resp = requests.get(url, params=params, timeout=20)
         resp.raise_for_status()
+        data = resp.json()
         remaining = resp.headers.get("x-requests-remaining", "?")
-        print(f"[hive] {sport} ({region}): {len(resp.json())} events  |  API credits left: {remaining}")
-        return resp.json()
+        print(f"[hive] {sport} ({region}): {len(data)} events  |  API credits left: {remaining}")
+        _store_cached_odds(sport, region, data)
+        return data
     except requests.RequestException as exc:
         print(f"[hive] API error for {sport}/{region}: {exc}")
         return []
 
 
-def fetch_sharp_and_soft(sport: str) -> Tuple[List[dict], List[dict]]:
-    """Two API calls per sport: EU (Pinnacle) and US (soft books)."""
-    sharp_events = _fetch_odds(sport, "eu", bookmakers="pinnacle")
-    soft_events = _fetch_odds(sport, "us", bookmakers=",".join(SOFT_BOOKS))
+def fetch_sharp_and_soft(
+    sport: str, cache_max_age: int = 0
+) -> Tuple[List[dict], List[dict]]:
+    """Two API calls per sport: EU (Pinnacle) and US (soft books).
+
+    cache_max_age: if > 0, use cached responses when available.
+    """
+    sharp_events = _fetch_odds(sport, "eu", bookmakers="pinnacle", cache_max_age=cache_max_age)
+    soft_events = _fetch_odds(
+        sport, "us", bookmakers=",".join(sorted(SOFT_BOOKS)), cache_max_age=cache_max_age
+    )
     return sharp_events, soft_events
 
 
@@ -253,15 +453,14 @@ def _devig_market(prices: Dict[OutcomeKey, float]) -> Dict[OutcomeKey, float]:
     return dict(zip(keys, fair))
 
 
-def _scan_sport(sport: str) -> List[dict]:
+def _scan_sport(sport: str, cache_max_age: int = 0) -> List[dict]:
     """Scan one sport: fetch data, de-vig Pinnacle, compare soft books."""
-    sharp_events, soft_events = fetch_sharp_and_soft(sport)
+    sharp_events, soft_events = fetch_sharp_and_soft(sport, cache_max_age=cache_max_age)
     if not sharp_events or not soft_events:
         return []
 
     pinnacle = _extract_pinnacle_lines(sharp_events)
 
-    # Build event metadata lookup from sharp events (for matchup info).
     event_meta = {}
     for ev in sharp_events:
         event_meta[str(ev.get("id", ""))] = {
@@ -334,61 +533,64 @@ def _scan_sport(sport: str) -> List[dict]:
     return alerts
 
 
-def scan_all_sports() -> List[dict]:
-    """Run the +EV scan across all configured sports."""
+def scan_all_sports(schedule: Optional[dict] = None) -> List[dict]:
+    """Run the +EV scan across all configured sports.
+
+    When a schedule is provided, respects dynamic polling windows:
+    skips sports with no upcoming games and uses cached data when
+    the polling interval hasn't elapsed yet.
+    """
     all_alerts = []
     for sport in SPORTS:
-        print(f"\n[hive] Scanning {sport} ...")
-        all_alerts.extend(_scan_sport(sport))
+        cache_max_age = 0  # default: always fetch fresh
+
+        if schedule:
+            should_poll, interval, hours = should_poll_sport(schedule, sport)
+            if not should_poll:
+                print(f"\n[hive] Skipping {sport} (next game in {hours:.1f}h — outside polling window)")
+                continue
+            # Use cached data if it's newer than the polling interval
+            cache_max_age = interval or 0
+            print(f"\n[hive] Scanning {sport} (next game in {hours:.1f}h, poll every {(interval or 0) // 60}min) ...")
+        else:
+            print(f"\n[hive] Scanning {sport} ...")
+
+        all_alerts.extend(_scan_sport(sport, cache_max_age=cache_max_age))
+
     all_alerts.sort(key=lambda a: a["ev_pct"], reverse=True)
     return all_alerts
 
 
 # ---------------------------------------------------------------------------
-# Alert Dedup Cache (JSON file)
+# Strategy 3: Seen-Bets Dedup (seen_bets.json)
 # ---------------------------------------------------------------------------
 
 
-def _load_cache() -> dict:
-    if not os.path.exists(ALERT_CACHE_PATH):
-        return {}
-    try:
-        with open(ALERT_CACHE_PATH, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _save_cache(cache: dict) -> None:
-    try:
-        with open(ALERT_CACHE_PATH, "w") as f:
-            json.dump(cache, f)
-    except OSError as exc:
-        print(f"[hive] Cache save error: {exc}")
-
-
-def _cache_key(alert: dict) -> str:
-    raw = f"{alert['matchup']}|{alert['market']}|{alert['selection']}|{alert['book_key']}"
+def _seen_bet_hash(alert: dict) -> str:
+    """Hash (game + market + book + odds) for dedup."""
+    raw = (
+        f"{alert['matchup']}|{alert['market']}|{alert['selection']}"
+        f"|{alert['book_key']}|{alert['offered_odds_am']}"
+    )
     return hashlib.md5(raw.encode()).hexdigest()
 
 
-def _prune_cache(cache: dict) -> dict:
-    """Remove entries older than CACHE_TTL_HOURS."""
-    now = time.time()
-    cutoff = now - CACHE_TTL_HOURS * 3600
-    return {k: v for k, v in cache.items() if v.get("ts", 0) > cutoff}
+def _prune_seen_bets(seen: dict) -> dict:
+    """Remove entries older than SEEN_BETS_TTL_MINUTES."""
+    cutoff = time.time() - SEEN_BETS_TTL_MINUTES * 60
+    return {k: v for k, v in seen.items() if v.get("ts", 0) > cutoff}
 
 
 def filter_new_alerts(alerts: List[dict]) -> List[dict]:
-    """Return only alerts not already in the dedup cache, then update cache."""
-    cache = _prune_cache(_load_cache())
+    """Return only alerts not already in the seen-bets cache."""
+    seen = _prune_seen_bets(_load_json(SEEN_BETS_PATH))
     new_alerts = []
     for alert in alerts:
-        key = _cache_key(alert)
-        if key not in cache:
+        h = _seen_bet_hash(alert)
+        if h not in seen:
             new_alerts.append(alert)
-            cache[key] = {"ts": time.time()}
-    _save_cache(cache)
+            seen[h] = {"ts": time.time()}
+    _save_json(SEEN_BETS_PATH, seen)
     return new_alerts
 
 
@@ -490,15 +692,18 @@ def _print_alert(alert: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_once() -> int:
+def run_once(use_schedule: bool = True) -> int:
     """Execute a single scan cycle. Returns number of alerts sent."""
     print(f"\n{'='*50}")
     print("  BEE BAKED BETS  -  Hive +EV Scan")
     print(f"  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     print(f"  EV threshold: {EV_THRESHOLD*100:.1f}%  |  Sports: {', '.join(SPORTS)}")
+    print(f"  Books: {', '.join(sorted(SOFT_BOOKS))}")
+    print(f"  Markets: {MARKETS}")
     print(f"{'='*50}")
 
-    alerts = scan_all_sports()
+    schedule = refresh_schedule_cache() if use_schedule else None
+    alerts = scan_all_sports(schedule=schedule)
     print(f"\n[hive] Raw +EV opportunities found: {len(alerts)}")
 
     new_alerts = filter_new_alerts(alerts)
@@ -513,20 +718,47 @@ def run_once() -> int:
     return 0
 
 
-def run_loop(interval: int = 300) -> None:
-    """Run the scanner in a continuous loop."""
-    print(f"[hive] Starting loop mode (interval={interval}s). Press Ctrl+C to stop.")
+def _next_loop_delay(schedule: Optional[dict]) -> int:
+    """Compute the optimal delay until the next scan based on game schedule.
+
+    Uses the shortest polling interval across all sports that are in the
+    polling window.  Falls back to 300s (5 min) if no schedule is available.
+    """
+    if not schedule:
+        return 300
+
+    min_interval = None
+    for sport in SPORTS:
+        should, interval, _ = should_poll_sport(schedule, sport)
+        if should and interval is not None:
+            if min_interval is None or interval < min_interval:
+                min_interval = interval
+
+    return min_interval or 300
+
+
+def run_loop() -> None:
+    """Run the scanner in a dynamic loop.
+
+    The loop delay adapts to the game schedule: polls frequently when
+    games are imminent, backs off when games are far away.
+    """
+    print("[hive] Starting dynamic loop mode. Press Ctrl+C to stop.")
     while True:
         try:
-            run_once()
+            schedule = refresh_schedule_cache()
+            run_once(use_schedule=True)
+            delay = _next_loop_delay(schedule)
         except KeyboardInterrupt:
             print("\n[hive] Interrupted. Exiting.")
             sys.exit(0)
         except Exception as exc:
             print(f"[hive] Scan error: {exc}")
-        print(f"\n[hive] Sleeping {interval}s until next scan ...")
+            delay = 300
+
+        print(f"\n[hive] Next scan in {delay}s ({delay // 60}min) ...")
         try:
-            time.sleep(interval)
+            time.sleep(delay)
         except KeyboardInterrupt:
             print("\n[hive] Interrupted. Exiting.")
             sys.exit(0)
@@ -534,14 +766,17 @@ def run_loop(interval: int = 300) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="BEE BAKED BETS - The Hive +EV Scanner")
-    parser.add_argument("--loop", action="store_true", help="Run continuously in a loop")
-    parser.add_argument("--interval", type=int, default=300, help="Seconds between scans (default 300)")
+    parser.add_argument("--loop", action="store_true", help="Run continuously in a dynamic loop")
+    parser.add_argument(
+        "--no-schedule", action="store_true",
+        help="Disable dynamic scheduling (scan all sports every cycle)",
+    )
     args = parser.parse_args()
 
     if args.loop:
-        run_loop(interval=args.interval)
+        run_loop()
     else:
-        run_once()
+        run_once(use_schedule=not args.no_schedule)
 
 
 if __name__ == "__main__":

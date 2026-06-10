@@ -4,6 +4,9 @@ execution_ledger.json
 pending_bets_log.json
 pending_execution_reports.json
 hive_alert_cache.json
+hive_api_cache.json
+hive_schedule_cache.json
+seen_bets.json
 bee_image_state.json
 .env
 .env.*
