@@ -122,3 +122,171 @@ Do NOT remove the EV%, True Probability, or unit size from the alert body.
   documented variables.
 - **Tests:** Any change to the mathematical pipeline must include or update
   corresponding unit tests in the `tests/` directory.
+
+---
+
+## Rule 6 — Directory Structure
+
+The repository follows a strict layout. Do NOT reorganize, merge, or relocate
+modules without explicit user permission.
+
+```
+Bee-Baked-EV-Bot/
+├── .github/workflows/      # GitHub Actions CI/CD (14 workflow files)
+│   ├── main.yml             # Core pipeline — runs master_run.py on schedule
+│   ├── tests.yml            # Unit tests — runs on push/PR
+│   ├── scrapers.yml         # Syndicate scrapers — runs after core pipeline
+│   ├── pregame_scans.yml    # Pregame window scans
+│   └── ...                  # Additional scheduled workflows
+├── codex_skills/            # Skill definitions for AI agent orchestration
+├── docs/                    # Architecture docs (codex, Supabase ingestion)
+├── execution/               # Order execution: desk, router, risk, TCA, venues
+├── models/                  # Sport-specific models (NBA pace, NFL PROE, etc.)
+├── services/                # Shared services: alerts, Discord, HTTP, pipeline
+├── supabase/                # Supabase Edge Functions
+├── tests/                   # All unit tests — test_*.py naming convention
+├── utils/                   # Shared utilities: odds math, Kelly, config, etc.
+├── hive_scanner.py          # Standalone Hive +EV scanner
+├── unified_bot.py           # Full-featured +EV scanner with model overlays
+├── master_odds_fetcher.py   # Tiered API data ingestion engine
+├── master_run.py            # Central orchestration entry-point
+├── db_manager.py            # Supabase + local JSON persistence layer
+├── requirements.txt         # Python dependencies
+├── beebakedevbotplan.md     # Master architecture document
+└── .windsurfrules           # This file — workspace constraints
+```
+
+- New scanners/bots go in the **root directory** alongside `unified_bot.py`.
+- New utility functions go in **`utils/`**.
+- New service modules (HTTP clients, Discord helpers, pipeline tasks) go in
+  **`services/`**.
+- New sport-specific models go in **`models/`**.
+- New execution logic (order routing, venue scoring) goes in **`execution/`**.
+- All tests go in **`tests/`** and must follow the `test_*.py` naming convention.
+- GitHub Actions workflows go in **`.github/workflows/`**.
+
+---
+
+## Rule 7 — Security & Secrets
+
+### .gitignore Enforced Patterns
+
+The following files are git-ignored and must NEVER be committed:
+
+```
+__pycache__/
+*.py[cod]
+.env
+.env.*
+execution_ledger.json
+pending_bets_log.json
+pending_execution_reports.json
+hive_alert_cache.json
+```
+
+Exception: `.env.example` IS tracked (template without real values).
+
+### Secret Handling
+
+- **NEVER** hardcode API keys, webhook URLs, Supabase credentials, or proxy
+  passwords in source code.
+- All secrets must be referenced via `os.getenv("SECRET_NAME")` or loaded from
+  `.env` via `python-dotenv`.
+- In GitHub Actions, secrets are injected via `${{ secrets.SECRET_NAME }}`.
+- Known secret names used by the project:
+  - `ODDS_API_KEY`, `ODDS_API_KEY_2`, `ODDS_API_KEY_3` — The Odds API keys
+  - `SUPABASE_URL`, `SUPABASE_KEY` — Supabase connection
+  - `SGO_API_KEY` — SportsGameOdds API
+  - `DISCORD_WEBHOOK_URL` and sport/channel-specific webhook URLs
+  - `PROXY_LIST`, `PROXY_USERNAME`, `PROXY_PASSWORD` — Proxy authentication
+- Do NOT log, print, or expose secret values in console output or Discord messages.
+- Do NOT commit `.env` files or any file matching `.env.*` (except `.env.example`).
+
+---
+
+## Rule 8 — CI/CD & Workflow Standards
+
+### Test Runner
+
+- **CI uses `unittest`** via `python -m unittest discover -s tests -p "test_*.py"`.
+- `pytest` is also supported locally (`pytest tests/ -v`) but CI uses unittest.
+- **Python 3.12** is the CI target version (set in `actions/setup-python@v5`).
+- All tests must pass before merging. Do NOT skip or disable tests to work
+  around failures.
+
+### Linting
+
+- **Ruff** (`ruff check .`) is the project linter. Fix all ruff warnings before
+  committing.
+- No `pyproject.toml`, `.flake8`, or `setup.cfg` exists — ruff uses its defaults.
+- No `.pre-commit-config.yaml` exists — hooks are not enforced. Run ruff manually.
+
+### GitHub Actions Workflows
+
+- The core pipeline (`main.yml`) runs on a cron schedule: **14:00 and 20:00 UTC**
+  (9 AM and 3 PM Central). Two runs/day keeps API credits within the free tier.
+- Do NOT add new cron schedules without calculating the API credit cost.
+- All workflow files must include `timeout-minutes` to prevent runaway jobs.
+- Workflows that depend on cached odds should be scheduled **after** the core
+  pipeline (e.g., scrapers run 30 minutes after).
+
+---
+
+## Rule 9 — Dependencies & Environment
+
+### requirements.txt
+
+The project pins only major packages. Current dependencies:
+
+```
+pandas
+playwright>=1.45.0
+requests
+supabase
+python-dotenv
+pybaseball
+oddsharvester
+websockets>=12.0
+```
+
+- Do NOT add heavy ML/AI frameworks (e.g., tensorflow, torch, scikit-learn)
+  without explicit approval — they bloat the CI runner and are not needed for
+  the core +EV math.
+- Do NOT remove existing dependencies without verifying no module imports them.
+- When adding a new dependency, add it to `requirements.txt` and verify CI
+  still passes.
+
+### Python Version
+
+- **Minimum:** Python 3.10 (for union type syntax, match/case support).
+- **CI target:** Python 3.12 (per `.github/workflows/tests.yml`).
+- Do NOT use features exclusive to Python 3.13+ unless CI is updated.
+
+---
+
+## Rule 10 — Database & Persistence
+
+### Supabase (Production)
+
+- The project uses Supabase (PostgreSQL) for persistent storage.
+- Required tables: `bets_log`, `odds_cache`, `bot_state`, `alerts_sent`,
+  `workflow_runs`, `execution_orders`, `execution_child_orders`,
+  `execution_fills`.
+- Schema files are in the root: `supabase_core_schema.sql`,
+  `supabase_execution_schema.sql`, `supabase_market_data_schema.sql`.
+- Do NOT modify table schemas without updating the corresponding SQL files.
+
+### Local JSON Fallback
+
+- When Supabase is unavailable, `db_manager.py` falls back to local JSON files
+  (`pending_bets_log.json`, `pending_execution_reports.json`).
+- The Hive scanner uses `hive_alert_cache.json` for dedup.
+- These files are git-ignored and must NOT be committed.
+- Bot state is tracked via `bot_state` table or local JSON files with a
+  `load_tracker_state` / `save_tracker_state` pattern.
+
+### Dead-Letter Webhook
+
+- When Supabase inserts fail, critical data is sent to the
+  `DISCORD_DEAD_LETTER_WEBHOOK_URL` as a fallback. Do NOT remove this failover
+  mechanism.
