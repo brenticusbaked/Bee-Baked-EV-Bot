@@ -1,0 +1,124 @@
+# BEE BAKED BETS — Workspace Rules
+# These rules are STRICT constraints for all AI agents working in this codebase.
+# Violations will produce incorrect betting math, skewed bankroll sizing, or
+# architectural drift that undermines the integrity of The Hive +EV Scanner.
+
+---
+
+## Rule 1 — Mathematical Integrity
+
+NEVER modify the proportional de-vigging formula or the Quarter-Kelly formula
+without explicit user permission.
+
+The baseline **True Probability** must ALWAYS be derived from **Pinnacle** lines.
+Pinnacle is the sharpest publicly available book and serves as the sole source of
+truth for fair market pricing.
+
+### De-Vigging (Proportional / Power Method)
+
+```
+Multiplicative:  true_prob_i = implied_prob_i / sum(all_implied_probs)
+Power:           Find k where sum(implied_prob_i ^ k) = 1.0
+                 true_prob_i = implied_prob_i ^ k / sum(implied_prob_j ^ k)
+```
+
+Do NOT substitute alternative de-vig methods (e.g., additive, Shin) as the
+default without explicit approval. The power method is the project default.
+
+### Quarter-Kelly Sizing
+
+```
+Full Kelly:  f* = (b * p - q) / b
+Quarter-Kelly:  f* / 4
+```
+
+Where `b = decimal_odds - 1`, `p = true_probability`, `q = 1 - p`.
+
+Do NOT change the Kelly fraction (1/4) or remove the bankroll cap (default 5%)
+without explicit user permission.
+
+### EV Calculation
+
+```
+EV% = (true_probability * offered_decimal_odds) - 1.0
+```
+
+This formula must remain unchanged. Only flag bets where EV exceeds the
+configured threshold (default 2%).
+
+---
+
+## Rule 2 — Data Separation
+
+Keep the **sharp data fetching logic** strictly separated from the **recreational
+data fetching logic**.
+
+- Sharp data (Pinnacle) must be fetched via a dedicated EU-region API call
+  filtered to `pinnacle` only.
+- Recreational data (DraftKings, FanDuel, BetMGM, Caesars, bet365) must be
+  fetched via a separate US-region API call.
+- Do NOT mix sharp and recreational bookmakers in the same API request when
+  the goal is to isolate the sharp baseline.
+- **Overtime Markets / AMM data must NEVER be used as the sharp baseline.**
+  AMM liquidity slippage causes prices to diverge from true market efficiency,
+  which will break the EV math.
+
+---
+
+## Rule 3 — API Economy
+
+Minimize API calls to stay within The Odds API rate limits.
+
+- Always check the local cache (JSON file or Supabase `odds_cache` table) before
+  making a new API request.
+- Log the `x-requests-remaining` header after every API call.
+- Configure `HIVE_SPORTS` and `HIVE_MARKETS` to limit scan scope during
+  development and testing.
+- Use the tiered key system (`ODDS_API_KEY`, `ODDS_API_KEY_2`, `ODDS_API_KEY_3`)
+  to spread load across keys when expanding coverage.
+- Never add bulk API calls (e.g., scanning all sports with all market types)
+  without checking the credit cost first.
+
+---
+
+## Rule 4 — Discord Webhook Formatting
+
+All Discord alerts must use **rich embeds** and follow this structure:
+
+- **Title:** Must include the bee emoji and read: "+EV Alert from The Hive"
+- **Body must include:**
+  - Sport and Matchup
+  - The +EV Play: Selection, Sportsbook, Offered Odds
+  - Sharp Baseline: Pinnacle Line, True Probability, Fair Value
+  - The Math: EV% and recommended Quarter-Kelly unit size
+    (e.g., "Recommend: 1.25% of bankroll")
+- **Footer:** "BEE BAKED BETS | The Hive +EV Scanner"
+- **Color:** Green (`#2ECC71` / `0x2ECC71`)
+- **Timestamp:** UTC ISO 8601
+
+Do NOT send plain-text Discord messages for +EV alerts. Always use embeds.
+Do NOT remove the EV%, True Probability, or unit size from the alert body.
+
+---
+
+## Rule 5 — Code Standards
+
+- **Python version:** 3.10+ required. Use modern syntax (match/case is allowed
+  but not required; f-strings, walrus operator, union types are encouraged).
+- **Type hints:** All functions handling betting math MUST have complete type
+  annotations — parameters and return types. This includes:
+  - Odds conversion functions
+  - De-vigging functions
+  - EV calculation functions
+  - Kelly sizing functions
+  - Any function that accepts or returns probabilities, odds, or unit sizes
+- **Variable naming:** Clearly distinguish between:
+  - `american_odds` — American format (e.g., -150, +130)
+  - `decimal_odds` — Decimal format (e.g., 1.667, 2.300)
+  - `implied_probability` — Raw probability from decimal odds (has vig)
+  - `true_probability` / `fair_probability` — De-vigged probability (no vig)
+  - `ev_pct` / `edge` — Expected value as a decimal fraction (0.05 = 5%)
+- **No magic numbers** in betting math. Use named constants or clearly
+  documented variables.
+- **Tests:** Any change to the mathematical pipeline must include or update
+  corresponding unit tests in the `tests/` directory.
