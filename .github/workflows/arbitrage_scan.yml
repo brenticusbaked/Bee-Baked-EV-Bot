@@ -2,9 +2,15 @@ name: Arbitrage Scanner
 
 on:
   schedule:
-    # Cache-only scan across daytime and evening windows.
-    - cron: '7,22,37,52 14-23,0-3 * * *'
+    # 2×/day, 25 min after the core pipeline refreshes odds cache.
+    # Arbs require cross-book price discrepancies on US books only;
+    # Pinnacle is not bettable so high-frequency scanning adds cost with no value.
+    - cron: '25 14,20 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: arbitrage-scan
+  cancel-in-progress: true
 
 jobs:
   arbitrage-scan:
@@ -21,9 +27,7 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run Arbitrage Scanner
         env:

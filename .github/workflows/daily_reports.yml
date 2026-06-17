@@ -1,12 +1,17 @@
-name: SGO Grader
+name: Daily Reports (Slips & Grader)
 
 on:
   schedule:
-    - cron: '20 13 * * *'
+    # Once per day — daily slips summary + SGO bet grading.
+    - cron: '15 13 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: daily-reports
+  cancel-in-progress: true
+
 jobs:
-  run-grader:
+  daily-reports:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -20,9 +25,17 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Send Daily Slips Summary
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
+          DISCORD_RESULTS_WEBHOOK_URL: ${{ secrets.DISCORD_RESULTS_WEBHOOK_URL }}
+          DISCORD_DAILY_SLIPS_WEBHOOK_URL: ${{ secrets.DISCORD_DAILY_SLIPS_WEBHOOK_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python daily_slips_report.py
 
       - name: Run SGO Grader
         env:
