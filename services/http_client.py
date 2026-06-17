@@ -10,6 +10,17 @@ from utils.time import get_local_date_str
 
 
 DEFAULT_TIMEOUT = 20
+
+_MLB_STATS_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+    "Accept-Encoding": "gzip, deflate",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 DISCORD_WEBHOOK_URL = DEFAULT_WEBHOOK_URL
 BEE_IMAGE_URL = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 BEE_IMAGE_STATE_KEY = "bee_image_daily_limit"
@@ -41,6 +52,10 @@ NO_429_RETRY_SESSION = build_session(retry_on_429=False)
 
 def request(method: str, url: str, retry_on_429: bool = True, **kwargs) -> requests.Response:
     kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
+    if "statsapi.mlb.com" in url:
+        merged = dict(_MLB_STATS_HEADERS)
+        merged.update(kwargs.get("headers") or {})
+        kwargs["headers"] = merged
     session = SESSION if retry_on_429 else NO_429_RETRY_SESSION
     response = session.request(method=method.upper(), url=url, **kwargs)
     response.raise_for_status()
