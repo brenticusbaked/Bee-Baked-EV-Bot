@@ -2,9 +2,13 @@ name: Live Hammer Watchlist
 
 on:
   schedule:
-    # Evening live window: 6 PM-10:45 PM Central during daylight time.
-    - cron: '*/15 23,0,1,2,3 * * *'
+    # Evening live window: 6 PM-10:45 PM Central during daylight time (every 30 min).
+    - cron: '*/30 23,0,1,2,3 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: live-edge-window
+  cancel-in-progress: true
 
 jobs:
   live-edge-window:
@@ -21,9 +25,7 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run Live Hammer/Watchlist Window
         env:
