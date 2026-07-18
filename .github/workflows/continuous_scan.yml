@@ -3,13 +3,16 @@ name: Continuous +EV Scan
 # Continuous +EV alerting. Reads the Supabase market cache (populated every 10
 # minutes by the odds-cache-ingest Edge Function) and runs the full unified
 # scan. Makes NO Odds API requests, so it spends no credits — only GitHub
-# Actions minutes. Runs every 30 min to conserve Actions minutes; tighten the
-# cron if you need faster alerts. Duplicate alerts are suppressed by dedupe.
-# Paused overnight (05:00-10:59 UTC = ~12am-6am Central) since no bets are
-# placed then, matching the ingestion blackout.
+# Actions minutes. Cadence is aligned to the Supabase ingestion cadence so every
+# fresh cache cycle gets scanned promptly (no paid odds data goes un-scanned):
+#   prime   16:00-04:59 UTC -> every 20 min (matches prime ingestion)
+#   morning 11:00-15:59 UTC -> every 30 min (matches morning ingestion)
+# Duplicate alerts are suppressed by dedupe. Paused overnight (05:00-10:59 UTC =
+# ~12am-6am Central) since no bets are placed then, matching the ingestion blackout.
 on:
   schedule:
-    - cron: '*/30 11-23,0-4 * * *'
+    - cron: '*/20 16-23,0-4 * * *'
+    - cron: '*/30 11-15 * * *'
   workflow_dispatch:
 
 concurrency:

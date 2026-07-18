@@ -2,8 +2,10 @@ name: Live Hammer Watchlist
 
 on:
   schedule:
-    # Evening live window: 6 PM-10:45 PM Central during daylight time (every 30 min).
-    - cron: '*/30 23,0,1,2,3 * * *'
+    # Evening live window: 6 PM-10:45 PM Central during daylight time. Every 15 min
+    # — live lines move fast, so this is the highest-value place to spend the extra
+    # Actions minutes and catch stale in-game prices quickly.
+    - cron: '*/15 23,0,1,2,3 * * *'
   workflow_dispatch:
 
 concurrency:

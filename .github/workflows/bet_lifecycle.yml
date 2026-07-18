@@ -2,8 +2,10 @@ name: Bet Lifecycle And CLV
 
 on:
   schedule:
-    # Tracks open bets and CLV movement across the active betting day (hourly).
-    - cron: '5 14-23,0-3 * * *'
+    # Tracks open bets and CLV movement across the active betting day. Every 3h
+    # (down from hourly) to conserve Actions minutes — settlement/CLV doesn't need
+    # minute-level freshness.
+    - cron: '5 14,17,20,23,2 * * *'
   workflow_dispatch:
 
 concurrency:

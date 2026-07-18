@@ -1,11 +1,16 @@
 name: Post-Pipeline Scrapers & Edge Alerts
 
 on:
-  schedule:
-    # Runs 30 min after the core pipeline refreshes odds cache.
-    - cron: '30 14,20 * * *'
-    # Evening live-window cadence for scrapers + edge alerts.
-    - cron: '15,45 23,0,1,2,3 * * *'
+  # Scheduled runs are DISABLED to conserve GitHub Actions minutes. The Playwright
+  # bookie scrapers (DraftKings/BetMGM/FanDuel/oddsharvester) no longer work — the
+  # sites' DOM changed and every selector times out, so each run ground on until
+  # the 30-min job timeout and was cancelled with zero data (~10,800 min/month
+  # wasted). Odds now come from Supabase-first ingestion (odds-cache-ingest Edge
+  # Function). The workflow + manual trigger are kept so the scrapers can be
+  # repaired and re-enabled later by uncommenting the schedule below.
+  # schedule:
+  #   - cron: '30 14,20 * * *'
+  #   - cron: '15,45 23,0,1,2,3 * * *'
   workflow_dispatch:
 
 concurrency:

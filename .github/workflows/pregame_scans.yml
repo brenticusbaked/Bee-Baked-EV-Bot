@@ -2,7 +2,8 @@ name: Pregame Window Scans
 
 on:
   schedule:
-    # Day/early-evening pregame watcher (every 30 min). Uses the latest cached odds by default.
+    # Day/early-evening pregame watcher (every 30 min). Uses the latest cached odds;
+    # complements continuous_scan for the pregame window.
     - cron: '*/30 16-22 * * *'
   workflow_dispatch:
 
