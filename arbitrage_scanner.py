@@ -16,15 +16,18 @@ STATE_FILE = "arbitrage_alert_state.json"
 ARBITRAGE_MIN_PROFIT = env_float("ARBITRAGE_MIN_PROFIT", 0.005)
 ARBITRAGE_MAX_ALERTS = env_int("ARBITRAGE_MAX_ALERTS", 10)
 
-# Arbitrage is only actionable between books we can actually bet at. Pinnacle is
-# a fair-value benchmark only (no account access), so it is excluded here — both
-# legs of every flagged arb must come from this American-book allowlist.
-ARBITRAGE_US_BOOKS = {
+# Arbitrage is only actionable between books we can actually bet at. Rather than
+# an allowlist, we accept every American book and exclude only sharp / non-US
+# books we can't wager at — chiefly Pinnacle, which is a fair-value benchmark
+# only (no account access), plus international exchanges. Both legs of every
+# flagged arb must come from books NOT in this exclusion set.
+ARBITRAGE_EXCLUDE_BOOKS = {
     book.strip().lower()
     for book in os.getenv(
-        "ARBITRAGE_US_BOOKS",
-        "fanduel,draftkings,betmgm,caesars,bet365,bovada,novig,kalshi,"
-        "polymarket,prophetx,espnbet,fanatics,betrivers,hardrockbet,fliff",
+        "ARBITRAGE_EXCLUDE_BOOKS",
+        "pinnacle,betfair_ex_eu,betfair_ex_uk,betfair_ex_au,matchbook,smarkets,"
+        "betfair,onexbet,marathonbet,coolbet,nordicbet,unibet_eu,williamhill,"
+        "ladbrokes_uk,betclic,sport888,betvictor,grosvenor",
     ).split(",")
     if book.strip()
 }
@@ -82,7 +85,7 @@ def find_arbitrage_opportunities(cache: Cache, min_profit: float = ARBITRAGE_MIN
             for book in event.get("bookmakers", []):
                 book_key = str(book.get("key") or book.get("title") or "").lower()
                 book_title = str(book.get("title") or book.get("key") or "unknown")
-                if book_key not in ARBITRAGE_US_BOOKS:
+                if book_key in ARBITRAGE_EXCLUDE_BOOKS:
                     continue
                 for market in book.get("markets", []):
                     market_key = str(market.get("key", ""))
