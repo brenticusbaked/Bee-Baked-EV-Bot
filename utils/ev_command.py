@@ -1,18 +1,19 @@
 """Pure EV/ de-vig helpers used by the /ev Discord slash command."""
 
 import os
-from typing import Dict
+from typing import Dict, Optional
+
+from dotenv import load_dotenv
 
 from utils.odds import (
     american_to_decimal,
     decimal_to_american,
     fair_probabilities_from_prices,
-    quarter_kelly_units,
 )
+from utils.kelly import dynamic_kelly_units
 from utils.thresholds import env_float
 
-EV_FIRE_THRESHOLD = env_float("EV_COMMAND_FIRE_THRESHOLD", 0.02)
-DEFAULT_DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
+load_dotenv()
 
 COLOR_POSITIVE = 0x2ECC71
 COLOR_MARGINAL = 0xF1C40F
@@ -36,9 +37,14 @@ def compute_ev_response(
     my_odds: int,
     pinnacle_odds_1: int,
     pinnacle_odds_2: int,
-    devig_method: str = DEFAULT_DEVIG_METHOD,
-    fire_threshold: float = EV_FIRE_THRESHOLD,
+    devig_method: Optional[str] = None,
+    fire_threshold: Optional[float] = None,
 ) -> Dict[str, object]:
+    if devig_method is None:
+        devig_method = os.getenv("DEVIG_METHOD", "power")
+    if fire_threshold is None:
+        fire_threshold = env_float("EV_COMMAND_FIRE_THRESHOLD", 0.02)
+
     offered_decimal = _validate_american(my_odds)
     pin1_decimal = _validate_american(pinnacle_odds_1)
     pin2_decimal = _validate_american(pinnacle_odds_2)
@@ -57,7 +63,7 @@ def compute_ev_response(
     fair_decimal = 1.0 / true_probability
     fair_american = decimal_to_american(fair_decimal)
     ev_pct = (true_probability * offered_decimal) - 1.0
-    units = quarter_kelly_units(ev_pct, offered_decimal)
+    units = dynamic_kelly_units(ev_pct, offered_decimal, [], [])
 
     if ev_pct >= fire_threshold:
         recommendation = "Fire"

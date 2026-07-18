@@ -13,7 +13,13 @@ from utils.ev_command import compute_ev_response, format_american
 load_dotenv()
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-DISCORD_GUILD_ID = os.getenv("DISCORD_GUILD_ID")
+_GUILD_ID_RAW = os.getenv("DISCORD_GUILD_ID", "").strip()
+GUILD_ID = None
+if _GUILD_ID_RAW:
+    try:
+        GUILD_ID = int(_GUILD_ID_RAW)
+    except ValueError:
+        print(f"[bot] Invalid DISCORD_GUILD_ID: {_GUILD_ID_RAW}")
 
 
 class BeeBakedBot(commands.Bot):
@@ -23,11 +29,11 @@ class BeeBakedBot(commands.Bot):
 
     async def setup_hook(self):
         guild = None
-        if DISCORD_GUILD_ID:
-            guild = discord.Object(id=int(DISCORD_GUILD_ID))
+        if GUILD_ID:
+            guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
         synced = await self.tree.sync(guild=guild)
-        scope = f"guild {DISCORD_GUILD_ID}" if guild else "global"
+        scope = f"guild {GUILD_ID}" if guild else "global"
         print(f"Synced {len(synced)} slash command(s) {scope}")
 
     async def on_ready(self):

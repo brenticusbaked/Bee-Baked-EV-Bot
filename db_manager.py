@@ -38,6 +38,8 @@ else:
         _missing.append("SUPABASE_KEY")
     print(f"[supabase] Client disabled missing: {', '.join(_missing)}")
 
+SUPABASE_REACHABLE: bool = bool(supabase)
+
 RUNTIME_DB_STATS = {
     "bet_log_success": 0,
     "bet_log_failure": 0,
@@ -47,9 +49,12 @@ RUNTIME_DB_STATS = {
 
 PENDING_BETS_LOG_PATH = os.getenv("PENDING_BETS_LOG_PATH", "pending_bets_log.json")
 PENDING_EXECUTION_REPORTS_PATH = os.getenv("PENDING_EXECUTION_REPORTS_PATH", "pending_execution_reports.json")
+LOCAL_ODDS_CACHE_PATH = os.getenv("LOCAL_ODDS_CACHE_PATH", "odds_cache.json")
 
 def _safe_execute(action, fallback):
+    global SUPABASE_REACHABLE
     if not supabase:
+        SUPABASE_REACHABLE = False
         return fallback
     try:
         return action()
@@ -57,6 +62,14 @@ def _safe_execute(action, fallback):
         import traceback
         print(f"[supabase] Operation failed: {exc}")
         print(f"[supabase] Traceback: {traceback.format_exc()}")
+        exc_text = str(exc)
+        if (
+            "ConnectError" in exc_text
+            or "[Errno -2]" in exc_text
+            or "Name or service not known" in exc_text
+            or "getaddrinfo failed" in exc_text
+        ):
+            SUPABASE_REACHABLE = False
         return fallback
 
 def _load_local_json(path: str, default):
@@ -147,7 +160,28 @@ def is_already_logged(matchup, market, selection):
             .data
         )
         return any(not row.get("result") for row in rows)
-    return _safe_execute(action, False)
+
+    if _safe_execute(action, False):
+        return True
+
+    # Fallback: check locally queued bets so offline mode still dedupes
+    today = get_local_date_str()
+    pending = _load_local_json(PENDING_BETS_LOG_PATH, [])
+    if not isinstance(pending, list):
+        return False
+    market_key = market.strip().upper()
+    matchup_key = matchup.strip().lower()
+    selection_key = selection.strip().lower()
+    for row in pending:
+        if (
+            row.get("date") == today
+            and str(row.get("matchup", "")).strip().lower() == matchup_key
+            and str(row.get("market", "")).strip().upper() == market_key
+            and str(row.get("selection", "")).strip().lower() == selection_key
+            and not row.get("result")
+        ):
+            return True
+    return False
 
 REQUIRED_TABLES = [
     "bets_log",
@@ -228,9 +262,10 @@ def _send_dead_letter(table_name: str, payload: dict) -> None:
     except Exception as exc:
         print(f"Failed to dispatch dead-letter to Discord: {exc}")
 
-def _queue_pending_bet_log(payload: Dict[str, Any]) -> None:
-    # Fire to Discord first
-    _send_dead_letter("bets_log", payload)
+def _queue_pending_bet_log(payload: Dict[str, Any], alert: bool = True) -> None:
+    # Fire to Discord first if configured and reachable
+    if alert and supabase is not None and SUPABASE_REACHABLE:
+        _send_dead_letter("bets_log", payload)
     
     pending = _load_local_json(PENDING_BETS_LOG_PATH, [])
     if not isinstance(pending, list):
@@ -506,9 +541,9 @@ def log_bet_to_db(
         "notes": notes,
     }
     if not supabase:
-        RUNTIME_DB_STATS["bet_log_failure"] += 1
-        _queue_pending_bet_log(payload)
-        return False
+        _queue_pending_bet_log(payload, alert=False)
+        RUNTIME_DB_STATS["bet_log_success"] += 1
+        return True
     legacy_payload = {
         key: payload[key]
         for key in (
@@ -536,10 +571,11 @@ def log_bet_to_db(
     success = _safe_execute(action, False)
     if success:
         RUNTIME_DB_STATS["bet_log_success"] += 1
-    else:
-        RUNTIME_DB_STATS["bet_log_failure"] += 1
-        _queue_pending_bet_log(payload)
-    return success
+        return True
+    # Queue locally and still allow the alert to fire while offline
+    _queue_pending_bet_log(payload, alert=False)
+    RUNTIME_DB_STATS["bet_log_success"] += 1
+    return True
 
 def get_ungraded_past_bets() -> List[Dict[str, Any]]:
     today = get_local_date_str()
@@ -596,6 +632,10 @@ def update_bet_clv(bet_id, closing_price_american, closing_price_decimal, clv_ed
     _safe_execute(action, None)
 
 def save_odds_cache(cache_data):
+    # Always keep a local copy so scanners can run even when Supabase is unreachable
+    _save_local_json(LOCAL_ODDS_CACHE_PATH, cache_data)
+    if not supabase:
+        return
     def action():
         supabase.table("odds_cache").upsert(
             {"id": "master", "data": cache_data, "updated_at": datetime.now(timezone.utc).isoformat()}
@@ -606,7 +646,10 @@ def get_odds_cache():
     def action():
         response = supabase.table("odds_cache").select("data").eq("id", "master").execute()
         return response.data[0]["data"] if response.data else {}
-    return _safe_execute(action, {})
+    data = _safe_execute(action, {})
+    if data:
+        return data
+    return _load_local_json(LOCAL_ODDS_CACHE_PATH, {})
 
 def save_master_cache(cache_data):
     save_odds_cache(cache_data)
