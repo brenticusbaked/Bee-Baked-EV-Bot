@@ -32,8 +32,21 @@ class BeeBakedBot(commands.Bot):
         if GUILD_ID:
             guild = discord.Object(id=GUILD_ID)
             self.tree.copy_global_to(guild=guild)
-        synced = await self.tree.sync(guild=guild)
-        scope = f"guild {GUILD_ID}" if guild else "global"
+        try:
+            synced = await self.tree.sync(guild=guild)
+            scope = f"guild {GUILD_ID}" if guild else "global"
+        except discord.errors.Forbidden as exc:
+            print(f"[bot] Guild sync forbidden for guild {GUILD_ID}: {exc}")
+            app_id = self.application_id or getattr(self.user, "id", None)
+            if app_id:
+                print(
+                    f"[bot] Re-authorize with applications.commands scope: "
+                    f"https://discord.com/oauth2/authorize?client_id={app_id}"
+                    f"&permissions=18432&scope=bot%20applications.commands"
+                )
+            print("[bot] Falling back to global command sync (may take up to 1 hour).")
+            synced = await self.tree.sync()
+            scope = "global"
         print(f"Synced {len(synced)} slash command(s) {scope}")
 
     async def on_ready(self):
