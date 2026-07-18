@@ -31,7 +31,12 @@ supabase functions deploy odds-cache-ingest
 Set function secrets:
 
 ```bash
-supabase secrets set ODDS_API_KEY=<odds-api-key>
+# Primary 20k-credit key carries the budget; ODDS_API_KEY_2..4 are 500-credit
+# reserves used only as failover (401/402/429), tried in fixed priority order.
+supabase secrets set ODDS_API_KEY=<primary-20k-key>
+supabase secrets set ODDS_API_KEY_2=<reserve-500-key>
+supabase secrets set ODDS_API_KEY_3=<reserve-500-key>
+supabase secrets set ODDS_API_KEY_4=<reserve-500-key>
 supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 supabase secrets set ODDS_INGEST_FUNCTION_SECRET=<shared-secret>
 supabase secrets set ODDS_API_ACTIVE_SPORTS=basketball_nba,basketball_wnba,baseball_mlb,icehockey_nhl

@@ -27,8 +27,9 @@ LIVE_PUSH_VARS = [
 ]
 
 OPTIONAL_VARS = [
-    EnvVar("ODDS_API_KEY_2", "secondary scheduled odds fetcher", optional=True),
-    EnvVar("ODDS_API_KEY_3", "tertiary scheduled odds fetcher", optional=True),
+    EnvVar("ODDS_API_KEY_2", "secondary (500-credit reserve) odds key", optional=True),
+    EnvVar("ODDS_API_KEY_3", "tertiary (500-credit reserve) odds key", optional=True),
+    EnvVar("ODDS_API_KEY_4", "quaternary (500-credit reserve) odds key", optional=True),
     EnvVar("SGO_API_KEY", "SportsGameOdds props/grading", optional=True),
     EnvVar("DISCORD_BET_ALERTS_WEBHOOK_URL", "dedicated bet-alert Discord lane", optional=True, expected_prefix="https://discord.com/api/webhooks/"),
     EnvVar("DISCORD_ARBITRAGE_WEBHOOK_URL", "dedicated arbitrage Discord lane", optional=True, expected_prefix="https://discord.com/api/webhooks/"),
