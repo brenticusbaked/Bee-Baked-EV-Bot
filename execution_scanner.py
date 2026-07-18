@@ -104,7 +104,10 @@ def run_execution_scan() -> dict:
         )
         venue_scores = {venue_id: score.score for venue_id, score in scored.items()}
         print(f"execution_desk adaptive venue scores loaded: {venue_scores}")
-    soft_books = {"fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"}
+    soft_books = {
+        "fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada",
+        "novig", "kalshi", "polymarket", "prophetx",
+    }
     reports: List[dict] = []
     candidates: List[dict] = []
 

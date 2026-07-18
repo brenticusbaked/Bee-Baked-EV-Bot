@@ -35,6 +35,7 @@ type IngestJob = {
   sportKey: string;
   markets: string;
   regions: string;
+  bookmakers?: string;
   estimatedCredits: number;
 };
 
@@ -54,9 +55,23 @@ const ODDS_API_KEYS = [
 const INGEST_SECRET = Deno.env.get("ODDS_INGEST_FUNCTION_SECRET") ?? "";
 const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
 const BOOKMAKERS = Deno.env.get("ODDS_API_TARGET_BOOKS") ??
-  "pinnacle,fanduel,draftkings,betmgm,bet365,caesars";
+  "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada";
 const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals";
 const ENRICH_REGIONS = Deno.env.get("ODDS_API_ENRICH_REGIONS") ?? "us";
+
+// Extended US book coverage. Bovada is already covered by the `us` region on
+// every main run at no extra cost. The only extra region we pull is `us_ex`
+// (US exchanges) for Novig — cost is billed per region, not per book, so Kalshi
+// / Polymarket / ProphetX come along for free in the same request. Fliff / ESPN
+// BET (ex-theScore) live in a separate `us2` region and are NOT pulled by
+// default to avoid the extra per-region credit; add "us2" to
+// ODDS_API_EXTENDED_REGIONS (and the books to ODDS_API_EXTENDED_BOOKS) to opt
+// in. Extended pulls run every N slots and stay bounded by MAX_CREDITS_PER_RUN.
+// Set ODDS_EXTENDED_EVERY_N_SLOTS=0 to disable extended coverage entirely.
+const EXTENDED_REGIONS = Deno.env.get("ODDS_API_EXTENDED_REGIONS") ?? "us_ex";
+const EXTENDED_BOOKS = Deno.env.get("ODDS_API_EXTENDED_BOOKS") ??
+  "novig,kalshi,polymarket,prophetx";
+const EXTENDED_EVERY_N_SLOTS = Number(Deno.env.get("ODDS_EXTENDED_EVERY_N_SLOTS") ?? "3");
 const ENABLE_MARKET_ENRICHMENT =
   (Deno.env.get("ENABLE_MARKET_ENRICHMENT") ?? "true").toLowerCase() !== "false";
 
@@ -147,6 +162,28 @@ function buildJobs(slot: number): IngestJob[] {
     estimatedCredits: creditsFor(MAIN_MARKETS, REGIONS),
   }));
 
+  // Extended-book main pull (Fliff / ESPN BET / exchanges) in their own regions.
+  // Runs only every EXTENDED_EVERY_N_SLOTS-th slot so the extra billed regions
+  // don't refresh every cycle; the per-run ceiling still bounds total spend.
+  const extendedJobs: IngestJob[] = [];
+  if (
+    EXTENDED_EVERY_N_SLOTS > 0 &&
+    EXTENDED_REGIONS &&
+    EXTENDED_BOOKS &&
+    slot % EXTENDED_EVERY_N_SLOTS === 0
+  ) {
+    for (const sportKey of ACTIVE_SPORTS) {
+      extendedJobs.push({
+        kind: "main",
+        sportKey,
+        markets: MAIN_MARKETS,
+        regions: EXTENDED_REGIONS,
+        bookmakers: EXTENDED_BOOKS,
+        estimatedCredits: creditsFor(MAIN_MARKETS, EXTENDED_REGIONS),
+      });
+    }
+  }
+
   const enrichJobs: IngestJob[] = [];
   if (ENABLE_MARKET_ENRICHMENT) {
     for (const sportKey of ACTIVE_SPORTS) {
@@ -165,9 +202,13 @@ function buildJobs(slot: number): IngestJob[] {
     }
   }
 
-  // Rotate each group independently by the time slot so both main refreshes
-  // and expensive enrichment pulls fan out fairly across the day.
-  return [...rotate(mainJobs, slot), ...rotate(enrichJobs, slot)];
+  // Rotate each group independently by the time slot so main refreshes, extended
+  // book pulls, and expensive enrichment pulls fan out fairly across the day.
+  return [
+    ...rotate(mainJobs, slot),
+    ...rotate(extendedJobs, slot),
+    ...rotate(enrichJobs, slot),
+  ];
 }
 
 // Fetch with tiered-key failover in strict priority order (primary 20k key
@@ -191,7 +232,7 @@ async function fetchMain(job: IngestJob): Promise<{ events: OddsEvent[]; credits
   const url = new URL(`https://api.the-odds-api.com/v4/sports/${job.sportKey}/odds`);
   url.searchParams.set("regions", job.regions);
   url.searchParams.set("markets", job.markets);
-  url.searchParams.set("bookmakers", BOOKMAKERS);
+  url.searchParams.set("bookmakers", job.bookmakers ?? BOOKMAKERS);
   url.searchParams.set("oddsFormat", "decimal");
 
   const response = await oddsFetch(url);
