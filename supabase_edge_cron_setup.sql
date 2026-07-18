@@ -12,7 +12,7 @@ create extension if not exists pg_cron;
 -- Store secrets with Supabase Vault or replace these placeholders in a private SQL session.
 -- Recommended secrets:
 --   ODDS_INGEST_FUNCTION_URL = https://<project-ref>.functions.supabase.co/odds-cache-ingest
---   ODDS_INGEST_FUNCTION_SECRET = shared secret checked by the Edge Function
+--   ODDS_INGEST_FUNCTION_SECRET = e0d2ebba6ac7ee5dee3eda7699f1f5d0066dc4502595612b4c9e151c7f576f51
 
 -- Remove any legacy 5-minute schedule so we do not double-spend credits.
 select cron.unschedule('odds-cache-ingest-every-5-minutes')
