@@ -54,6 +54,54 @@ class ArbitrageScannerTests(unittest.TestCase):
         self.assertGreater(opportunities[0]["profit"], 0.09)
         self.assertEqual({leg["book"] for leg in opportunities[0]["outcomes"]}, {"DraftKings", "FanDuel"})
 
+    def test_excludes_pinnacle_leg(self):
+        # Best Liberty price is only at Pinnacle (not bettable). Without a second
+        # American book on that side, no bettable arb should be reported.
+        event = {
+            "id": "evt_2",
+            "home_team": "Aces",
+            "away_team": "Liberty",
+            "bookmakers": [
+                {
+                    "key": "pinnacle",
+                    "title": "Pinnacle",
+                    "markets": [{"key": "h2h", "outcomes": [{"name": "Liberty", "price": 2.50}]}],
+                },
+                {
+                    "key": "draftkings",
+                    "title": "DraftKings",
+                    "markets": [{"key": "h2h", "outcomes": [{"name": "Aces", "price": 2.20}]}],
+                },
+            ],
+        }
+        opportunities = find_arbitrage_opportunities({"basketball_wnba": [event]}, min_profit=0.005)
+        self.assertEqual(opportunities, [])
+
+    def test_requires_two_distinct_books(self):
+        # A single American book pricing both sides is not a two-book arb.
+        event = {
+            "id": "evt_3",
+            "home_team": "Aces",
+            "away_team": "Liberty",
+            "bookmakers": [
+                {
+                    "key": "draftkings",
+                    "title": "DraftKings",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "Aces", "price": 2.20},
+                                {"name": "Liberty", "price": 2.20},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        opportunities = find_arbitrage_opportunities({"basketball_wnba": [event]}, min_profit=0.005)
+        self.assertEqual(opportunities, [])
+
     def test_formats_pinnacle_reference(self):
         cache = {"basketball_wnba": [sample_event()]}
 

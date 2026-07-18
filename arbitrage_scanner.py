@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -14,6 +15,19 @@ STATE_KEY = "arbitrage_alerts"
 STATE_FILE = "arbitrage_alert_state.json"
 ARBITRAGE_MIN_PROFIT = env_float("ARBITRAGE_MIN_PROFIT", 0.005)
 ARBITRAGE_MAX_ALERTS = env_int("ARBITRAGE_MAX_ALERTS", 10)
+
+# Arbitrage is only actionable between books we can actually bet at. Pinnacle is
+# a fair-value benchmark only (no account access), so it is excluded here — both
+# legs of every flagged arb must come from this American-book allowlist.
+ARBITRAGE_US_BOOKS = {
+    book.strip().lower()
+    for book in os.getenv(
+        "ARBITRAGE_US_BOOKS",
+        "fanduel,draftkings,betmgm,caesars,bet365,bovada,espnbet,"
+        "fanatics,betrivers,pointsbetus,hardrockbet,wynnbet,superbook",
+    ).split(",")
+    if book.strip()
+}
 
 
 def _market_family(market_key: str) -> str:
@@ -68,6 +82,8 @@ def find_arbitrage_opportunities(cache: Cache, min_profit: float = ARBITRAGE_MIN
             for book in event.get("bookmakers", []):
                 book_key = str(book.get("key") or book.get("title") or "").lower()
                 book_title = str(book.get("title") or book.get("key") or "unknown")
+                if book_key not in ARBITRAGE_US_BOOKS:
+                    continue
                 for market in book.get("markets", []):
                     market_key = str(market.get("key", ""))
                     family = _market_family(market_key)
@@ -105,6 +121,10 @@ def find_arbitrage_opportunities(cache: Cache, min_profit: float = ARBITRAGE_MIN
     for group in groups.values():
         outcomes = list(group["outcomes"].values())
         if len(outcomes) < 2:
+            continue
+        # Require the arb to span at least two distinct American books; a single
+        # book pricing both sides is not a bettable two-book arbitrage.
+        if len({item["book_key"] for item in outcomes}) < 2:
             continue
         implied_sum = sum(decimal_implied_probability(item["price"]) for item in outcomes)
         if implied_sum <= 0:
