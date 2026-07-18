@@ -102,6 +102,31 @@ class ArbitrageScannerTests(unittest.TestCase):
         opportunities = find_arbitrage_opportunities({"basketball_wnba": [event]}, min_profit=0.005)
         self.assertEqual(opportunities, [])
 
+    def test_includes_any_american_book_not_excluded(self):
+        # Books outside the exclusion set (here Bovada + Novig) are bettable and
+        # should form a valid two-book arb even though neither was in the old
+        # fixed allowlist logic.
+        event = {
+            "id": "evt_4",
+            "home_team": "Aces",
+            "away_team": "Liberty",
+            "bookmakers": [
+                {
+                    "key": "bovada",
+                    "title": "Bovada",
+                    "markets": [{"key": "h2h", "outcomes": [{"name": "Aces", "price": 2.20}]}],
+                },
+                {
+                    "key": "novig",
+                    "title": "Novig",
+                    "markets": [{"key": "h2h", "outcomes": [{"name": "Liberty", "price": 2.20}]}],
+                },
+            ],
+        }
+        opportunities = find_arbitrage_opportunities({"basketball_wnba": [event]}, min_profit=0.005)
+        self.assertEqual(len(opportunities), 1)
+        self.assertEqual({leg["book"] for leg in opportunities[0]["outcomes"]}, {"Bovada", "Novig"})
+
     def test_formats_pinnacle_reference(self):
         cache = {"basketball_wnba": [sample_event()]}
 
