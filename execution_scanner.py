@@ -12,7 +12,7 @@ from execution.risk import RiskLimits, RiskManager
 from execution.router import SmartOrderRouter
 from execution.venue_scores import build_venue_scores
 from execution_signal import build_order_from_edge, quote_from_book
-from services.book_weights import get_book_weights
+from services.book_weights import book_weight_for, get_book_weights
 from utils.odds import fair_probabilities_from_prices, quarter_kelly_units
 from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
 from utils.thresholds import env_float, env_int
@@ -134,7 +134,7 @@ def run_execution_scan() -> dict:
                                     "price": float(outcome["price"]),
                                     "selection": _selection_text(outcome),
                                     "capacity": EXECUTION_MAX_ORDER_UNITS,
-                                    "weight": book_weights.get(bookmaker.get("title", book_key), 1.0),
+                                    "weight": book_weight_for(book_weights, bookmaker.get("title", book_key)),
                                 }
                             )
 

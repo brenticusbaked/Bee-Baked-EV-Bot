@@ -8,6 +8,9 @@ hive_api_cache.json
 hive_schedule_cache.json
 seen_bets.json
 bee_image_state.json
+bet_history.csv
+bet_history_summary.json
+transactions.csv
 .env
 .env.*
 !.env.example

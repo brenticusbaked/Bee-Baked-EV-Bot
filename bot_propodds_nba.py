@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 from db_manager import is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
-from services.book_weights import get_book_weights
+from services.book_weights import book_weight_for, get_book_weights
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import request
 from utils.links import sportsbook_search_link
@@ -492,7 +492,7 @@ def _process_sgo_event(
                     if side not in soft:
                         continue
                     edge = (soft[side]["price"] * probabilities[side]) - 1
-                    book_weight = book_weights.get(soft[side]["book"], 1.0)
+                    book_weight = book_weight_for(book_weights, soft[side]["book"])
                     weighted_score = edge * book_weight
                     selection = f"{player_name} {side.upper()} {line_value}"
                     

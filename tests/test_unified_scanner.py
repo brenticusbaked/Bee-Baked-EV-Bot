@@ -1,6 +1,25 @@
 import unittest
+from unittest.mock import patch
 
+import unified_bot
 from utils.odds import fair_probabilities_from_prices
+
+
+class EvFloorTests(unittest.TestCase):
+    def test_floor_raises_below_floor_thresholds(self):
+        with patch("unified_bot.validated_ev_floor", return_value=None):
+            # Spread default is 0.01 but the 0.02 floor lifts it.
+            self.assertGreaterEqual(
+                unified_bot._market_ev_threshold("spreads"), unified_bot.UNIFIED_EV_FLOOR
+            )
+
+    def test_history_floor_only_raises_never_lowers(self):
+        with patch("unified_bot.validated_ev_floor", return_value=0.05):
+            self.assertEqual(unified_bot._market_ev_threshold("spreads"), 0.05)
+        with patch("unified_bot.validated_ev_floor", return_value=0.0):
+            self.assertEqual(
+                unified_bot._market_ev_threshold("spreads"), unified_bot.UNIFIED_EV_FLOOR
+            )
 
 
 class UnifiedScannerTests(unittest.TestCase):
