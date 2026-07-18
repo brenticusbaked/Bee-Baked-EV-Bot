@@ -35,11 +35,11 @@ TERTIARY_CONFIG = {
     "baseball_mlb": "spreads,totals",
 }
 
-REGIONS = os.getenv("ODDS_API_REGIONS", "us,eu")
-TARGET_BOOKS = os.getenv(
-    "ODDS_API_TARGET_BOOKS",
-    "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,prizepicks",
-)
+SHARP_REGION = os.getenv("ODDS_API_SHARP_REGION", "eu")
+SOFT_REGION = os.getenv("ODDS_API_SOFT_REGION", "us")
+SHARP_BOOKS = os.getenv("ODDS_API_SHARP_BOOKS", "pinnacle")
+DEFAULT_SOFT_BOOKS = "fanduel,draftkings,betmgm,bet365,caesars,bovada"
+SOFT_BOOKS = os.getenv("ODDS_API_SOFT_BOOKS", DEFAULT_SOFT_BOOKS)
 ENABLE_ODDS_SECONDARY_PULL = env_flag("ENABLE_ODDS_SECONDARY_PULL", True)
 ENABLE_ODDS_TERTIARY_PULL = env_flag("ENABLE_ODDS_TERTIARY_PULL", True)
 ENABLE_ODDS_PARTIAL_MARKET_PULL = env_flag("ENABLE_ODDS_PARTIAL_MARKET_PULL", False)
@@ -108,15 +108,22 @@ def _merge_cache(cache: Dict[str, List[dict]], sport: str, events: List[dict]) -
         _merge_bookmakers(event_index[event_id], event)
 
 
-def _fetch_config(cache: Dict[str, List[dict]], api_key: str, config: Dict[str, str], label: str) -> int:
+def _fetch_config(
+    cache: Dict[str, List[dict]],
+    api_key: str,
+    config: Dict[str, str],
+    label: str,
+    region: str,
+    bookmakers: str,
+) -> int:
     success_count = 0
     for sport, markets in config.items():
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
         params = {
             "apiKey": api_key,
-            "regions": REGIONS,
+            "regions": region,
             "markets": markets,
-            "bookmakers": TARGET_BOOKS,
+            "bookmakers": bookmakers,
             "oddsFormat": "decimal",
         }
 
@@ -139,6 +146,15 @@ def run_fetcher():
 
     cache: Dict[str, List[dict]] = {}
 
+    primary_sharp = 0
+    primary_soft = 0
+    secondary_sharp = 0
+    secondary_soft = 0
+    tertiary_sharp = 0
+    tertiary_soft = 0
+    partial_sharp = 0
+    partial_soft = 0
+
     active_primary = filter_config_in_season(PRIMARY_CONFIG)
     skipped_primary = set(PRIMARY_CONFIG) - set(active_primary)
     if skipped_primary:
@@ -146,64 +162,78 @@ def run_fetcher():
 
     print(
         "BEE-BAKED FETCH: Running primary precision pull"
-        f" ({_credits_for_config(active_primary)} credits/run)"
+        f" ({_credits_for_config(active_primary) * 2} credits/run)"
     )
-    primary_success = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary key")
+    primary_sharp = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary sharp eu", SHARP_REGION, SHARP_BOOKS)
+    primary_soft = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary soft us", SOFT_REGION, SOFT_BOOKS)
 
-    secondary_success = 0
+    active_secondary = filter_config_in_season(SECONDARY_CONFIG)
+    secondary_sharp = 0
+    secondary_soft = 0
     if ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL:
-        active_secondary = filter_config_in_season(SECONDARY_CONFIG)
         skipped_secondary = set(SECONDARY_CONFIG) - set(active_secondary)
         if skipped_secondary:
             print(f"BEE-BAKED FETCH: Skipping off-season sports (secondary): {', '.join(sorted(skipped_secondary))}")
         print(
             "BEE-BAKED FETCH: Running secondary expansion pull"
-            f" ({_credits_for_config(active_secondary)} credits/run)"
+            f" ({_credits_for_config(active_secondary) * 2} credits/run)"
         )
-        secondary_success = _fetch_config(cache, ODDS_API_KEY_2, active_secondary, "secondary key")
+        secondary_sharp = _fetch_config(cache, ODDS_API_KEY_2, active_secondary, "secondary sharp eu", SHARP_REGION, SHARP_BOOKS)
+        secondary_soft = _fetch_config(cache, ODDS_API_KEY_2, active_secondary, "secondary soft us", SOFT_REGION, SOFT_BOOKS)
     elif not ENABLE_ODDS_SECONDARY_PULL:
         print("ENABLE_ODDS_SECONDARY_PULL=false. Skipping secondary expansion pull.")
     else:
         print("ODDS_API_KEY_2 not set. Skipping secondary expansion pull.")
 
-    tertiary_success = 0
+    active_tertiary = filter_config_in_season(TERTIARY_CONFIG)
+    tertiary_sharp = 0
+    tertiary_soft = 0
     if ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL:
-        active_tertiary = filter_config_in_season(TERTIARY_CONFIG)
         skipped_tertiary = set(TERTIARY_CONFIG) - set(active_tertiary)
         if skipped_tertiary:
             print(f"BEE-BAKED FETCH: Skipping off-season sports (tertiary): {', '.join(sorted(skipped_tertiary))}")
         print(
             "BEE-BAKED FETCH: Running tertiary expansion pull"
-            f" ({_credits_for_config(active_tertiary)} credits/run)"
+            f" ({_credits_for_config(active_tertiary) * 2} credits/run)"
         )
-        tertiary_success = _fetch_config(cache, ODDS_API_KEY_3, active_tertiary, "tertiary key")
+        tertiary_sharp = _fetch_config(cache, ODDS_API_KEY_3, active_tertiary, "tertiary sharp eu", SHARP_REGION, SHARP_BOOKS)
+        tertiary_soft = _fetch_config(cache, ODDS_API_KEY_3, active_tertiary, "tertiary soft us", SOFT_REGION, SOFT_BOOKS)
     elif not ENABLE_ODDS_TERTIARY_PULL:
         print("ENABLE_ODDS_TERTIARY_PULL=false. Skipping tertiary expansion pull.")
     else:
         print("ODDS_API_KEY_3 not set. Skipping tertiary expansion pull.")
 
-    partial_success = 0
+    active_partial = filter_config_in_season(PARTIAL_GAME_CONFIG)
+    partial_sharp = 0
+    partial_soft = 0
     if ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL:
-        active_partial = filter_config_in_season(PARTIAL_GAME_CONFIG)
         skipped_partial = set(PARTIAL_GAME_CONFIG) - set(active_partial)
         if skipped_partial:
             print(f"BEE-BAKED FETCH: Skipping off-season sports (partial/alternate): {', '.join(sorted(skipped_partial))}")
         print(
             "BEE-BAKED FETCH: Running partial-game and alternate-market pull"
-            f" ({_credits_for_config(active_partial)} credits/run)"
+            f" ({_credits_for_config(active_partial) * 2} credits/run)"
         )
-        partial_success = _fetch_config(cache, ODDS_API_KEY_3, active_partial, "partial/alternate key")
+        partial_sharp = _fetch_config(cache, ODDS_API_KEY_3, active_partial, "partial/alternate sharp eu", SHARP_REGION, SHARP_BOOKS)
+        partial_soft = _fetch_config(cache, ODDS_API_KEY_3, active_partial, "partial/alternate soft us", SOFT_REGION, SOFT_BOOKS)
     elif not ENABLE_ODDS_PARTIAL_MARKET_PULL:
         print("ENABLE_ODDS_PARTIAL_MARKET_PULL=false. Skipping partial-game and alternate-market pull.")
     else:
         print("ODDS_API_KEY_3 not set. Skipping partial-game and alternate-market pull.")
 
     save_master_cache(cache)
+
+    primary_denom = len(active_primary)
+    secondary_denom = len(active_secondary) if (ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL) else 0
+    tertiary_denom = len(active_tertiary) if (ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL) else 0
+    partial_denom = len(active_partial) if (ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL) else 0
+
     detail = (
-        f"fetch complete | primary sports: {primary_success}/{len(PRIMARY_CONFIG)}"
-        f" | secondary sports: {secondary_success}/{len(SECONDARY_CONFIG) if ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL else 0}"
-        f" | tertiary sports: {tertiary_success}/{len(TERTIARY_CONFIG) if ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL else 0}"
-        f" | partial/alternate sports: {partial_success}/{len(PARTIAL_GAME_CONFIG) if ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL else 0}"
+        f"fetch complete"
+        f" | primary sharp: {primary_sharp}/{primary_denom} soft: {primary_soft}/{primary_denom}"
+        f" | secondary sharp: {secondary_sharp}/{secondary_denom} soft: {secondary_soft}/{secondary_denom}"
+        f" | tertiary sharp: {tertiary_sharp}/{tertiary_denom} soft: {tertiary_soft}/{tertiary_denom}"
+        f" | partial/alternate sharp: {partial_sharp}/{partial_denom} soft: {partial_soft}/{partial_denom}"
     )
     return {"detail": detail, "count": len(cache), "label": "updates"}
 
