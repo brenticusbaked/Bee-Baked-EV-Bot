@@ -1,7 +1,7 @@
 import os
 from datetime import timedelta
 
-from db_manager import get_all_bets, get_master_cache, update_bet_clv
+from db_manager import get_all_bets, get_market_cache, update_bet_clv
 from services.alerts import send_discord_alert
 from services.bet_logic import outcome_matches, parse_selection
 from services.discord_channels import RESULTS_WEBHOOK_URL
@@ -57,7 +57,7 @@ def _placed_decimal(bet: dict):
 
 def run_clv_tracker():
     bets = get_all_bets()
-    cache = get_master_cache()
+    cache = get_market_cache()
     tracked_count = 0
     alert_count = 0
 

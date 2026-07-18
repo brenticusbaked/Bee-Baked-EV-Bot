@@ -13,7 +13,13 @@ from utils.correlation import ExposureEntry, ExposureTracker, check_exposure
 from utils.kelly import dynamic_kelly_units
 from utils.links import sportsbook_search_link
 from utils.market_efficiency import score_market_efficiency
-from utils.odds import decimal_implied_probability, decimal_to_american, fair_probabilities_from_prices
+from utils.odds import (
+    decimal_implied_probability,
+    decimal_to_american,
+    fair_probabilities_from_prices,
+    multiplicative_unvig,
+)
+from utils.prop_pricing import prop_kelly_units
 from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
 from utils.thresholds import env_float, env_int
 from utils.time_decay import adjusted_threshold, compute_time_decay
@@ -44,6 +50,14 @@ ENABLE_NFL_SPREAD_ALERTS = os.getenv("ENABLE_NFL_SPREAD_ALERTS", "true").strip()
 ENABLE_NFL_H2H_ALERTS = os.getenv("ENABLE_NFL_H2H_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_ALTERNATE_MARKET_ALERTS = os.getenv("ENABLE_ALTERNATE_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PARTIAL_GAME_MARKET_ALERTS = os.getenv("ENABLE_PARTIAL_GAME_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_PLAYER_PROP_ALERTS = os.getenv("ENABLE_PLAYER_PROP_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+UNIFIED_PROP_EV_THRESHOLD = env_float("UNIFIED_PROP_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
+# Player props carry highly asymmetric juice (e.g. Over -140 / Under +110), so
+# they are de-vigged multiplicatively rather than with the power method used for
+# main markets (see .windsurfrules Rule 1 / the syndicate spec).
+PROP_DEVIG_METHOD = "multiplicative"
+PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.125)
+PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
 UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVENT_MARKET", 3))
 DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
 ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -67,8 +81,14 @@ def calculate_edge_from_probability(offered_price: float, fair_probability: floa
     return (float(offered_price) * float(fair_probability)) - 1.0
 
 
+def _is_player_prop_market(market_type: str) -> bool:
+    return str(market_type).strip().lower().startswith("player_")
+
+
 def _market_family(market_type: str) -> str:
     market_key = str(market_type).strip().lower()
+    if market_key.startswith("player_"):
+        return "player_prop"
     if market_key.startswith("alternate_"):
         return "alternate"
     if any(token in market_key for token in ("_q1", "_1q", "_h1", "_1h", "_1st_5", "_first_5", "_1st_period", "_1p")):
@@ -220,6 +240,153 @@ def _resolve_proe_prob(
         return proe_spread_adjustment(fair_probability, home_data, away_data, is_home)
 
     return fair_probability
+
+
+def _prop_side(outcome_name: str) -> str:
+    name = str(outcome_name or "").strip().lower()
+    if "over" in name:
+        return "over"
+    if "under" in name:
+        return "under"
+    return name
+
+
+def evaluate_player_props(
+    event: dict,
+    sport: str,
+    soft_books: list,
+    book_weights: dict,
+) -> list:
+    """Scan player-prop markets for a single event.
+
+    Player props are quoted as binary Over/Under pairs per (player, line) with
+    highly asymmetric juice, so the Pinnacle baseline is de-vigged with the
+    multiplicative method:
+
+        P_over = 1 / O_over ; P_under = 1 / O_under
+        Sum = P_over + P_under
+        P_true_over = P_over / Sum   (and symmetrically for the under)
+
+    Returns a list of alert dicts ready for routing through services/alerts.py.
+    """
+    matchup = f"{event['away_team']} @ {event['home_team']}"
+    # groups[(market_key, player, point)] = {"sharp": {side: price}, "soft": [offers]}
+    groups: dict = {}
+
+    for bookmaker in event.get("bookmakers", []):
+        book_key = bookmaker.get("key")
+        for market in bookmaker.get("markets", []):
+            market_key = str(market.get("key", ""))
+            if not _is_player_prop_market(market_key):
+                continue
+            for outcome in market.get("outcomes", []):
+                player = str(outcome.get("description") or "").strip()
+                side = _prop_side(outcome.get("name"))
+                if not player or side not in {"over", "under"}:
+                    continue
+                try:
+                    price = float(outcome["price"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if price <= 1.0:
+                    continue
+                point = str(outcome.get("point", ""))
+                group = groups.setdefault(
+                    (market_key, player, point),
+                    {"sharp": {}, "soft": []},
+                )
+                if book_key == "pinnacle":
+                    group["sharp"][side] = price
+                elif book_key in soft_books:
+                    group["soft"].append(
+                        {
+                            "book": bookmaker.get("title", book_key),
+                            "book_key": book_key,
+                            "side": side,
+                            "price": price,
+                        }
+                    )
+
+    alerts = []
+    for (market_key, player, point), data in groups.items():
+        sharp = data["sharp"]
+        if "over" not in sharp or "under" not in sharp:
+            continue
+
+        implied = [decimal_implied_probability(sharp["over"]), decimal_implied_probability(sharp["under"])]
+        fair = multiplicative_unvig(implied)
+        if len(fair) != 2 or not all(fair):
+            continue
+        fair_by_side = {"over": fair[0], "under": fair[1]}
+
+        best_by_side: dict = {}
+        for offer in data["soft"]:
+            side = offer["side"]
+            if side not in fair_by_side:
+                continue
+            edge = calculate_edge_from_probability(offer["price"], fair_by_side[side])
+            if edge < UNIFIED_PROP_EV_THRESHOLD:
+                continue
+            weighted = edge * book_weights.get(offer["book"], 1.0)
+            current = best_by_side.get(side)
+            if current is None or weighted > current["weighted"]:
+                best_by_side[side] = {**offer, "edge": edge, "weighted": weighted}
+
+        for side, offer in best_by_side.items():
+            fair_probability = fair_by_side[side]
+            fair_decimal = 1.0 / fair_probability
+            point_text = f" {point}" if point else ""
+            selection = f"{player} {side.upper()}{point_text}".strip()
+            market_label = market_key.upper()
+            if is_already_logged(matchup, market_label, selection):
+                continue
+
+            units = prop_kelly_units(
+                offer["edge"], offer["price"], fraction=PROP_KELLY_FRACTION, cap=PROP_MAX_UNITS,
+            )
+            if units <= 0:
+                continue
+
+            fair_price_american = decimal_to_american(fair_decimal)
+            pinnacle_price = sharp[side]
+            was_logged = log_bet_to_db(
+                matchup,
+                market_label,
+                selection,
+                decimal_to_american(offer["price"]),
+                offer["edge"],
+                f"{units:.2f}",
+                fair_price_american,
+                sport,
+                event["id"],
+                notes=(
+                    f"book={offer['book']};book_key={offer['book_key']};market=player_prop;"
+                    f"stat={market_key};line={point};devig={PROP_DEVIG_METHOD};"
+                    f"fair_probability={fair_probability:.4f};fair_decimal={fair_decimal:.4f}"
+                ),
+            )
+            if not was_logged:
+                print(f"Skipping prop alert because DB log failed for {selection}.")
+                continue
+
+            app_link = sportsbook_search_link(offer["book_key"], matchup)
+            alerts.append(
+                {
+                    "sport": sport,
+                    "description": (
+                        f"**+EV PLAYER PROP ALERT**\n\n"
+                        f"**Match:** {matchup}\n"
+                        f"**Prop:** {selection} ({market_label})\n"
+                        f"**Book:** [{offer['book']}]({app_link}) @ {decimal_to_american(offer['price'])}\n"
+                        f"**Pinnacle:** {decimal_to_american(pinnacle_price)}\n"
+                        f"**Fair Value:** {fair_price_american}\n"
+                        f"**Edge:** {offer['edge'] * 100:.2f}%\n"
+                        f"**De-vig:** {PROP_DEVIG_METHOD}\n"
+                        f"**Suggested:** {units:.2f} Units"
+                    ),
+                }
+            )
+    return alerts
 
 
 def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: str = "bet_alert"):
@@ -496,6 +663,11 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
                             )
                         }
                     )
+
+            if ENABLE_PLAYER_PROP_ALERTS:
+                alerts.extend(
+                    evaluate_player_props(event, sport, soft_books, book_weights)
+                )
 
     for index, alert in enumerate(alerts):
         send_discord_alert(

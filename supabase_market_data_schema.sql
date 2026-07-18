@@ -19,12 +19,18 @@ create table if not exists historical_odds (
     bookmaker_title text,
     market_key text not null,
     outcome_name text not null,
+    outcome_description text,
     point numeric,
     price_decimal numeric not null,
     line_hash text not null unique,
+    last_update timestamptz,
     captured_at timestamptz default now(),
     raw_outcome jsonb default '{}'::jsonb
 );
+
+-- Backfill columns on existing deployments (safe to re-run).
+alter table historical_odds add column if not exists outcome_description text;
+alter table historical_odds add column if not exists last_update timestamptz;
 
 create table if not exists syndicate_bets (
     id uuid primary key default gen_random_uuid(),
@@ -50,10 +56,20 @@ create table if not exists odds_ingest_runs (
     sports_requested text[] default '{}',
     fixtures_upserted integer default 0,
     odds_rows_upserted integer default 0,
+    credits_used integer default 0,
+    credits_remaining integer,
+    api_requests integer default 0,
+    rotation_slot integer,
     error text,
     started_at timestamptz default now(),
     finished_at timestamptz
 );
+
+-- Backfill columns on existing deployments (safe to re-run).
+alter table odds_ingest_runs add column if not exists credits_used integer default 0;
+alter table odds_ingest_runs add column if not exists credits_remaining integer;
+alter table odds_ingest_runs add column if not exists api_requests integer default 0;
+alter table odds_ingest_runs add column if not exists rotation_slot integer;
 
 create index if not exists idx_fixtures_sport_time on fixtures(sport_key, commence_time);
 create index if not exists idx_historical_odds_fixture_market on historical_odds(fixture_id, market_key);

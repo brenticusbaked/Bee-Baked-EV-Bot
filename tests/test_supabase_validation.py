@@ -47,5 +47,6 @@ class TestValidateSupabaseConnection:
             "bets_log", "odds_cache", "bot_state", "alerts_sent",
             "workflow_runs", "execution_orders", "execution_child_orders",
             "execution_fills", "venue_metrics",
+            "fixtures", "historical_odds",
         }
         assert set(REQUIRED_TABLES) == expected
