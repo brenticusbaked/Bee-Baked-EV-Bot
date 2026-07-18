@@ -75,19 +75,26 @@ const EXTENDED_EVERY_N_SLOTS = Number(Deno.env.get("ODDS_EXTENDED_EVERY_N_SLOTS"
 const ENABLE_MARKET_ENRICHMENT =
   (Deno.env.get("ENABLE_MARKET_ENRICHMENT") ?? "true").toLowerCase() !== "false";
 
-// Strict per-run credit ceiling. At 144 runs/day this multiplies out to the
-// monthly budget: 5 credits/run * 144 = 720/day ~= 20,000/month after
-// in-season filtering trims idle sports. The executor always runs the first
+// Strict per-run credit ceiling. Paired with the game-hours cron schedule
+// (~49 runs/day; see supabase_edge_cron_setup.sql), 14 credits/run lands ~19-20k
+// credits/month with two in-season sports (each main = 3 markets x us,eu = 6
+// credits) plus rotating alternates/props. The executor always runs the first
 // queued job so the rotation keeps making progress even if one job alone
-// exceeds the ceiling.
-const MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "5");
+// exceeds the ceiling. Raise or lower this to match your cron cadence and the
+// number of in-season sports in ODDS_API_ACTIVE_SPORTS.
+const MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "14");
 // Cap on how many events get per-event enrichment (props/alternates/derivatives)
 // in a single run. Events rotate across runs by the time-based slot.
 const MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_MAX_EVENTS_PER_ENRICH") ?? "2");
 const CYCLE_MINUTES = Number(Deno.env.get("ODDS_CYCLE_MINUTES") ?? "10");
 
+// Ordered by realized straight-bet +EV ROI from the syndicate's own history
+// (MLB best on volume, then WNBA; NBA/NHL follow for when their seasons resume).
+// The first sport is favored by the first-job-always-runs rule, so keep the
+// strongest in-season market first. Trim this to in-season sports to avoid
+// spending main-pull credits on idle leagues.
 const ACTIVE_SPORTS = (Deno.env.get("ODDS_API_ACTIVE_SPORTS") ??
-  "basketball_nba,basketball_wnba,baseball_mlb,icehockey_nhl")
+  "baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl")
   .split(",")
   .map((sport) => sport.trim())
   .filter(Boolean);
