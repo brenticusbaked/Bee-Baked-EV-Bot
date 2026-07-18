@@ -4,6 +4,8 @@ from typing import Dict
 import pandas as pd
 
 from db_manager import get_all_bets
+from services.history_calibration import book_factor_for, history_book_factors
+from utils.book_names import normalize_book
 
 
 def _extract_book(notes: str) -> str:
@@ -55,6 +57,23 @@ def get_book_weights(min_sample: int = 5) -> Dict[str, float]:
 
         sample_boost = min(len(group) / 50.0, 1.0)
         weight = 1.0 + ((clv_score + win_score) * sample_boost) + liquidity_score
-        weights[str(book)] = max(0.85, min(weight, 1.20))
+        weights[normalize_book(str(book))] = max(0.85, min(weight, 1.20))
+
+    # Overlay realized-ROI factors from the personal betting history so books
+    # the user actually beats are favored (and chronic losers are dampened).
+    for book, factor in history_book_factors().items():
+        base = weights.get(book, 1.0)
+        weights[book] = max(0.80, min(base * factor, 1.25))
 
     return weights
+
+
+def book_weight_for(weights: Dict[str, float], name: str) -> float:
+    """Look up a book weight tolerant of raw titles vs. canonical keys."""
+    if name in weights:
+        return weights[name]
+    canonical = normalize_book(name)
+    if canonical in weights:
+        return weights[canonical]
+    # No graded/history rows for this book yet: still apply any history factor.
+    return book_factor_for(name)

@@ -4,7 +4,9 @@ from datetime import timedelta
 from db_manager import get_all_bets, get_market_cache, update_bet_clv
 from services.alerts import send_discord_alert
 from services.bet_logic import outcome_matches, parse_selection
+from services.book_weights import _extract_book
 from services.discord_channels import RESULTS_WEBHOOK_URL
+from services.history_calibration import clv_baseline_for
 from utils.odds import american_to_decimal, decimal_to_american, parse_float
 from utils.config import env_flag
 from utils.time import get_local_now
@@ -15,11 +17,25 @@ CLV_NOTIFY_MIN_CHANGE_PCT = float(os.getenv("CLV_NOTIFY_MIN_CHANGE_PCT", "0.75")
 CLV_MAX_ALERTS = int(os.getenv("CLV_MAX_ALERTS", "10"))
 
 
+def _bet_book(bet: dict) -> str:
+    return str(bet.get("sportsbook") or _extract_book(bet.get("notes", "")))
+
+
 def _send_clv_update(bet: dict, closing_price_american: str, clv_edge_pct: float, previous_clv) -> bool:
     if not RESULTS_WEBHOOK_URL or not env_flag("CLV_SEND_DISCORD_UPDATES", True):
         return False
     previous_numeric = parse_float(previous_clv)
     previous_text = "first track" if previous_numeric is None else f"was {previous_numeric:+.2f}%"
+
+    baseline = clv_baseline_for(_bet_book(bet))
+    baseline_line = ""
+    if baseline is not None:
+        verdict = "above" if clv_edge_pct >= baseline else "below"
+        baseline_line = (
+            f"\n**Your CLV baseline ({_bet_book(bet)}):** {baseline:+.2f}% "
+            f"— this bet is {verdict} it"
+        )
+
     payload = {
         "embeds": [
             {
@@ -31,6 +47,7 @@ def _send_clv_update(bet: dict, closing_price_american: str, clv_edge_pct: float
                     f"**Alerted Odds:** {bet.get('odds')}\n"
                     f"**Pinnacle Now:** {closing_price_american}\n"
                     f"**CLV Edge:** {clv_edge_pct:+.2f}% ({previous_text})"
+                    f"{baseline_line}"
                 ),
                 "color": 5763719 if clv_edge_pct >= 0 else 15158332,
             }

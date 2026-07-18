@@ -7,8 +7,9 @@ from models.nfl_proe import PROEContext, build_proe_context, proe_spread_adjustm
 from models.nhl_pdo import PDOContext, build_pdo_context, pdo_total_adjustment
 from models.talent_model import TalentContext, adjusted_fair_probability, build_talent_context
 from services.alerts import send_discord_alert
-from services.book_weights import get_book_weights
+from services.book_weights import book_weight_for, get_book_weights
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
+from services.history_calibration import validated_ev_floor
 from utils.correlation import ExposureEntry, ExposureTracker, check_exposure
 from utils.kelly import dynamic_kelly_units
 from utils.links import sportsbook_search_link
@@ -52,6 +53,10 @@ ENABLE_ALTERNATE_MARKET_ALERTS = os.getenv("ENABLE_ALTERNATE_MARKET_ALERTS", "tr
 ENABLE_PARTIAL_GAME_MARKET_ALERTS = os.getenv("ENABLE_PARTIAL_GAME_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PLAYER_PROP_ALERTS = os.getenv("ENABLE_PLAYER_PROP_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 UNIFIED_PROP_EV_THRESHOLD = env_float("UNIFIED_PROP_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
+# Hard EV floor: never alert below the EV band the user's own history shows to be
+# durably profitable. Configurable; auto-raised (never lowered) by realized
+# ROI-by-EV-bucket calibration from bet_history.
+UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.02)
 # Player props carry highly asymmetric juice (e.g. Over -140 / Under +110), so
 # they are de-vigged multiplicatively rather than with the power method used for
 # main markets (see .windsurfrules Rule 1 / the syndicate spec).
@@ -130,19 +135,30 @@ def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
     return market_family in {"spreads", "totals", "h2h"}
 
 
+def _effective_ev_floor() -> float:
+    """Hard EV floor, raised (never lowered) by history-validated profitability."""
+    floor = UNIFIED_EV_FLOOR
+    validated = validated_ev_floor()
+    if validated is not None:
+        floor = max(floor, validated)
+    return floor
+
+
 def _market_ev_threshold(market_type: str) -> float:
     market_family = _market_family(market_type)
     if market_family == "alternate":
-        return UNIFIED_ALT_MARKET_EV_THRESHOLD
-    if market_family == "partial":
-        return UNIFIED_PARTIAL_MARKET_EV_THRESHOLD
-    if market_family == "spreads":
-        return UNIFIED_SPREAD_EV_THRESHOLD
-    if market_family == "h2h":
-        return UNIFIED_H2H_EV_THRESHOLD
-    if market_family == "totals":
-        return UNIFIED_TOTAL_EV_THRESHOLD
-    return UNIFIED_EV_THRESHOLD
+        threshold = UNIFIED_ALT_MARKET_EV_THRESHOLD
+    elif market_family == "partial":
+        threshold = UNIFIED_PARTIAL_MARKET_EV_THRESHOLD
+    elif market_family == "spreads":
+        threshold = UNIFIED_SPREAD_EV_THRESHOLD
+    elif market_family == "h2h":
+        threshold = UNIFIED_H2H_EV_THRESHOLD
+    elif market_family == "totals":
+        threshold = UNIFIED_TOTAL_EV_THRESHOLD
+    else:
+        threshold = UNIFIED_EV_THRESHOLD
+    return max(threshold, _effective_ev_floor())
 
 
 def _resolve_talent_prob(
@@ -327,7 +343,7 @@ def evaluate_player_props(
             edge = calculate_edge_from_probability(offer["price"], fair_by_side[side])
             if edge < UNIFIED_PROP_EV_THRESHOLD:
                 continue
-            weighted = edge * book_weights.get(offer["book"], 1.0)
+            weighted = edge * book_weight_for(book_weights, offer["book"])
             current = best_by_side.get(side)
             if current is None or weighted > current["weighted"]:
                 best_by_side[side] = {**offer, "edge": edge, "weighted": weighted}
@@ -509,7 +525,7 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
 
                     fair_decimal = 1.0 / fair_probability
                     edge = calculate_edge_from_probability(soft_bet["price"], fair_probability)
-                    book_weight = book_weights.get(soft_bet["book"], 1.0)
+                    book_weight = book_weight_for(book_weights, soft_bet["book"])
                     weighted_score = edge * book_weight
 
                     efficiency = None
