@@ -1,3 +1,5 @@
+import os
+import random
 from typing import Optional
 
 import requests
@@ -21,6 +23,32 @@ _MLB_STATS_HEADERS: dict[str, str] = {
     "Accept-Encoding": "gzip, deflate",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+# statsapi.mlb.com blocks datacenter egress IPs (GitHub Actions runners) with
+# HTTP 406. Route those calls through the project's residential proxy pool, and
+# rotate to a fresh residential IP on each 406/403 retry. Falls back to a direct
+# request when no proxy is configured (e.g. local dev), preserving old behavior.
+_PROXY_USERNAME = os.getenv("PROXY_USERNAME")
+_PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
+_PROXY_IPS = [
+    ip.strip()
+    for ip in os.getenv("PROXY_LIST", "").replace("\n", ",").split(",")
+    if ip.strip()
+]
+_MLB_PROXY_MAX_ATTEMPTS = 3
+
+
+def _residential_proxies() -> Optional[dict[str, str]]:
+    """Build a rotating residential proxy dict, or None if unconfigured."""
+    if not (_PROXY_IPS and _PROXY_USERNAME and _PROXY_PASSWORD):
+        return None
+    chosen_ip = random.choice(_PROXY_IPS)
+    session_id = random.randint(10_000, 99_999)
+    user = f"{_PROXY_USERNAME}-session-{session_id}"
+    proxy_url = f"http://{user}:{_PROXY_PASSWORD}@{chosen_ip}"
+    return {"http": proxy_url, "https": proxy_url}
+
+
 DISCORD_WEBHOOK_URL = DEFAULT_WEBHOOK_URL
 BEE_IMAGE_URL = "https://pbs.twimg.com/media/HCM2LNraUAAKC5m?format=jpg&name=medium"
 BEE_IMAGE_STATE_KEY = "bee_image_daily_limit"
@@ -52,14 +80,36 @@ NO_429_RETRY_SESSION = build_session(retry_on_429=False)
 
 def request(method: str, url: str, retry_on_429: bool = True, **kwargs) -> requests.Response:
     kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
+    session = SESSION if retry_on_429 else NO_429_RETRY_SESSION
     if "statsapi.mlb.com" in url:
         merged = dict(_MLB_STATS_HEADERS)
         merged.update(kwargs.get("headers") or {})
         kwargs["headers"] = merged
-    session = SESSION if retry_on_429 else NO_429_RETRY_SESSION
+        return _mlb_request(session, method.upper(), url, **kwargs)
     response = session.request(method=method.upper(), url=url, **kwargs)
     response.raise_for_status()
     return response
+
+
+def _mlb_request(session: requests.Session, method: str, url: str, **kwargs) -> requests.Response:
+    """statsapi.mlb.com request that rotates residential proxies on 406/403."""
+    proxies = _residential_proxies()
+    if proxies is None:
+        response = session.request(method=method, url=url, **kwargs)
+        response.raise_for_status()
+        return response
+
+    last_response: Optional[requests.Response] = None
+    for _ in range(_MLB_PROXY_MAX_ATTEMPTS):
+        response = session.request(method=method, url=url, proxies=proxies, **kwargs)
+        if response.status_code not in (403, 406):
+            response.raise_for_status()
+            return response
+        last_response = response
+        proxies = _residential_proxies() or proxies
+    if last_response is not None:
+        last_response.raise_for_status()
+    return last_response  # unreachable; raise_for_status above raises on 406
 
 
 def get_json(url: str, **kwargs):
