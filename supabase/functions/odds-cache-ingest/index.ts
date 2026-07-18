@@ -101,18 +101,28 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
   basketball_nba: {
     derivatives: "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
     alternates: "alternate_spreads,alternate_totals",
-    props: "player_points,player_rebounds,player_assists",
+    props:
+      "player_points,player_rebounds,player_assists,player_threes," +
+      "player_points_rebounds_assists,player_blocks,player_steals,player_turnovers",
   },
   basketball_wnba: {
     derivatives: "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
     alternates: "alternate_spreads,alternate_totals",
+    props:
+      "player_points,player_rebounds,player_assists,player_threes," +
+      "player_points_rebounds_assists",
   },
   icehockey_nhl: {
     alternates: "alternate_spreads,alternate_totals",
-    props: "player_shots_on_goal",
+    props:
+      "player_shots_on_goal,player_points,player_goals,player_assists," +
+      "player_total_saves",
   },
   baseball_mlb: {
     alternates: "alternate_spreads,alternate_totals",
+    props:
+      "pitcher_strikeouts,pitcher_outs,batter_hits,batter_total_bases," +
+      "batter_home_runs,batter_rbis,batter_runs_scored,batter_stolen_bases",
   },
 };
 
