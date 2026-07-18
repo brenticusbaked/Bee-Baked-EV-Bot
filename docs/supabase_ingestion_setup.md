@@ -65,14 +65,36 @@ supabase secrets set ODDS_EXTENDED_EVERY_N_SLOTS=3
 Optional budget/expansion controls (defaults shown):
 
 ```bash
-# Strict per-run credit ceiling. 5 credits x 144 runs/day ~= monthly 20k budget.
-supabase secrets set ODDS_MAX_CREDITS_PER_RUN=5
+# Per-run credit ceiling. Paired with the game-hours cron (~49 runs/day) this
+# lands ~19-20k credits/month with two in-season sports. Raise/lower to match
+# your cron cadence and how many sports are in ODDS_API_ACTIVE_SPORTS.
+supabase secrets set ODDS_MAX_CREDITS_PER_RUN=14
 # Per-event enrichment (derivatives / alternates / player props) is fetched from
 # the per-event odds endpoint and rotates across runs by a time-based slot.
 supabase secrets set ODDS_MAX_EVENTS_PER_ENRICH=2
 supabase secrets set ODDS_API_ENRICH_REGIONS=us
 supabase secrets set ENABLE_MARKET_ENRICHMENT=true
 ```
+
+Budget is concentrated on the sports the syndicate is historically best at and on
+the hours markets are actually up. From the transaction history, realized ROI on
+straight bets the engine would flag (predicted EV > 0) is: MLB +7.1% (n=1720),
+WNBA +4.1% (n=472), NBA +3.5% (n=2574), NHL +14% (small n). Keep the strongest
+**in-season** sports first (the first sport is favored by the always-run-first
+rule) and trim idle leagues so their main pulls don't burn credits:
+
+```bash
+# In-season now (summer). Add basketball_nba,icehockey_nhl when their seasons
+# resume — and either raise the ceiling or slow the cron, since each extra sport
+# adds ~6 credits/run to the main-market baseline.
+supabase secrets set ODDS_API_ACTIVE_SPORTS=baseball_mlb,basketball_wnba
+```
+
+The cron in `supabase_edge_cron_setup.sql` runs every 20 min during prime game
+hours (16:00-04:59 UTC ≈ 11am-midnight CT), every 30 min in the morning pregame
+window (11:00-15:59 UTC), and **pauses overnight** (05:00-10:59 UTC ≈ 12am-6am CT)
+since no bets are placed then. The continuous +EV alert workflow is paused in the
+same overnight window.
 
 ## 3. Schedule The Function
 
