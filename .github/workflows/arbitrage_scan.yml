@@ -2,10 +2,10 @@ name: Arbitrage Scanner
 
 on:
   schedule:
-    # Continuous (every 10 min). Reads the Supabase cache only — no Odds API
-    # credits are spent. Arbs are restricted to two distinct American books
-    # (Pinnacle excluded), so short-lived cross-book discrepancies aren't missed.
-    - cron: '*/10 * * * *'
+    # Every 30 min. Reads the Supabase cache only — no Odds API credits are
+    # spent. Arbs are restricted to two distinct American books (Pinnacle
+    # excluded). Tighten the cron for faster arb detection at more Actions cost.
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 concurrency:

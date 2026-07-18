@@ -42,7 +42,24 @@ supabase secrets set ODDS_INGEST_FUNCTION_SECRET=<shared-secret>
 supabase secrets set ODDS_API_ACTIVE_SPORTS=basketball_nba,basketball_wnba,baseball_mlb,icehockey_nhl
 supabase secrets set ODDS_API_MARKETS=h2h,spreads,totals
 supabase secrets set ODDS_API_REGIONS=us,eu
-supabase secrets set ODDS_API_TARGET_BOOKS=pinnacle,fanduel,draftkings,betmgm,bet365,caesars
+# Bovada is in the `us` region, so it is covered by the main pull at no extra cost.
+supabase secrets set ODDS_API_TARGET_BOOKS=pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada
+```
+
+Extended US exchange coverage (Novig etc.) — these live in the `us_ex` region,
+billed separately, so they are pulled on a slower rotation. Cost is per region,
+not per book, so Kalshi/Polymarket/ProphetX ride along for free with Novig:
+
+```bash
+supabase secrets set ODDS_API_EXTENDED_REGIONS=us_ex
+supabase secrets set ODDS_API_EXTENDED_BOOKS=novig,kalshi,polymarket,prophetx
+# Run the extended pull every Nth 10-min slot (3 = every 30 min). 0 disables it.
+supabase secrets set ODDS_EXTENDED_EVERY_N_SLOTS=3
+# To also add Fliff / ESPN BET (ex-theScore), which live in the separate `us2`
+# region (extra per-region credit): ODDS_API_EXTENDED_REGIONS=us_ex,us2 and add
+# fliff,espnbet to ODDS_API_EXTENDED_BOOKS. theScore Bet is now ESPN BET (espnbet).
+# Onyx Odds, and standalone Kalshi/Polymarket beyond us_ex, are not otherwise
+# offered by The Odds API.
 ```
 
 Optional budget/expansion controls (defaults shown):

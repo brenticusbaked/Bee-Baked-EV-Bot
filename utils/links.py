@@ -13,7 +13,13 @@ def sportsbook_search_link(bookmaker: str, query_text: str) -> str:
         "betrivers": f"https://betrivers.com/?page=search&q={query}",
         "bovada": f"https://www.bovada.lv/sports?search={query}",
         "espn": f"https://espnbet.com/search?q={query}",
+        "espnbet": f"https://espnbet.com/search?q={query}",
         "fanatics": f"https://sportsbook.fanatics.com/search?q={query}",
         "prizepicks": f"https://app.prizepicks.com/search/{query}",
+        "novig": f"https://novig.us/search?q={query}",
+        "prophetx": f"https://app.prophetx.co/search?q={query}",
+        "kalshi": f"https://kalshi.com/search?q={query}",
+        "polymarket": f"https://polymarket.com/search?q={query}",
+        "fliff": f"https://www.getfliff.com/?q={query}",
     }
     return links.get(book, f"https://www.google.com/search?q={urllib.parse.quote(bookmaker)}+{query}")

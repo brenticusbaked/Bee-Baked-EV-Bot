@@ -3,10 +3,11 @@ name: Continuous +EV Scan
 # Continuous +EV alerting. Reads the Supabase market cache (populated every 10
 # minutes by the odds-cache-ingest Edge Function) and runs the full unified
 # scan. Makes NO Odds API requests, so it spends no credits — only GitHub
-# Actions minutes. Duplicate alerts are suppressed by the alert pipeline dedupe.
+# Actions minutes. Runs every 30 min to conserve Actions minutes; tighten the
+# cron if you need faster alerts. Duplicate alerts are suppressed by dedupe.
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 concurrency:

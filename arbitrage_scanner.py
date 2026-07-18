@@ -23,8 +23,8 @@ ARBITRAGE_US_BOOKS = {
     book.strip().lower()
     for book in os.getenv(
         "ARBITRAGE_US_BOOKS",
-        "fanduel,draftkings,betmgm,caesars,bet365,bovada,espnbet,"
-        "fanatics,betrivers,pointsbetus,hardrockbet,wynnbet,superbook",
+        "fanduel,draftkings,betmgm,caesars,bet365,bovada,novig,kalshi,"
+        "polymarket,prophetx,espnbet,fanatics,betrivers,hardrockbet,fliff",
     ).split(",")
     if book.strip()
 }

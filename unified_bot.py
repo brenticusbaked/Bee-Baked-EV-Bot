@@ -399,7 +399,10 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
     near_misses = []
     scanned_candidates = []
     book_weights = get_book_weights()
-    soft_books = ["fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada"]
+    soft_books = [
+        "fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada",
+        "novig", "kalshi", "polymarket", "prophetx",
+    ]
     graded_bets = get_all_graded_bets()
     today_bets = get_today_bets()
     exposure_tracker = ExposureTracker() if ENABLE_CORRELATION_LIMITS else None
