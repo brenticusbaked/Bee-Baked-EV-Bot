@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from db_manager import get_master_cache, load_tracker_state, save_tracker_state
+from db_manager import get_market_cache, load_tracker_state, save_tracker_state
 from services.alerts import send_discord_alert
 from services.discord_channels import ARBITRAGE_WEBHOOK_URL
 from utils.odds import decimal_implied_probability, decimal_to_american
@@ -190,7 +190,7 @@ def send_arbitrage_alerts(opportunities: List[dict], sent_keys: Optional[set[str
 
 
 def run_arbitrage_scan() -> dict:
-    cache = get_master_cache() or {}
+    cache = get_market_cache() or {}
     if not cache:
         return {"detail": "cache empty", "count": 0, "label": "alerts"}
     opportunities = find_arbitrage_opportunities(cache)

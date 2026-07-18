@@ -15,6 +15,15 @@ class PipelineTask:
 
 
 def get_refresh_tasks() -> List[PipelineTask]:
+    # Supabase-first ingestion: hydrate the scanner cache from the
+    # historical_odds table (populated by the odds-cache-ingest Edge Function)
+    # instead of spending Odds API credits from the pipeline. The legacy HTTP
+    # fetcher remains available behind an escape-hatch flag for emergencies.
+    if env_flag("ENABLE_SUPABASE_FIRST_INGESTION", True):
+        from db_manager import hydrate_market_cache
+
+        return [PipelineTask(name="hydrate_market_cache", func=hydrate_market_cache)]
+
     from master_odds_fetcher import run_fetcher
 
     return [PipelineTask(name="master_odds_fetcher", func=run_fetcher)]

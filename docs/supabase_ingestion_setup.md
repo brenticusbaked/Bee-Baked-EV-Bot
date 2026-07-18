@@ -40,6 +40,18 @@ supabase secrets set ODDS_API_REGIONS=us,eu
 supabase secrets set ODDS_API_TARGET_BOOKS=pinnacle,fanduel,draftkings,betmgm,bet365,caesars
 ```
 
+Optional budget/expansion controls (defaults shown):
+
+```bash
+# Strict per-run credit ceiling. 5 credits x 144 runs/day ~= monthly 20k budget.
+supabase secrets set ODDS_MAX_CREDITS_PER_RUN=5
+# Per-event enrichment (derivatives / alternates / player props) is fetched from
+# the per-event odds endpoint and rotates across runs by a time-based slot.
+supabase secrets set ODDS_MAX_EVENTS_PER_ENRICH=2
+supabase secrets set ODDS_API_ENRICH_REGIONS=us
+supabase secrets set ENABLE_MARKET_ENRICHMENT=true
+```
+
 ## 3. Schedule The Function
 
 Run `supabase_edge_cron_setup.sql` after replacing:
@@ -47,7 +59,7 @@ Run `supabase_edge_cron_setup.sql` after replacing:
 - `<project-ref>`
 - `<replace-with-ODDS_INGEST_FUNCTION_SECRET>`
 
-The schedule is every 5 minutes. Use Supabase cron controls to pause it on non-game days or narrow `ODDS_API_ACTIVE_SPORTS`.
+The schedule is every 10 minutes (144 runs/day). The Edge Function enforces a strict per-run credit ceiling (`ODDS_MAX_CREDITS_PER_RUN`) and rotates the main pulls and the expensive derivative/alternate/player-prop enrichment across cycles so the monthly budget (~20k credits) is respected. Use Supabase cron controls to pause it on non-game days or narrow `ODDS_API_ACTIVE_SPORTS`.
 
 ## 4. Realtime Subscriptions
 

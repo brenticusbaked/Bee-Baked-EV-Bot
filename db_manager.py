@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
@@ -193,6 +193,8 @@ REQUIRED_TABLES = [
     "execution_child_orders",
     "execution_fills",
     "venue_metrics",
+    "fixtures",
+    "historical_odds",
 ]
 
 def validate_supabase_connection() -> Dict[str, Any]:
@@ -656,6 +658,202 @@ def save_master_cache(cache_data):
 
 def get_master_cache():
     return get_odds_cache()
+
+# ============================================================
+# Supabase-first ingestion: reconstruct the scanner cache from
+# the historical_odds table (populated continuously by the
+# odds-cache-ingest Edge Function) instead of calling The Odds API.
+# ============================================================
+
+HISTORICAL_ODDS_MAX_AGE_MINUTES = int(os.getenv("HISTORICAL_ODDS_MAX_AGE_MINUTES", "180"))
+_HISTORICAL_ODDS_PAGE_SIZE = int(os.getenv("HISTORICAL_ODDS_PAGE_SIZE", "1000"))
+_HISTORICAL_ODDS_MAX_ROWS = int(os.getenv("HISTORICAL_ODDS_MAX_ROWS", "50000"))
+
+
+def _row_recency(row: Dict[str, Any]) -> str:
+    """Sort key for choosing the freshest quote for an outcome."""
+    return str(row.get("last_update") or row.get("captured_at") or "")
+
+
+def assemble_cache(
+    fixtures_rows: List[Dict[str, Any]],
+    odds_rows: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Rebuild the nested ``{sport: [event, ...]}`` cache the scanners expect
+    from flat ``fixtures`` + ``historical_odds`` rows. For each
+    fixture/book/market/outcome the most recent price (by ``last_update``,
+    falling back to ``captured_at``) wins. Pure function for easy testing.
+    """
+    fixture_index: Dict[str, Dict[str, Any]] = {}
+    for fixture in fixtures_rows or []:
+        fixture_id = str(fixture.get("id"))
+        if not fixture_id:
+            continue
+        fixture_index[fixture_id] = {
+            "id": fixture_id,
+            "sport_key": fixture.get("sport_key"),
+            "commence_time": fixture.get("commence_time"),
+            "home_team": fixture.get("home_team"),
+            "away_team": fixture.get("away_team"),
+        }
+
+    # freshest[(fixture, book, market, name, description, point)] = row
+    freshest: Dict[tuple, Dict[str, Any]] = {}
+    for row in odds_rows or []:
+        fixture_id = str(row.get("fixture_id"))
+        if not fixture_id:
+            continue
+        outcome_key = (
+            fixture_id,
+            str(row.get("bookmaker_key", "")),
+            str(row.get("market_key", "")),
+            str(row.get("outcome_name", "")).lower().strip(),
+            str(row.get("outcome_description") or "").lower().strip(),
+            str(row.get("point") if row.get("point") is not None else ""),
+        )
+        current = freshest.get(outcome_key)
+        if current is None or _row_recency(row) >= _row_recency(current):
+            freshest[outcome_key] = row
+
+    # Nested assembly: sport -> event -> book -> market -> outcomes
+    events: Dict[str, Dict[str, Any]] = {}
+    for row in freshest.values():
+        fixture_id = str(row.get("fixture_id"))
+        sport = row.get("sport_key") or (fixture_index.get(fixture_id, {}) or {}).get("sport_key")
+        if not sport:
+            continue
+
+        event = events.get(fixture_id)
+        if event is None:
+            base = fixture_index.get(fixture_id, {"id": fixture_id, "sport_key": sport})
+            event = {
+                "id": fixture_id,
+                "sport_key": sport,
+                "commence_time": base.get("commence_time"),
+                "home_team": base.get("home_team"),
+                "away_team": base.get("away_team"),
+                "bookmakers": [],
+                "_books": {},
+            }
+            events[fixture_id] = event
+
+        book_key = str(row.get("bookmaker_key", ""))
+        book = event["_books"].get(book_key)
+        if book is None:
+            book = {
+                "key": book_key,
+                "title": row.get("bookmaker_title") or book_key,
+                "markets": [],
+                "_markets": {},
+            }
+            event["_books"][book_key] = book
+            event["bookmakers"].append(book)
+
+        market_key = str(row.get("market_key", ""))
+        market = book["_markets"].get(market_key)
+        if market is None:
+            market = {"key": market_key, "outcomes": []}
+            book["_markets"][market_key] = market
+            book["markets"].append(market)
+
+        outcome: Dict[str, Any] = {
+            "name": row.get("outcome_name"),
+            "price": float(row.get("price_decimal")),
+        }
+        if row.get("point") is not None:
+            outcome["point"] = row.get("point")
+        if row.get("outcome_description"):
+            outcome["description"] = row.get("outcome_description")
+        market["outcomes"].append(outcome)
+
+    cache: Dict[str, List[Dict[str, Any]]] = {}
+    for event in events.values():
+        for book in event["bookmakers"]:
+            book.pop("_markets", None)
+        event.pop("_books", None)
+        cache.setdefault(event["sport_key"], []).append(event)
+    return cache
+
+
+def _fetch_recent_historical_odds(cutoff_iso: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    offset = 0
+    while offset < _HISTORICAL_ODDS_MAX_ROWS:
+        end = offset + _HISTORICAL_ODDS_PAGE_SIZE - 1
+        page = (
+            supabase.table("historical_odds")
+            .select(
+                "fixture_id,sport_key,bookmaker_key,bookmaker_title,market_key,"
+                "outcome_name,outcome_description,point,price_decimal,last_update,captured_at"
+            )
+            .gte("captured_at", cutoff_iso)
+            .order("captured_at", desc=False)
+            .range(offset, end)
+            .execute()
+            .data
+        )
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < _HISTORICAL_ODDS_PAGE_SIZE:
+            break
+        offset += _HISTORICAL_ODDS_PAGE_SIZE
+    return rows
+
+
+def build_cache_from_historical_odds(
+    max_age_minutes: Optional[int] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Query Supabase ``fixtures`` + ``historical_odds`` and assemble the
+    scanner cache. Returns ``{}`` when Supabase is unavailable so callers can
+    fall back to the local cache.
+    """
+    age = HISTORICAL_ODDS_MAX_AGE_MINUTES if max_age_minutes is None else max_age_minutes
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=age)).isoformat()
+
+    def action():
+        odds_rows = _fetch_recent_historical_odds(cutoff_iso)
+        if not odds_rows:
+            return {}
+        fixtures_rows = (
+            supabase.table("fixtures")
+            .select("id,sport_key,commence_time,home_team,away_team")
+            .execute()
+            .data
+        )
+        return assemble_cache(fixtures_rows or [], odds_rows)
+
+    return _safe_execute(action, {})
+
+
+def get_market_cache(max_age_minutes: Optional[int] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Supabase-first market cache. Reads exclusively from ``historical_odds``;
+    on failure falls back to the last persisted local cache snapshot.
+    """
+    cache = build_cache_from_historical_odds(max_age_minutes=max_age_minutes)
+    if cache:
+        return cache
+    return _load_local_json(LOCAL_ODDS_CACHE_PATH, {})
+
+
+def hydrate_market_cache(max_age_minutes: Optional[int] = None) -> Dict[str, Any]:
+    """Pipeline refresh step: rebuild the cache from ``historical_odds`` and
+    persist it to the ``odds_cache`` blob + local snapshot so every downstream
+    scanner reads Supabase-sourced data (no Odds API HTTP calls)."""
+    cache = build_cache_from_historical_odds(max_age_minutes=max_age_minutes)
+    if not cache:
+        return {
+            "detail": "historical_odds empty or unreachable; kept previous cache",
+            "count": 0,
+            "label": "updates",
+        }
+    save_master_cache(cache)
+    event_count = sum(len(events) for events in cache.values())
+    return {
+        "detail": f"hydrated cache from historical_odds | sports={len(cache)} events={event_count}",
+        "count": len(cache),
+        "label": "updates",
+    }
 
 def load_tracker_state(state_key: str, fallback_path: str):
     def action():

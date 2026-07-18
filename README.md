@@ -73,7 +73,7 @@ The syndicate can now move Odds API ingestion into Supabase so local Codex work 
 
 * `supabase_market_data_schema.sql` creates `fixtures`, `historical_odds`, `syndicate_bets`, and `odds_ingest_runs`.
 * `supabase/functions/odds-cache-ingest/index.ts` is a Supabase Edge Function that fetches configured markets and upserts snapshots.
-* `supabase_edge_cron_setup.sql` is a pg_cron/pg_net template for a 5-minute schedule.
+* `supabase_edge_cron_setup.sql` is a pg_cron/pg_net template for a 10-minute schedule (144 runs/day) with a strict per-run credit ceiling and rotation across derivative/alternate/player-prop markets.
 * `docs/supabase_ingestion_setup.md` has deployment steps and realtime subscription examples.
 * `docs/codex_orchestration.md` documents the Codex/GitHub/backtesting workflow.
 * `codex_skills/syndicate-quant-analysis` is a repo-local skill for strategy analysis and PR-oriented backtesting.
