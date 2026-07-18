@@ -1,0 +1,9 @@
+# Supabase project configuration.
+#
+# The odds ingestion function is machine-to-machine: it is invoked by pg_cron
+# and guards itself with the ODDS_INGEST_FUNCTION_SECRET (x-ingest-secret
+# header). Disabling platform JWT verification lets the cron call it with only
+# that secret, instead of also needing an Authorization: Bearer <anon key>
+# header. See supabase/functions/odds-cache-ingest/index.ts.
+[functions.odds-cache-ingest]
+verify_jwt = false
