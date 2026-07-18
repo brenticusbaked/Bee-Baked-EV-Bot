@@ -40,7 +40,17 @@ type IngestJob = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const ODDS_API_KEY = Deno.env.get("ODDS_API_KEY") ?? "";
+// Tiered key pool in strict priority order: ODDS_API_KEY is the 20k-credit
+// primary that carries the whole budget; ODDS_API_KEY_2..4 are 500-credit/mo
+// reserves used ONLY as failover on quota/auth errors (401/402/429). Keys are
+// tried in this fixed order (never round-robin) so the small reserve keys are
+// not burned prematurely and a single exhausted key never stalls ingestion.
+const ODDS_API_KEYS = [
+  Deno.env.get("ODDS_API_KEY") ?? "",
+  Deno.env.get("ODDS_API_KEY_2") ?? "",
+  Deno.env.get("ODDS_API_KEY_3") ?? "",
+  Deno.env.get("ODDS_API_KEY_4") ?? "",
+].map((key) => key.trim()).filter(Boolean);
 const INGEST_SECRET = Deno.env.get("ODDS_INGEST_FUNCTION_SECRET") ?? "";
 const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
 const BOOKMAKERS = Deno.env.get("ODDS_API_TARGET_BOOKS") ??
@@ -160,15 +170,31 @@ function buildJobs(slot: number): IngestJob[] {
   return [...rotate(mainJobs, slot), ...rotate(enrichJobs, slot)];
 }
 
+// Fetch with tiered-key failover in strict priority order (primary 20k key
+// first, then 500-credit reserves). Advances to the next key only on
+// quota/auth errors so one exhausted key never stalls the run.
+async function oddsFetch(url: URL): Promise<Response> {
+  let lastResponse: Response | null = null;
+  for (const key of ODDS_API_KEYS) {
+    url.searchParams.set("apiKey", key);
+    const response = await fetch(url);
+    if (![401, 402, 429].includes(response.status)) {
+      return response;
+    }
+    lastResponse = response;
+  }
+  if (lastResponse) return lastResponse;
+  throw new Error("no Odds API keys configured");
+}
+
 async function fetchMain(job: IngestJob): Promise<{ events: OddsEvent[]; creditsUsed: number; remaining: number | null }> {
   const url = new URL(`https://api.the-odds-api.com/v4/sports/${job.sportKey}/odds`);
-  url.searchParams.set("apiKey", ODDS_API_KEY);
   url.searchParams.set("regions", job.regions);
   url.searchParams.set("markets", job.markets);
   url.searchParams.set("bookmakers", BOOKMAKERS);
   url.searchParams.set("oddsFormat", "decimal");
 
-  const response = await fetch(url);
+  const response = await oddsFetch(url);
   const remaining = numericHeader(response, "x-requests-remaining");
   const lastCost = numericHeader(response, "x-requests-last");
   if (!response.ok) {
@@ -185,13 +211,12 @@ async function fetchEventOdds(
   regions: string,
 ): Promise<{ event: OddsEvent | null; creditsUsed: number; remaining: number | null }> {
   const url = new URL(`https://api.the-odds-api.com/v4/sports/${sportKey}/events/${eventId}/odds`);
-  url.searchParams.set("apiKey", ODDS_API_KEY);
   url.searchParams.set("regions", regions);
   url.searchParams.set("markets", markets);
   url.searchParams.set("bookmakers", BOOKMAKERS);
   url.searchParams.set("oddsFormat", "decimal");
 
-  const response = await fetch(url);
+  const response = await oddsFetch(url);
   const remaining = numericHeader(response, "x-requests-remaining");
   const lastCost = numericHeader(response, "x-requests-last");
   if (response.status === 404 || response.status === 422) {
@@ -323,7 +348,7 @@ serve(async (request) => {
   if (INGEST_SECRET && request.headers.get("x-ingest-secret") !== INGEST_SECRET) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
   }
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !ODDS_API_KEY) {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || ODDS_API_KEYS.length === 0) {
     return new Response(JSON.stringify({ error: "missing required environment variables" }), { status: 500 });
   }
 

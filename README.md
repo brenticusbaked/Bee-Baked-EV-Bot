@@ -98,9 +98,10 @@ python -m unittest discover -s tests -p "test_*.py"
 The GitHub Actions `Tests` workflow runs the same command on pushes and pull requests, so runtime workflows are not the first place regressions are caught.
 
 **Environment Variables:** Add the following to your GitHub Repository Secrets:
-* `ODDS_API_KEY`
-* `ODDS_API_KEY_2` (Optional: targeted secondary Odds API expansion for extra markets)
-* `ODDS_API_KEY_3` (Optional: tertiary Odds API expansion for NHL totals and MLB spreads/totals)
+* `ODDS_API_KEY` (Primary 20,000-credit key — carries the monthly budget)
+* `ODDS_API_KEY_2` (Optional: 500-credit/mo reserve — failover only)
+* `ODDS_API_KEY_3` (Optional: 500-credit/mo reserve — failover only)
+* `ODDS_API_KEY_4` (Optional: 500-credit/mo reserve — failover only)
 * `SGO_API_KEY`
 * `DISCORD_WEBHOOK_URL`
 * `DISCORD_BET_ALERTS_WEBHOOK_URL` (Optional: dedicated positive-EV/scraper-alerts channel; falls back to `DISCORD_WEBHOOK_URL`)
