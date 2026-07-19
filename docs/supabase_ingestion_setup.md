@@ -43,7 +43,11 @@ supabase secrets set ODDS_API_ACTIVE_SPORTS=basketball_nba,basketball_wnba,baseb
 supabase secrets set ODDS_API_MARKETS=h2h,spreads,totals
 supabase secrets set ODDS_API_REGIONS=us,eu
 # Bovada is in the `us` region, so it is covered by the main pull at no extra cost.
-supabase secrets set ODDS_API_TARGET_BOOKS=pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada
+# The Odds API bills per region (or per 10 books), NOT per individual book, so up
+# to 10 books is free. More books = broader consensus baseline for props + more
+# soft-book mispricings caught. Keep pinnacle first (eu sharp baseline) and the
+# list at <=10 (books past 10 bill as an extra region-equivalent).
+supabase secrets set ODDS_API_TARGET_BOOKS=pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers
 ```
 
 Extended US exchange coverage (Novig etc.) — these live in the `us_ex` region,
@@ -75,6 +79,31 @@ supabase secrets set ODDS_MAX_EVENTS_PER_ENRICH=2
 supabase secrets set ODDS_API_ENRICH_REGIONS=us
 supabase secrets set ENABLE_MARKET_ENRICHMENT=true
 ```
+
+Player-prop coverage (`SPORT_EXTRAS` in the Edge Function) spans the standard
+counting-stat Over/Under props for each sport (MLB pitcher/batter props, NBA/WNBA
+points/rebounds/assists/threes/combos, NHL points/goals/assists/SOG/saves) plus
+team alternate spreads/totals and quarter/half derivatives. Markets are split into
+small groups (≤5 markets each) that rotate across cron slots so no single group
+blows the per-run ceiling.
+
+Because every prop is priced against the **Pinnacle** baseline (multiplicative
+de-vig; `.windsurfrules` Rule 1), each enrich group is pulled twice — once from
+`eu`/`pinnacle` (sharp baseline, `ODDS_API_ENRICH_SHARP_REGIONS`) and once from
+`us`/rec books (`ODDS_API_ENRICH_REGIONS`) — kept as separate requests per Rule 2.
+The cache merges them back per fixture. Without the sharp pull, props have no
+baseline and never alert. Coverage is limited to markets Pinnacle actually posts
+as clean two-way props; alternate player-prop ladders, first-basket, anytime-
+scorer and double/triple-double are intentionally excluded (the Pinnacle-baseline
+engine cannot price them — that needs a distribution model off the main line).
+
+Adding market breadth does **not** raise the monthly credit total on its own — the
+`ODDS_MAX_CREDITS_PER_RUN` ceiling is fixed, so more markets simply share the same
+budget via rotation (breadth vs. per-line refresh frequency). Widening
+`ODDS_API_TARGET_BOOKS` up to 10 books is free (billed per region, not per book).
+To refresh props faster, raise the ceiling and/or `ODDS_MAX_EVENTS_PER_ENRICH` and
+watch `odds_ingest_runs.credits_used`. Unsupported / out-of-season markets return
+404/422 and are treated as billed no-ops.
 
 Budget is concentrated on the sports the syndicate is historically best at and on
 the hours markets are actually up. From the transaction history, realized ROI on

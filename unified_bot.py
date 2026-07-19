@@ -86,13 +86,20 @@ def calculate_edge_from_probability(offered_price: float, fair_probability: floa
     return (float(offered_price) * float(fair_probability)) - 1.0
 
 
+# Player-prop market keys are prefixed by role: NBA/WNBA/NHL use `player_`, MLB
+# uses `batter_` / `pitcher_`. All are per-player Over/Under pairs priced the same
+# way (multiplicative de-vig off the Pinnacle baseline), so they must all be
+# recognized as props — otherwise MLB props get ingested but never evaluated.
+_PLAYER_PROP_PREFIXES = ("player_", "batter_", "pitcher_")
+
+
 def _is_player_prop_market(market_type: str) -> bool:
-    return str(market_type).strip().lower().startswith("player_")
+    return str(market_type).strip().lower().startswith(_PLAYER_PROP_PREFIXES)
 
 
 def _market_family(market_type: str) -> str:
     market_key = str(market_type).strip().lower()
-    if market_key.startswith("player_"):
+    if market_key.startswith(_PLAYER_PROP_PREFIXES):
         return "player_prop"
     if market_key.startswith("alternate_"):
         return "alternate"

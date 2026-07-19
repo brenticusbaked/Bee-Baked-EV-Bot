@@ -41,6 +41,62 @@ def _prop_event():
     }
 
 
+def _mlb_prop_event():
+    return {
+        "id": "evt_mlb_prop",
+        "home_team": "Yankees",
+        "away_team": "Red Sox",
+        "bookmakers": [
+            {
+                "key": "pinnacle",
+                "title": "Pinnacle",
+                "markets": [
+                    {
+                        "key": "pitcher_strikeouts",
+                        "outcomes": [
+                            {"name": "Over", "description": "Gerrit Cole", "point": 6.5, "price": 1.90},
+                            {"name": "Under", "description": "Gerrit Cole", "point": 6.5, "price": 1.90},
+                        ],
+                    }
+                ],
+            },
+            {
+                "key": "draftkings",
+                "title": "DraftKings",
+                "markets": [
+                    {
+                        "key": "pitcher_strikeouts",
+                        "outcomes": [
+                            {"name": "Over", "description": "Gerrit Cole", "point": 6.5, "price": 2.15},
+                            {"name": "Under", "description": "Gerrit Cole", "point": 6.5, "price": 1.72},
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+
+
+class PlayerPropMarketRecognitionTests(unittest.TestCase):
+    def test_mlb_role_prefixes_recognized_as_props(self):
+        for key in ("pitcher_strikeouts", "pitcher_outs", "batter_hits", "batter_total_bases"):
+            self.assertTrue(unified_bot._is_player_prop_market(key), key)
+            self.assertEqual(unified_bot._market_family(key), "player_prop", key)
+
+    def test_mlb_prop_generates_alert(self):
+        with patch.object(unified_bot, "is_already_logged", return_value=False), \
+                patch.object(unified_bot, "log_bet_to_db", return_value=True):
+            alerts = unified_bot.evaluate_player_props(
+                _mlb_prop_event(),
+                "baseball_mlb",
+                ["draftkings", "fanduel"],
+                {},
+            )
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("Gerrit Cole", alerts[0]["description"])
+        self.assertIn("PITCHER_STRIKEOUTS", alerts[0]["description"])
+
+
 class PlayerPropEvaluationTests(unittest.TestCase):
     def test_multiplicative_fair_probability(self):
         # Direct check of the asymmetric-juice de-vig formula.
