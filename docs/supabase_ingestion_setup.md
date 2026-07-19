@@ -125,6 +125,21 @@ window (11:00-15:59 UTC), and **pauses overnight** (05:00-10:59 UTC ≈ 12am-6am
 since no bets are placed then. The continuous +EV alert workflow is paused in the
 same overnight window.
 
+### Alert dedup & opposite-side suppression
+
+The scanner (`unified_bot.scan_markets` / `evaluate_player_props`) will not send
+the same bet twice or both sides of the same wager:
+
+- **Duplicate bets** — a selection already logged today for the same
+  event+market is skipped (`is_already_logged`).
+- **Opposite sides** — only one directional side is alerted per event+market:
+  never both moneylines, never both a spread and its mirror, never Over **and**
+  Under of the same total or the same player-prop line. A correctly de-vigged
+  Pinnacle baseline has at most one +EV side, so both sides showing as +EV means
+  stale/mismatched data — the higher-edge side wins and the opposite is dropped.
+  This holds both **within a run** (best side chosen) and **across runs** (the
+  opposite of a side already alerted today is suppressed via the open-bet log).
+
 ## 3. Schedule The Function
 
 Run `supabase_edge_cron_setup.sql` after replacing:
