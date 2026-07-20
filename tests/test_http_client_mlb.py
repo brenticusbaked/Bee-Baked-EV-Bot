@@ -30,6 +30,20 @@ class ResidentialProxyTests(unittest.TestCase):
         self.assertIn("user-session-", proxies["http"])
         self.assertIn("@1.2.3.4:8080", proxies["http"])
 
+    def test_url_encodes_credentials_with_special_chars(self):
+        with mock.patch.object(http_client, "_PROXY_IPS", ["1.2.3.4:8080"]), \
+             mock.patch.object(http_client, "_PROXY_USERNAME", "us@r"), \
+             mock.patch.object(http_client, "_PROXY_PASSWORD", "p@ss:w0rd/#"):
+            proxies = http_client._residential_proxies()
+        # Raw special chars would break the proxy URL and cause a 407; they must
+        # be percent-encoded in the userinfo, and only one '@' separates userinfo
+        # from host.
+        self.assertIsNotNone(proxies)
+        self.assertNotIn("p@ss", proxies["http"])
+        self.assertIn("p%40ss%3Aw0rd%2F%23", proxies["http"])
+        self.assertEqual(proxies["http"].count("@"), 1)
+        self.assertTrue(proxies["http"].endswith("@1.2.3.4:8080"))
+
 
 class MlbRequestTests(unittest.TestCase):
     def test_retries_on_406_then_succeeds(self):

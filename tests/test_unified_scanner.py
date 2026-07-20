@@ -13,13 +13,23 @@ class EvFloorTests(unittest.TestCase):
                 unified_bot._market_ev_threshold("spreads"), unified_bot.UNIFIED_EV_FLOOR
             )
 
-    def test_history_floor_only_raises_never_lowers(self):
-        with patch("unified_bot.validated_ev_floor", return_value=0.05):
-            self.assertEqual(unified_bot._market_ev_threshold("spreads"), 0.05)
-        with patch("unified_bot.validated_ev_floor", return_value=0.0):
-            self.assertEqual(
-                unified_bot._market_ev_threshold("spreads"), unified_bot.UNIFIED_EV_FLOOR
-            )
+    def test_history_floor_only_raises_never_lowers_when_enabled(self):
+        with patch("unified_bot.ENABLE_HISTORY_EV_FLOOR_RAISE", True):
+            with patch("unified_bot.validated_ev_floor", return_value=0.05):
+                self.assertEqual(unified_bot._market_ev_threshold("spreads"), 0.05)
+            with patch("unified_bot.validated_ev_floor", return_value=0.0):
+                self.assertEqual(
+                    unified_bot._market_ev_threshold("spreads"), unified_bot.UNIFIED_EV_FLOOR
+                )
+
+    def test_history_floor_raise_disabled_by_default(self):
+        # Default: explicit UNIFIED_EV_FLOOR is authoritative; history cannot
+        # snap the floor back up to a higher band.
+        with patch("unified_bot.ENABLE_HISTORY_EV_FLOOR_RAISE", False):
+            with patch("unified_bot.validated_ev_floor", return_value=0.05):
+                self.assertEqual(
+                    unified_bot._effective_ev_floor(), unified_bot.UNIFIED_EV_FLOOR
+                )
 
 
 class UnifiedScannerTests(unittest.TestCase):
