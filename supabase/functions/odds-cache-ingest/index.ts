@@ -37,6 +37,15 @@ type IngestJob = {
   regions: string;
   bookmakers?: string;
   estimatedCredits: number;
+  // Enrich jobs carry BOTH the sharp (Pinnacle/EU) and soft (US) pull as an
+  // atomic pair. They remain two separate API requests (Rule 2 — sharp/soft
+  // isolation), but are budgeted together so a sharp pull is never paid for
+  // without its soft counterpart. Undefined for main jobs.
+  sharpRegions?: string;
+  sharpBookmakers?: string;
+  softRegions?: string;
+  softBookmakers?: string;
+  perEventCredits?: number;
 };
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -90,18 +99,27 @@ const SOFT_BOOKMAKERS = (Deno.env.get("ODDS_API_TARGET_BOOKS") ??
 const EXTENDED_REGIONS = Deno.env.get("ODDS_API_EXTENDED_REGIONS") ?? "us_ex";
 const EXTENDED_BOOKS = Deno.env.get("ODDS_API_EXTENDED_BOOKS") ??
   "novig,kalshi,polymarket,prophetx";
-const EXTENDED_EVERY_N_SLOTS = Number(Deno.env.get("ODDS_EXTENDED_EVERY_N_SLOTS") ?? "3");
+// Disabled by default: the extended pull only adds the betting EXCHANGES
+// (Novig/Kalshi/Polymarket/ProphetX), which are used almost exclusively for the
+// arbitrage scanner. Scheduled arb alerts are off, so paying an extra billed
+// region for exchange lines every few slots is wasted budget — those freed
+// credits go to the sharp/soft prop pulls instead. Set
+// ODDS_EXTENDED_EVERY_N_SLOTS>0 to re-enable exchange coverage for manual arb.
+const EXTENDED_EVERY_N_SLOTS = Number(Deno.env.get("ODDS_EXTENDED_EVERY_N_SLOTS") ?? "0");
 const ENABLE_MARKET_ENRICHMENT =
   (Deno.env.get("ENABLE_MARKET_ENRICHMENT") ?? "true").toLowerCase() !== "false";
 
-// Strict per-run credit ceiling. Paired with the game-hours cron schedule
-// (~49 runs/day; see supabase_edge_cron_setup.sql), 14 credits/run lands ~19-20k
-// credits/month with two in-season sports (each main = 3 markets x us,eu = 6
-// credits) plus rotating alternates/props. The executor always runs the first
-// queued job so the rotation keeps making progress even if one job alone
-// exceeds the ceiling. Raise or lower this to match your cron cadence and the
-// number of in-season sports in ODDS_API_ACTIVE_SPORTS.
-const MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "14");
+// Strict per-run credit ceiling. Each prop group needs BOTH a sharp (Pinnacle/
+// EU) and a soft (US) per-event pull, and the two are budgeted as an atomic pair
+// (see the enrich executor) so a sharp pull is never paid for without its soft
+// counterpart. With two in-season sports the mains cost ~12 credits (2 sports x
+// 3 markets x us,eu) and one prop pair costs ~10 (5 markets x eu + 5 x us), so
+// the ceiling must clear ~22 for props to land at all — 14 could only ever fit
+// the sharp half, which is why soft-book props were missing. Paired with a
+// ~30-runs/day cron (see supabase_edge_cron_setup.sql), 24 credits/run lands
+// ~20k credits/month. Raise/lower to match your cron cadence and in-season
+// sport count in ODDS_API_ACTIVE_SPORTS.
+const MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "24");
 // Cap on how many events get per-event enrichment (props/alternates/derivatives)
 // in a single run. Events rotate across runs by the time-based slot.
 const MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_MAX_EVENTS_PER_ENRICH") ?? "2");
@@ -254,21 +272,19 @@ function buildJobs(slot: number): IngestJob[] {
       if (!extras) continue;
       for (const group of extras.groups) {
         if (!group) continue;
+        const pairCredits =
+          creditsFor(group, ENRICH_SHARP_REGIONS) + creditsFor(group, ENRICH_REGIONS);
         enrichJobs.push({
           kind: "enrich",
           sportKey,
           markets: group,
-          regions: ENRICH_SHARP_REGIONS,
-          bookmakers: SHARP_BOOK,
-          estimatedCredits: creditsFor(group, ENRICH_SHARP_REGIONS),
-        });
-        enrichJobs.push({
-          kind: "enrich",
-          sportKey,
-          markets: group,
-          regions: ENRICH_REGIONS,
-          bookmakers: SOFT_BOOKMAKERS,
-          estimatedCredits: creditsFor(group, ENRICH_REGIONS),
+          regions: `${ENRICH_SHARP_REGIONS},${ENRICH_REGIONS}`,
+          estimatedCredits: pairCredits,
+          perEventCredits: pairCredits,
+          sharpRegions: ENRICH_SHARP_REGIONS,
+          sharpBookmakers: SHARP_BOOK,
+          softRegions: ENRICH_REGIONS,
+          softBookmakers: SOFT_BOOKMAKERS,
         });
       }
     }
@@ -505,21 +521,38 @@ serve(async (request) => {
         const fixtureIds = await getUpcomingFixtureIds(job.sportKey);
         if (!fixtureIds.length) continue;
         const rotated = rotate(fixtureIds, slot).slice(0, MAX_EVENTS_PER_ENRICH);
+        const pairCredits = job.perEventCredits ?? job.estimatedCredits;
         for (const eventId of rotated) {
           const firstEnrich = apiRequests === 0;
-          if (!firstEnrich && creditsUsed + job.estimatedCredits > MAX_CREDITS_PER_RUN) break;
-          const { event, creditsUsed: cost, remaining: rem } = await fetchEventOdds(
+          // Reserve the FULL sharp+soft pair budget before starting so we never
+          // pay for a sharp pull that can't be de-vigged with a soft price into
+          // an alert (the bug that left soft-book props missing).
+          if (!firstEnrich && creditsUsed + pairCredits > MAX_CREDITS_PER_RUN) break;
+          // Sharp pull (Pinnacle/EU) — mandatory fair-value baseline.
+          const sharp = await fetchEventOdds(
             job.sportKey,
             eventId,
             job.markets,
-            job.regions,
-            job.bookmakers ?? BOOKMAKERS,
+            job.sharpRegions ?? ENRICH_SHARP_REGIONS,
+            job.sharpBookmakers ?? SHARP_BOOK,
           );
           apiRequests += 1;
-          creditsUsed += cost;
+          creditsUsed += sharp.creditsUsed;
+          if (sharp.remaining !== null) remaining = sharp.remaining;
+          if (sharp.event) oddsRows += await upsertOdds(job.sportKey, [sharp.event]);
+          // Soft pull (US rec books) — separate request (Rule 2), same event.
+          const soft = await fetchEventOdds(
+            job.sportKey,
+            eventId,
+            job.markets,
+            job.softRegions ?? ENRICH_REGIONS,
+            job.softBookmakers ?? SOFT_BOOKMAKERS,
+          );
+          apiRequests += 1;
+          creditsUsed += soft.creditsUsed;
+          if (soft.remaining !== null) remaining = soft.remaining;
+          if (soft.event) oddsRows += await upsertOdds(job.sportKey, [soft.event]);
           enrichedEvents += 1;
-          if (rem !== null) remaining = rem;
-          if (event) oddsRows += await upsertOdds(job.sportKey, [event]);
         }
       }
     }

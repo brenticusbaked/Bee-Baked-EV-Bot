@@ -51,14 +51,19 @@ supabase secrets set ODDS_API_TARGET_BOOKS=pinnacle,fanduel,draftkings,betmgm,be
 ```
 
 Extended US exchange coverage (Novig etc.) — these live in the `us_ex` region,
-billed separately, so they are pulled on a slower rotation. Cost is per region,
-not per book, so Kalshi/Polymarket/ProphetX ride along for free with Novig:
+billed separately. They add the betting **exchanges**, which are used almost
+exclusively by the arbitrage scanner; since scheduled arb alerts are off, the
+extended pull is **disabled by default** (`ODDS_EXTENDED_EVERY_N_SLOTS=0`) so
+those credits go to the sharp/soft prop pulls instead. Cost is per region, not
+per book, so Kalshi/Polymarket/ProphetX ride along for free with Novig if you
+re-enable it for manual arb:
 
 ```bash
 supabase secrets set ODDS_API_EXTENDED_REGIONS=us_ex
 supabase secrets set ODDS_API_EXTENDED_BOOKS=novig,kalshi,polymarket,prophetx
-# Run the extended pull every Nth 10-min slot (3 = every 30 min). 0 disables it.
-supabase secrets set ODDS_EXTENDED_EVERY_N_SLOTS=3
+# Run the extended pull every Nth 10-min slot (3 = every 30 min). 0 disables it
+# (default: disabled — re-enable only for manual arbitrage).
+supabase secrets set ODDS_EXTENDED_EVERY_N_SLOTS=0
 # To also add Fliff / ESPN BET (ex-theScore), which live in the separate `us2`
 # region (extra per-region credit): ODDS_API_EXTENDED_REGIONS=us_ex,us2 and add
 # fliff,espnbet to ODDS_API_EXTENDED_BOOKS. theScore Bet is now ESPN BET (espnbet).
@@ -69,10 +74,13 @@ supabase secrets set ODDS_EXTENDED_EVERY_N_SLOTS=3
 Optional budget/expansion controls (defaults shown):
 
 ```bash
-# Per-run credit ceiling. Paired with the game-hours cron (~49 runs/day) this
-# lands ~19-20k credits/month with two in-season sports. Raise/lower to match
-# your cron cadence and how many sports are in ODDS_API_ACTIVE_SPORTS.
-supabase secrets set ODDS_MAX_CREDITS_PER_RUN=14
+# Per-run credit ceiling. Each player-prop group needs BOTH a sharp (Pinnacle/EU)
+# and a soft (US) per-event pull, budgeted as an atomic pair, so the ceiling must
+# clear ~22 (2 sports main = 12 + one prop pair = 10) for props to land at all.
+# The old 14 could only fund the sharp half, so soft-book props never landed and
+# no prop could alert. Paired with the game-hours cron (~31 runs/day) 24 lands
+# ~20k credits/month. Raise/lower to match cron cadence and ODDS_API_ACTIVE_SPORTS.
+supabase secrets set ODDS_MAX_CREDITS_PER_RUN=24
 # Per-event enrichment (derivatives / alternates / player props) is fetched from
 # the per-event odds endpoint and rotates across runs by a time-based slot.
 supabase secrets set ODDS_MAX_EVENTS_PER_ENRICH=2
@@ -90,9 +98,13 @@ blows the per-run ceiling.
 Because every prop is priced against the **Pinnacle** baseline (multiplicative
 de-vig; `.windsurfrules` Rule 1), each enrich group is pulled twice — once from
 `eu`/`pinnacle` (sharp baseline, `ODDS_API_ENRICH_SHARP_REGIONS`) and once from
-`us`/rec books (`ODDS_API_ENRICH_REGIONS`) — kept as separate requests per Rule 2.
-The cache merges them back per fixture. Without the sharp pull, props have no
-baseline and never alert. Coverage is limited to markets Pinnacle actually posts
+`us`/rec books (`ODDS_API_ENRICH_REGIONS`) — kept as separate requests per Rule 2,
+but **budgeted together as an atomic pair**: the run reserves the full sharp+soft
+cost before starting, so it never pays for a sharp pull it can't complete with the
+matching soft pull (the bug that left soft-book props missing under the old
+14-credit ceiling). The cache merges them back per fixture. Without the soft pull
+there is nothing to compare to the Pinnacle baseline, so no prop can alert.
+Coverage is limited to markets Pinnacle actually posts
 as clean two-way props; alternate player-prop ladders, first-basket, anytime-
 scorer and double/triple-double are intentionally excluded (the Pinnacle-baseline
 engine cannot price them — that needs a distribution model off the main line).
@@ -119,8 +131,8 @@ rule) and trim idle leagues so their main pulls don't burn credits:
 supabase secrets set ODDS_API_ACTIVE_SPORTS=baseball_mlb,basketball_wnba
 ```
 
-The cron in `supabase_edge_cron_setup.sql` runs every 20 min during prime game
-hours (16:00-04:59 UTC ≈ 11am-midnight CT), every 30 min in the morning pregame
+The cron in `supabase_edge_cron_setup.sql` runs every 30 min during prime game
+hours (16:00-04:59 UTC ≈ 11am-midnight CT), every 60 min in the morning pregame
 window (11:00-15:59 UTC), and **pauses overnight** (05:00-10:59 UTC ≈ 12am-6am CT)
 since no bets are placed then. The continuous +EV alert workflow is paused in the
 same overnight window.
@@ -147,7 +159,7 @@ Run `supabase_edge_cron_setup.sql` after replacing:
 - `<project-ref>`
 - `<replace-with-ODDS_INGEST_FUNCTION_SECRET>`
 
-The schedule is every 10 minutes (144 runs/day). The Edge Function enforces a strict per-run credit ceiling (`ODDS_MAX_CREDITS_PER_RUN`) and rotates the main pulls and the expensive derivative/alternate/player-prop enrichment across cycles so the monthly budget (~20k credits) is respected. Use Supabase cron controls to pause it on non-game days or narrow `ODDS_API_ACTIVE_SPORTS`.
+The schedule runs during game hours only (~31 runs/day): every 30 min in prime hours, every 60 min mornings, paused overnight. The Edge Function enforces a strict per-run credit ceiling (`ODDS_MAX_CREDITS_PER_RUN`) and rotates the main pulls and the expensive derivative/alternate/player-prop enrichment (sharp+soft pairs) across cycles so the monthly budget (~20k credits) is respected. Use Supabase cron controls to pause it on non-game days or narrow `ODDS_API_ACTIVE_SPORTS`.
 
 ## 4. Realtime Subscriptions
 
