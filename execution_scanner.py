@@ -42,12 +42,23 @@ EXECUTION_DESK_WEBHOOK_URL = (
 )
 
 
-def _outcome_key(outcome: dict) -> Tuple[str, str]:
-    return (str(outcome["name"]).lower().strip(), str(outcome.get("point", "")))
+def _outcome_key(outcome: dict) -> Tuple[str, str, str]:
+    # Include the player description so props for different players who share a
+    # line (e.g. two players Over 6.5) are keyed — and de-vigged — separately
+    # instead of colliding into one (name, point) bucket.
+    return (
+        str(outcome["name"]).lower().strip(),
+        str(outcome.get("point", "")),
+        str(outcome.get("description") or "").lower().strip(),
+    )
 
 
 def _selection_text(outcome: dict) -> str:
-    return f"{outcome['name']} {outcome.get('point', '')}".strip()
+    # Prop outcomes carry the player in ``description`` (name is just Over/Under);
+    # prefix it so alerts read e.g. "Chelsea Gray Under 6.5".
+    description = str(outcome.get("description") or "").strip()
+    core = f"{outcome['name']} {outcome.get('point', '')}".strip()
+    return f"{description} {core}".strip() if description else core
 
 
 def _calculate_edge_from_probability(offered_price: float, fair_probability: float) -> float:
