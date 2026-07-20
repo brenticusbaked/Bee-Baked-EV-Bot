@@ -1,6 +1,7 @@
 import os
 import random
 from typing import Optional
+from urllib.parse import quote
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -44,8 +45,11 @@ def _residential_proxies() -> Optional[dict[str, str]]:
         return None
     chosen_ip = random.choice(_PROXY_IPS)
     session_id = random.randint(10_000, 99_999)
-    user = f"{_PROXY_USERNAME}-session-{session_id}"
-    proxy_url = f"http://{user}:{_PROXY_PASSWORD}@{chosen_ip}"
+    # URL-encode the userinfo so special characters in the credentials (@, :, #,
+    # /, etc.) don't corrupt the proxy URL and trigger a 407 auth failure.
+    user = quote(f"{_PROXY_USERNAME}-session-{session_id}", safe="")
+    password = quote(_PROXY_PASSWORD or "", safe="")
+    proxy_url = f"http://{user}:{password}@{chosen_ip}"
     return {"http": proxy_url, "https": proxy_url}
 
 

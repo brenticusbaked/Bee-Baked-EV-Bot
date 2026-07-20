@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -12,8 +13,10 @@ from execution.risk import RiskLimits, RiskManager
 from execution.router import SmartOrderRouter
 from execution.venue_scores import build_venue_scores
 from execution_signal import build_order_from_edge, quote_from_book
+from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
-from utils.odds import fair_probabilities_from_prices, quarter_kelly_units
+from services.discord_channels import BET_ALERTS_WEBHOOK_URL, DEFAULT_WEBHOOK_URL
+from utils.odds import decimal_to_american, fair_probabilities_from_prices, quarter_kelly_units
 from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
 from utils.thresholds import env_float, env_int
 
@@ -29,6 +32,14 @@ DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
 ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "").strip().lower() in {"1", "true", "yes", "on"}
 EXECUTION_VENUE_SCORE_LOOKBACK = max(1, env_int("EXECUTION_VENUE_SCORE_LOOKBACK", 500))
 EXECUTION_VENUE_SCORE_MIN_SAMPLE = max(1, env_int("EXECUTION_VENUE_SCORE_MIN_SAMPLE", 3))
+# Post the selected execution-desk edges to Discord (their own stream, distinct
+# from the unified +EV alerter). These use the same Pinnacle-devig math but a
+# looser threshold and no exposure/dedup gating, and include exchange venues, so
+# they are labelled separately. Falls back to the bet-alerts webhook.
+ENABLE_EXECUTION_DESK_ALERTS = os.getenv("ENABLE_EXECUTION_DESK_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+EXECUTION_DESK_WEBHOOK_URL = (
+    os.getenv("DISCORD_EXECUTION_DESK_WEBHOOK_URL") or BET_ALERTS_WEBHOOK_URL or DEFAULT_WEBHOOK_URL
+)
 
 
 def _outcome_key(outcome: dict) -> Tuple[str, str]:
@@ -222,14 +233,64 @@ def run_execution_scan() -> dict:
         print("execution_desk wrote synthetic calibration order for persistence healthcheck")
 
     _append_reports(EXECUTION_LEDGER_PATH, reports)
+    alerts_sent = _send_execution_desk_alerts(selected)
     detail = f"paper routed {len(reports)} order(s)"
+    if alerts_sent:
+        detail += f"; {alerts_sent} discord alert(s)"
     print(detail)
     return {
         "detail": detail,
         "count": len(reports),
         "label": "executions",
-        "meta": {"execution_ledger_path": EXECUTION_LEDGER_PATH},
+        "meta": {
+            "execution_ledger_path": EXECUTION_LEDGER_PATH,
+            "discord_alerts": alerts_sent,
+        },
     }
+
+
+def _execution_desk_alert_description(candidate: dict) -> str:
+    best = candidate["best"]
+    offered_american = decimal_to_american(float(best["price"]))
+    fair_american = decimal_to_american(float(candidate["fair_decimal"]))
+    return (
+        f"**\U0001F41D EXECUTION DESK EDGE - {str(candidate['market_type']).upper()}**\n\n"
+        f"**Match:** {candidate['matchup']}\n"
+        f"**Bet:** {best['selection']}\n"
+        f"**Book:** {best['book']} @ {offered_american}\n"
+        f"**Fair Value (Pinnacle):** {fair_american}\n"
+        f"**Edge:** {candidate['edge'] * 100:.2f}%\n"
+        f"**Suggested:** {candidate['units']:.2f} Units"
+    )
+
+
+def _send_execution_desk_alerts(selected: List[dict]) -> int:
+    """Post real (non-calibration) selected edges to Discord. Returns count sent."""
+    if not (ENABLE_EXECUTION_DESK_ALERTS and EXECUTION_DESK_WEBHOOK_URL):
+        return 0
+    sent = 0
+    for candidate in selected:
+        if candidate.get("calibration"):
+            continue
+        description = _execution_desk_alert_description(candidate)
+        ok = send_discord_alert(
+            {
+                "embeds": [
+                    {
+                        "description": description,
+                        "color": 3447003,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                ]
+            },
+            source="execution_scan",
+            alert_type="execution_desk_edge",
+            dedupe_key=description[:200],
+            webhook_url=EXECUTION_DESK_WEBHOOK_URL,
+        )
+        if ok:
+            sent += 1
+    return sent
 
 
 if __name__ == "__main__":

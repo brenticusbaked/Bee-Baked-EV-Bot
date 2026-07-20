@@ -53,11 +53,16 @@ ENABLE_NFL_H2H_ALERTS = os.getenv("ENABLE_NFL_H2H_ALERTS", "true").strip().lower
 ENABLE_ALTERNATE_MARKET_ALERTS = os.getenv("ENABLE_ALTERNATE_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PARTIAL_GAME_MARKET_ALERTS = os.getenv("ENABLE_PARTIAL_GAME_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PLAYER_PROP_ALERTS = os.getenv("ENABLE_PLAYER_PROP_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
-UNIFIED_PROP_EV_THRESHOLD = env_float("UNIFIED_PROP_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
-# Hard EV floor: never alert below the EV band the user's own history shows to be
-# durably profitable. Configurable; auto-raised (never lowered) by realized
-# ROI-by-EV-bucket calibration from bet_history.
-UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.02)
+UNIFIED_PROP_EV_THRESHOLD = env_float("UNIFIED_PROP_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
+# Hard EV floor: never alert below this EV band. Configurable.
+UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.015)
+# When enabled, the realized ROI-by-EV-bucket calibration from bet_history can
+# RAISE (never lower) the floor to the lowest historically-profitable band. The
+# history buckets are discrete ({0%, 2%, 5%, 10%}), so if the 0-2% band wasn't
+# profitable this snaps the floor up to 2% and suppresses 1.5-2% near-misses.
+# Off by default so the explicit UNIFIED_EV_FLOOR above is authoritative; set
+# ENABLE_HISTORY_EV_FLOOR_RAISE=true to re-enable the data-driven safety raise.
+ENABLE_HISTORY_EV_FLOOR_RAISE = os.getenv("ENABLE_HISTORY_EV_FLOOR_RAISE", "false").strip().lower() in {"1", "true", "yes", "on"}
 # Player props carry highly asymmetric juice (e.g. Over -140 / Under +110), so
 # they are de-vigged multiplicatively rather than with the power method used for
 # main markets (see .windsurfrules Rule 1 / the syndicate spec).
@@ -144,11 +149,16 @@ def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
 
 
 def _effective_ev_floor() -> float:
-    """Hard EV floor, raised (never lowered) by history-validated profitability."""
+    """Configured hard EV floor.
+
+    When ``ENABLE_HISTORY_EV_FLOOR_RAISE`` is set, the history-validated floor may
+    raise it (never lower) to the lowest historically-profitable EV band.
+    """
     floor = UNIFIED_EV_FLOOR
-    validated = validated_ev_floor()
-    if validated is not None:
-        floor = max(floor, validated)
+    if ENABLE_HISTORY_EV_FLOOR_RAISE:
+        validated = validated_ev_floor()
+        if validated is not None:
+            floor = max(floor, validated)
     return floor
 
 
