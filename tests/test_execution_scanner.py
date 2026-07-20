@@ -4,6 +4,8 @@ from unittest import mock
 import execution_scanner
 from execution_scanner import (
     _execution_desk_alert_description,
+    _outcome_key,
+    _selection_text,
     _send_execution_desk_alerts,
     _synthetic_calibration_report,
 )
@@ -41,6 +43,19 @@ class ExecutionScannerTests(unittest.TestCase):
         self.assertIn("Under 6.5", description)
         self.assertIn("14.50%", description)
         self.assertIn("Fair Value (Pinnacle)", description)
+
+    def test_prop_selection_text_includes_player_name(self):
+        outcome = {"name": "Under", "point": 6.5, "description": "Chelsea Gray"}
+        self.assertEqual(_selection_text(outcome), "Chelsea Gray Under 6.5")
+
+    def test_main_market_selection_text_has_no_player_prefix(self):
+        outcome = {"name": "Las Vegas Aces", "point": -6.5}
+        self.assertEqual(_selection_text(outcome), "Las Vegas Aces -6.5")
+
+    def test_outcome_key_separates_players_sharing_a_line(self):
+        gray = {"name": "Over", "point": 6.5, "description": "Chelsea Gray"}
+        wilson = {"name": "Over", "point": 6.5, "description": "A'ja Wilson"}
+        self.assertNotEqual(_outcome_key(gray), _outcome_key(wilson))
 
     def test_alerts_skip_calibration_and_respect_toggle(self):
         with mock.patch.object(execution_scanner, "ENABLE_EXECUTION_DESK_ALERTS", True), \

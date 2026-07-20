@@ -16,12 +16,16 @@ def decimal_implied_probability(decimal_odds: float) -> float:
 def _group_prices_by_point(prices_by_outcome: dict) -> dict:
     grouped = {}
     for outcome_key, price in prices_by_outcome.items():
-        point = outcome_key[1] if isinstance(outcome_key, tuple) and len(outcome_key) > 1 else ""
+        is_tuple = isinstance(outcome_key, tuple)
+        point = outcome_key[1] if is_tuple and len(outcome_key) > 1 else ""
         try:
             point = str(abs(float(point))) if point not in {"", None} else point
         except (TypeError, ValueError):
             pass
-        grouped.setdefault(point, []).append((outcome_key, price))
+        # A 3rd key component (player description for props) keeps each player's
+        # two-way market de-vigged on its own, even when players share a line.
+        subject = outcome_key[2] if is_tuple and len(outcome_key) > 2 else ""
+        grouped.setdefault((point, subject), []).append((outcome_key, price))
     return grouped
 
 
