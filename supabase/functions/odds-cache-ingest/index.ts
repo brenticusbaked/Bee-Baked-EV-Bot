@@ -54,10 +54,29 @@ const ODDS_API_KEYS = [
 ].map((key) => key.trim()).filter(Boolean);
 const INGEST_SECRET = Deno.env.get("ODDS_INGEST_FUNCTION_SECRET") ?? "";
 const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
+// Target books. The Odds API bills per REGION (or per 10 bookmakers), not per
+// individual book, so widening this list up to 10 books adds ZERO credit cost
+// while giving props a broader consensus baseline and more soft-book mispricings
+// to catch. Keep pinnacle (eu, sharp baseline for main markets) first and keep
+// the list at <=10 so it stays a single region-equivalent. Books past 10 would
+// bill as an extra region-equivalent.
 const BOOKMAKERS = Deno.env.get("ODDS_API_TARGET_BOOKS") ??
-  "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada";
+  "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers";
 const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals";
+// Soft (recreational) enrichment pull: US region, rec books only.
 const ENRICH_REGIONS = Deno.env.get("ODDS_API_ENRICH_REGIONS") ?? "us";
+// Sharp enrichment pull: Pinnacle lives only in `eu`, and it is the mandatory
+// fair-value baseline for every prop (.windsurfrules Rule 1/2). Fetched as its
+// own request so sharp and soft data stay isolated.
+const SHARP_BOOK = Deno.env.get("ODDS_API_SHARP_BOOK") ?? "pinnacle";
+const ENRICH_SHARP_REGIONS = Deno.env.get("ODDS_API_ENRICH_SHARP_REGIONS") ?? "eu";
+// Soft books for the enrichment pull = target books minus the sharp book.
+const SOFT_BOOKMAKERS = (Deno.env.get("ODDS_API_TARGET_BOOKS") ??
+  "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers")
+  .split(",")
+  .map((book) => book.trim())
+  .filter((book) => book && book !== SHARP_BOOK)
+  .join(",");
 
 // Extended US book coverage. Bovada is already covered by the `us` region on
 // every main run at no extra cost. The only extra region we pull is `us_ex`
@@ -99,37 +118,57 @@ const ACTIVE_SPORTS = (Deno.env.get("ODDS_API_ACTIVE_SPORTS") ??
   .map((sport) => sport.trim())
   .filter(Boolean);
 
-// Per-sport expansion markets, fetched from the per-event odds endpoint.
-// Derivatives = 1st quarter / 1st half lines (lower-limit inefficiencies).
-// Alternates = alternate spread/total ladders.
-// Props = player props with asymmetric juice (de-vigged multiplicatively downstream).
-type SportExtras = { derivatives?: string; alternates?: string; props?: string };
+// Per-sport expansion markets, fetched from the per-event odds endpoint. Each
+// entry is an ordered list of market GROUPS; every group becomes its own enrich
+// job. Groups are kept small (<=5 markets => <=5 credits/event per region) so
+// each fits under MAX_CREDITS_PER_RUN, and the rotation fans the groups out
+// across cron slots. Order matters: earlier groups (highest-liquidity, main
+// lines) are favored by the rotation.
+//
+// IMPORTANT: the +EV engine prices every player prop against the PINNACLE
+// baseline (multiplicative de-vig; see unified_bot.evaluate_player_props and
+// .windsurfrules Rule 1). It can only alert on markets Pinnacle actually posts
+// as clean Over/Under pairs. So these lists are limited to standard counting-
+// stat Over/Under props + team alternate spread/total ladders + quarter/half
+// derivatives. NOT included (Pinnacle doesn't post them / they aren't clean
+// two-way markets, so the current engine can't price them and pulling them
+// would waste credits): alternate player-prop ladders, first-basket, anytime-
+// scorer, double/triple-double, record-a-win. Pricing those needs a
+// distribution model off the Pinnacle main line (utils/prop_pricing.py) wired
+// into the alert path — a separate, approval-gated change.
+type SportExtras = { groups: string[] };
 const SPORT_EXTRAS: Record<string, SportExtras> = {
-  basketball_nba: {
-    derivatives: "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
-    alternates: "alternate_spreads,alternate_totals",
-    props:
-      "player_points,player_rebounds,player_assists,player_threes," +
-      "player_points_rebounds_assists,player_blocks,player_steals,player_turnovers",
+  baseball_mlb: {
+    groups: [
+      "pitcher_strikeouts,pitcher_outs,pitcher_hits_allowed,pitcher_earned_runs",
+      "batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored",
+      "batter_strikeouts,batter_walks,batter_stolen_bases",
+      "alternate_spreads,alternate_totals",
+    ],
   },
   basketball_wnba: {
-    derivatives: "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
-    alternates: "alternate_spreads,alternate_totals",
-    props:
-      "player_points,player_rebounds,player_assists,player_threes," +
-      "player_points_rebounds_assists",
+    groups: [
+      "player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists",
+      "player_points_rebounds,player_points_assists,player_rebounds_assists,player_blocks,player_steals",
+      "alternate_spreads,alternate_totals",
+      "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
+    ],
+  },
+  basketball_nba: {
+    groups: [
+      "player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists",
+      "player_points_rebounds,player_points_assists,player_rebounds_assists,player_blocks,player_steals",
+      "player_turnovers",
+      "alternate_spreads,alternate_totals",
+      "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
+    ],
   },
   icehockey_nhl: {
-    alternates: "alternate_spreads,alternate_totals",
-    props:
-      "player_shots_on_goal,player_points,player_goals,player_assists," +
-      "player_total_saves",
-  },
-  baseball_mlb: {
-    alternates: "alternate_spreads,alternate_totals",
-    props:
-      "pitcher_strikeouts,pitcher_outs,batter_hits,batter_total_bases," +
-      "batter_home_runs,batter_rbis,batter_runs_scored,batter_stolen_bases",
+    groups: [
+      "player_points,player_goals,player_assists,player_shots_on_goal,player_total_saves",
+      "player_blocked_shots,player_power_play_points",
+      "alternate_spreads,alternate_totals",
+    ],
   },
 };
 
@@ -201,18 +240,34 @@ function buildJobs(slot: number): IngestJob[] {
     }
   }
 
+  // Enrichment fetches derivatives / alternates / player props from the
+  // per-event odds endpoint. Every prop is priced against the PINNACLE baseline
+  // downstream, and Pinnacle only lives in the `eu` region, so each group needs
+  // BOTH a sharp pull (eu, pinnacle only) and a soft pull (us, rec books). These
+  // are kept as separate requests per .windsurfrules Rule 2 (sharp/soft data
+  // isolation); the cache merges them back per fixture. Without the sharp pull,
+  // props have no baseline and never alert.
   const enrichJobs: IngestJob[] = [];
   if (ENABLE_MARKET_ENRICHMENT) {
     for (const sportKey of ACTIVE_SPORTS) {
       const extras = SPORT_EXTRAS[sportKey];
       if (!extras) continue;
-      for (const group of [extras.derivatives, extras.alternates, extras.props]) {
+      for (const group of extras.groups) {
         if (!group) continue;
         enrichJobs.push({
           kind: "enrich",
           sportKey,
           markets: group,
+          regions: ENRICH_SHARP_REGIONS,
+          bookmakers: SHARP_BOOK,
+          estimatedCredits: creditsFor(group, ENRICH_SHARP_REGIONS),
+        });
+        enrichJobs.push({
+          kind: "enrich",
+          sportKey,
+          markets: group,
           regions: ENRICH_REGIONS,
+          bookmakers: SOFT_BOOKMAKERS,
           estimatedCredits: creditsFor(group, ENRICH_REGIONS),
         });
       }
@@ -267,11 +322,12 @@ async function fetchEventOdds(
   eventId: string,
   markets: string,
   regions: string,
+  bookmakers: string = BOOKMAKERS,
 ): Promise<{ event: OddsEvent | null; creditsUsed: number; remaining: number | null }> {
   const url = new URL(`https://api.the-odds-api.com/v4/sports/${sportKey}/events/${eventId}/odds`);
   url.searchParams.set("regions", regions);
   url.searchParams.set("markets", markets);
-  url.searchParams.set("bookmakers", BOOKMAKERS);
+  url.searchParams.set("bookmakers", bookmakers);
   url.searchParams.set("oddsFormat", "decimal");
 
   const response = await oddsFetch(url);
@@ -457,6 +513,7 @@ serve(async (request) => {
             eventId,
             job.markets,
             job.regions,
+            job.bookmakers ?? BOOKMAKERS,
           );
           apiRequests += 1;
           creditsUsed += cost;

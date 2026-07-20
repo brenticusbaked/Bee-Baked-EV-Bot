@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 
 from db_manager import get_all_graded_bets, get_master_cache, get_today_bets, is_already_logged, log_bet_to_db
@@ -86,13 +87,20 @@ def calculate_edge_from_probability(offered_price: float, fair_probability: floa
     return (float(offered_price) * float(fair_probability)) - 1.0
 
 
+# Player-prop market keys are prefixed by role: NBA/WNBA/NHL use `player_`, MLB
+# uses `batter_` / `pitcher_`. All are per-player Over/Under pairs priced the same
+# way (multiplicative de-vig off the Pinnacle baseline), so they must all be
+# recognized as props — otherwise MLB props get ingested but never evaluated.
+_PLAYER_PROP_PREFIXES = ("player_", "batter_", "pitcher_")
+
+
 def _is_player_prop_market(market_type: str) -> bool:
-    return str(market_type).strip().lower().startswith("player_")
+    return str(market_type).strip().lower().startswith(_PLAYER_PROP_PREFIXES)
 
 
 def _market_family(market_type: str) -> str:
     market_key = str(market_type).strip().lower()
-    if market_key.startswith("player_"):
+    if market_key.startswith(_PLAYER_PROP_PREFIXES):
         return "player_prop"
     if market_key.startswith("alternate_"):
         return "alternate"
@@ -267,6 +275,61 @@ def _prop_side(outcome_name: str) -> str:
     return name
 
 
+_LINE_TOKEN_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
+
+
+def _market_side_token(outcome_name: str) -> str:
+    """Collapse an outcome to the directional *side* of its market.
+
+    Totals (and totals-style outcomes) collapse to ``over``/``under``; moneyline
+    and spread outcomes collapse to the team name (the point/handicap is dropped,
+    so ``Home -2.5`` and ``Home -3.5`` are the same side). Two selections in the
+    same event+market with *different* side tokens are opposite sides of the same
+    wager (both moneylines, Over vs Under) and must never be alerted together.
+    """
+    return _prop_side(outcome_name)
+
+
+def _side_token_from_selection(selection: str) -> str:
+    """Recover the side token from a stored ``selection`` string.
+
+    Selections are logged as ``f"{name} {point}"`` (e.g. ``"Boston Celtics -3.5"``
+    or ``"Over 8.5"``), so strip a trailing numeric line token before collapsing
+    to a side. Kept consistent with :func:`_market_side_token` so within-run and
+    cross-run (already-logged) opposite detection use the same tokens.
+    """
+    text = str(selection or "").strip()
+    lowered = text.lower()
+    if "over" in lowered:
+        return "over"
+    if "under" in lowered:
+        return "under"
+    head, _, tail = text.rpartition(" ")
+    if head and _LINE_TOKEN_RE.match(tail):
+        return head.strip().lower()
+    return lowered
+
+
+def _build_logged_sides(bets: list | None) -> dict:
+    """Map ``(event_id, market)`` -> set of open side tokens already logged today.
+
+    Used to suppress alerting the *opposite* side of a wager that is already on
+    the board (e.g. an earlier run alerted the home moneyline; a later run must
+    not alert the away moneyline for the same game/market).
+    """
+    sides: dict = {}
+    for row in bets or []:
+        if row.get("result"):
+            continue
+        event_id = str(row.get("event_id", "")).strip()
+        market = str(row.get("market", "")).strip().upper()
+        token = _side_token_from_selection(row.get("selection", ""))
+        if not event_id or not market or not token:
+            continue
+        sides.setdefault((event_id, market), set()).add(token)
+    return sides
+
+
 def evaluate_player_props(
     event: dict,
     sport: str,
@@ -348,7 +411,14 @@ def evaluate_player_props(
             if current is None or weighted > current["weighted"]:
                 best_by_side[side] = {**offer, "edge": edge, "weighted": weighted}
 
-        for side, offer in best_by_side.items():
+        if not best_by_side:
+            continue
+
+        # Opposite-side suppression: a de-vigged prop has exactly one +EV side, so
+        # alert only the single strongest side per (player, line). Never emit both
+        # the Over and the Under of the same prop.
+        best_side = max(best_by_side.items(), key=lambda item: item[1]["weighted"])
+        for side, offer in (best_side,):
             fair_probability = fair_by_side[side]
             fair_decimal = 1.0 / fair_probability
             point_text = f" {point}" if point else ""
@@ -421,6 +491,9 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
     ]
     graded_bets = get_all_graded_bets()
     today_bets = get_today_bets()
+    # Opposite-side dedup: sides already alerted today, keyed by (event, market).
+    # Prevents alerting both moneylines / Over+Under of the same game across runs.
+    logged_sides = _build_logged_sides(today_bets)
     exposure_tracker = ExposureTracker() if ENABLE_CORRELATION_LIMITS else None
 
     talent_ctx = TalentContext()
@@ -589,10 +662,19 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
 
                 selected_candidates = []
                 seen_outcomes = set()
+                # Sides already claimed for this event+market this run, seeded with
+                # sides already alerted today (cross-run). Only same-side (e.g.
+                # alternate-line) candidates may be added; opposite sides (both
+                # moneylines, Over vs Under) are suppressed.
+                claimed_sides = set(logged_sides.get((str(event["id"]), market_type.upper()), set()))
                 for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
                     if candidate["outcome_key"] in seen_outcomes:
                         continue
+                    side_token = _market_side_token(candidate["bet"]["name"])
+                    if claimed_sides and side_token not in claimed_sides:
+                        continue
                     seen_outcomes.add(candidate["outcome_key"])
+                    claimed_sides.add(side_token)
                     selected_candidates.append(candidate)
                     if len(selected_candidates) >= UNIFIED_MAX_ALERTS_PER_EVENT_MARKET:
                         break
@@ -646,6 +728,10 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
                     if not was_logged:
                         print(f"Skipping alert because DB log failed for {selection}.")
                         continue
+
+                    logged_sides.setdefault(
+                        (str(event["id"]), market_type.upper()), set()
+                    ).add(_market_side_token(final["name"]))
 
                     if exposure_tracker is not None:
                         teams = (event.get("home_team", ""), event.get("away_team", ""))
