@@ -72,6 +72,13 @@ const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
 const BOOKMAKERS = Deno.env.get("ODDS_API_TARGET_BOOKS") ??
   "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers";
 const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals";
+// Tennis is priced on the moneyline (h2h) only — game spreads/totals are thin
+// and less reliably posted by Pinnacle, and h2h keeps each tournament's main
+// pull cheap (1 market x regions). Override per-sport main markets here.
+const TENNIS_MAIN_MARKETS = Deno.env.get("ODDS_API_TENNIS_MARKETS") ?? "h2h";
+function mainMarketsFor(sportKey: string): string {
+  return sportKey.startsWith("tennis") ? TENNIS_MAIN_MARKETS : MAIN_MARKETS;
+}
 // Soft (recreational) enrichment pull: US region, rec books only.
 const ENRICH_REGIONS = Deno.env.get("ODDS_API_ENRICH_REGIONS") ?? "us";
 // Sharp enrichment pull: Pinnacle lives only in `eu`, and it is the mandatory
@@ -130,11 +137,57 @@ const CYCLE_MINUTES = Number(Deno.env.get("ODDS_CYCLE_MINUTES") ?? "10");
 // The first sport is favored by the first-job-always-runs rule, so keep the
 // strongest in-season market first. Trim this to in-season sports to avoid
 // spending main-pull credits on idle leagues.
+// Tokens may be concrete Odds API sport keys (e.g. baseball_mlb) OR umbrella
+// tennis tokens (`tennis`, `tennis_atp`, `tennis_wta`). Tennis keys on The Odds
+// API are per-tournament and rotate week to week (tennis_atp_wimbledon, ...),
+// so umbrella tokens are expanded at runtime via the free /v4/sports endpoint.
 const ACTIVE_SPORTS = (Deno.env.get("ODDS_API_ACTIVE_SPORTS") ??
-  "baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl")
+  "baseball_mlb,basketball_wnba,tennis,basketball_nba,icehockey_nhl")
   .split(",")
   .map((sport) => sport.trim())
   .filter(Boolean);
+
+function isTennisToken(token: string): boolean {
+  return token === "tennis" || token === "tennis_atp" || token === "tennis_wta";
+}
+
+// Expand umbrella tennis tokens into the concrete, currently-active tournament
+// keys. The /v4/sports listing costs 0 credits. On any failure we simply drop
+// the umbrella token (no tennis this run) rather than fail the whole ingest.
+async function resolveActiveSports(tokens: string[]): Promise<string[]> {
+  if (!tokens.some(isTennisToken)) return tokens;
+
+  let activeTennis: string[] = [];
+  try {
+    const url = new URL("https://api.the-odds-api.com/v4/sports/");
+    const response = await oddsFetch(url);
+    if (response.ok) {
+      const listed = (await response.json()) as Array<{ key: string; group?: string; active?: boolean }>;
+      activeTennis = listed
+        .filter((sport) => sport.active !== false && String(sport.key).startsWith("tennis"))
+        .map((sport) => sport.key);
+    }
+  } catch (_error) {
+    activeTennis = [];
+  }
+
+  const resolved: string[] = [];
+  for (const token of tokens) {
+    if (!isTennisToken(token)) {
+      resolved.push(token);
+      continue;
+    }
+    const tourFilter = token === "tennis_atp"
+      ? (key: string) => key.startsWith("tennis_atp")
+      : token === "tennis_wta"
+      ? (key: string) => key.startsWith("tennis_wta")
+      : (_key: string) => true;
+    for (const key of activeTennis) {
+      if (tourFilter(key) && !resolved.includes(key)) resolved.push(key);
+    }
+  }
+  return resolved;
+}
 
 // Per-sport expansion markets, fetched from the per-event odds endpoint. Each
 // entry is an ordered list of market GROUPS; every group becomes its own enrich
@@ -227,13 +280,13 @@ async function getUpcomingFixtureIds(sportKey: string): Promise<string[]> {
   return data.map((row) => String(row.id));
 }
 
-function buildJobs(slot: number): IngestJob[] {
-  const mainJobs: IngestJob[] = ACTIVE_SPORTS.map((sportKey) => ({
+function buildJobs(slot: number, sports: string[]): IngestJob[] {
+  const mainJobs: IngestJob[] = sports.map((sportKey) => ({
     kind: "main",
     sportKey,
-    markets: MAIN_MARKETS,
+    markets: mainMarketsFor(sportKey),
     regions: REGIONS,
-    estimatedCredits: creditsFor(MAIN_MARKETS, REGIONS),
+    estimatedCredits: creditsFor(mainMarketsFor(sportKey), REGIONS),
   }));
 
   // Extended-book main pull (Fliff / ESPN BET / exchanges) in their own regions.
@@ -246,14 +299,14 @@ function buildJobs(slot: number): IngestJob[] {
     EXTENDED_BOOKS &&
     slot % EXTENDED_EVERY_N_SLOTS === 0
   ) {
-    for (const sportKey of ACTIVE_SPORTS) {
+    for (const sportKey of sports) {
       extendedJobs.push({
         kind: "main",
         sportKey,
-        markets: MAIN_MARKETS,
+        markets: mainMarketsFor(sportKey),
         regions: EXTENDED_REGIONS,
         bookmakers: EXTENDED_BOOKS,
-        estimatedCredits: creditsFor(MAIN_MARKETS, EXTENDED_REGIONS),
+        estimatedCredits: creditsFor(mainMarketsFor(sportKey), EXTENDED_REGIONS),
       });
     }
   }
@@ -267,7 +320,7 @@ function buildJobs(slot: number): IngestJob[] {
   // props have no baseline and never alert.
   const enrichJobs: IngestJob[] = [];
   if (ENABLE_MARKET_ENRICHMENT) {
-    for (const sportKey of ACTIVE_SPORTS) {
+    for (const sportKey of sports) {
       const extras = SPORT_EXTRAS[sportKey];
       if (!extras) continue;
       for (const group of extras.groups) {
@@ -484,10 +537,12 @@ serve(async (request) => {
 
   const slot = currentSlot();
   const startedAt = new Date().toISOString();
+  // Expand umbrella tennis tokens into concrete active tournament keys.
+  const activeSports = await resolveActiveSports(ACTIVE_SPORTS);
   let runId: string | undefined;
   const runInsert = await supabase.from("odds_ingest_runs").insert({
     status: "running",
-    sports_requested: ACTIVE_SPORTS,
+    sports_requested: activeSports,
     rotation_slot: slot,
     started_at: startedAt,
   }).select("id").single();
@@ -500,7 +555,7 @@ serve(async (request) => {
   let remaining: number | null = null;
 
   try {
-    const jobs = buildJobs(slot);
+    const jobs = buildJobs(slot, activeSports);
     let enrichedEvents = 0;
 
     for (const job of jobs) {
@@ -517,7 +572,7 @@ serve(async (request) => {
         fixtures += await upsertFixtures(job.sportKey, events);
         oddsRows += await upsertOdds(job.sportKey, events);
       } else {
-        if (enrichedEvents >= MAX_EVENTS_PER_ENRICH * ACTIVE_SPORTS.length) continue;
+        if (enrichedEvents >= MAX_EVENTS_PER_ENRICH * Math.max(activeSports.length, 1)) continue;
         const fixtureIds = await getUpcomingFixtureIds(job.sportKey);
         if (!fixtureIds.length) continue;
         const rotated = rotate(fixtureIds, slot).slice(0, MAX_EVENTS_PER_ENRICH);
