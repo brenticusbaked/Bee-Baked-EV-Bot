@@ -35,14 +35,26 @@ SPORT_ALERT_WEBHOOKS = {
     "basketball_nba": os.getenv("DISCORD_NBA_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "americanfootball_nfl": os.getenv("DISCORD_NFL_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
 }
+# Tennis sport keys are per-tournament (tennis_atp_*, tennis_wta_*), so they are
+# routed by prefix rather than an exact key match.
+TENNIS_ALERT_WEBHOOK = os.getenv("DISCORD_TENNIS_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL
+
+
+def webhook_for_sport(sport: object) -> str:
+    sport_key = str(sport or "").strip().lower()
+    if sport_key.startswith("tennis"):
+        return TENNIS_ALERT_WEBHOOK
+    return SPORT_ALERT_WEBHOOKS.get(sport_key, DISCORD_WEBHOOK_URL)
+
+
 UNIFIED_EV_THRESHOLD = env_float("UNIFIED_EV_THRESHOLD", 0.01)
 UNIFIED_NEAR_MISS_THRESHOLD = env_float("UNIFIED_NEAR_MISS_THRESHOLD", 0.005)
 UNIFIED_SPREAD_EV_THRESHOLD = env_float("UNIFIED_SPREAD_EV_THRESHOLD", UNIFIED_EV_THRESHOLD)
-UNIFIED_H2H_EV_THRESHOLD = env_float("UNIFIED_H2H_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
+UNIFIED_H2H_EV_THRESHOLD = env_float("UNIFIED_H2H_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
 UNIFIED_TOTAL_EV_THRESHOLD = env_float("UNIFIED_TOTAL_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
-UNIFIED_ALT_MARKET_EV_THRESHOLD = env_float("UNIFIED_ALT_MARKET_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
-UNIFIED_PARTIAL_MARKET_EV_THRESHOLD = env_float("UNIFIED_PARTIAL_MARKET_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.02))
-ENABLE_MLB_H2H_ALERTS = os.getenv("ENABLE_MLB_H2H_ALERTS", "false").strip().lower() in {"1", "true", "yes", "on"}
+UNIFIED_ALT_MARKET_EV_THRESHOLD = env_float("UNIFIED_ALT_MARKET_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
+UNIFIED_PARTIAL_MARKET_EV_THRESHOLD = env_float("UNIFIED_PARTIAL_MARKET_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
+ENABLE_MLB_H2H_ALERTS = os.getenv("ENABLE_MLB_H2H_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NBA_TOTAL_ALERTS = os.getenv("ENABLE_NBA_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_NHL_TOTAL_ALERTS = os.getenv("ENABLE_NHL_TOTAL_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_MLB_SPREAD_ALERTS = os.getenv("ENABLE_MLB_SPREAD_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -53,6 +65,9 @@ ENABLE_NFL_H2H_ALERTS = os.getenv("ENABLE_NFL_H2H_ALERTS", "true").strip().lower
 ENABLE_ALTERNATE_MARKET_ALERTS = os.getenv("ENABLE_ALTERNATE_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PARTIAL_GAME_MARKET_ALERTS = os.getenv("ENABLE_PARTIAL_GAME_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PLAYER_PROP_ALERTS = os.getenv("ENABLE_PLAYER_PROP_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+# Tennis is priced on the moneyline (h2h) only. Sport keys are per-tournament
+# (tennis_atp_wimbledon, tennis_wta_*), so tennis is matched by prefix.
+ENABLE_TENNIS_ALERTS = os.getenv("ENABLE_TENNIS_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 UNIFIED_PROP_EV_THRESHOLD = env_float("UNIFIED_PROP_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
 # Hard EV floor: never alert below this EV band. Configurable.
 UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.015)
@@ -129,6 +144,8 @@ def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
     if market_family == "partial":
         return ENABLE_PARTIAL_GAME_MARKET_ALERTS
 
+    if sport_key.startswith("tennis"):
+        return market_family == "h2h" and ENABLE_TENNIS_ALERTS
     if sport_key == "basketball_nba":
         return market_family == "spreads" or (market_family == "totals" and ENABLE_NBA_TOTAL_ALERTS)
     if sport_key == "icehockey_nhl":
@@ -805,8 +822,7 @@ def scan_markets(
             source=source,
             alert_type=alert_type,
             dedupe_key=description[:200],
-            webhook_url=webhook_override
-            or SPORT_ALERT_WEBHOOKS.get(alert.get("sport"), DISCORD_WEBHOOK_URL),
+            webhook_url=webhook_override or webhook_for_sport(alert.get("sport")),
             add_bee_image=index == len(alerts) - 1,
         )
 

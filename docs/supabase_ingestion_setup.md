@@ -128,8 +128,17 @@ rule) and trim idle leagues so their main pulls don't burn credits:
 # In-season now (summer). Add basketball_nba,icehockey_nhl when their seasons
 # resume — and either raise the ceiling or slow the cron, since each extra sport
 # adds ~6 credits/run to the main-market baseline.
-supabase secrets set ODDS_API_ACTIVE_SPORTS=baseball_mlb,basketball_wnba
+supabase secrets set ODDS_API_ACTIVE_SPORTS=baseball_mlb,basketball_wnba,tennis
 ```
+
+The `tennis` token (also `tennis_atp` / `tennis_wta`) is expanded at runtime into
+the currently-active tournament keys via the free `/v4/sports` listing, since
+tennis keys are per-tournament (`tennis_atp_wimbledon`, ...) and rotate weekly.
+Tennis is pulled on the moneyline (`h2h`) only — ~1 market × regions per active
+tournament (~2 credits/run each, override with `ODDS_API_TENNIS_MARKETS`), so
+watch the budget when several tournaments overlap the MLB/WNBA slate. Tennis
+alerts are gated by `ENABLE_TENNIS_ALERTS` (default on) and route to
+`DISCORD_TENNIS_BETS_WEBHOOK_URL` (falls back to the default bet-alerts channel).
 
 The cron in `supabase_edge_cron_setup.sql` runs every 30 min during prime game
 hours (16:00-04:59 UTC ≈ 11am-midnight CT), every 60 min in the morning pregame
