@@ -1,0 +1,55 @@
+name: Overnight Opener Scan
+
+# One pre-market "opener" scan per day. Overnight is when soft books post the
+# next day's opening lines and they are at their stalest (biggest gaps vs.
+# Pinnacle), so this catches early mispricing to review before placing. It reads
+# the Supabase cache (refreshed by the 09:30 UTC opener ingest cron), makes NO
+# Odds API requests, and posts to the opener stream tagged [OPENER] with a
+# distinct alert type so overnight finds don't dedupe against daytime alerts.
+#   09:45 UTC = ~4:45am Central, ~15 min after the opener ingest lands.
+on:
+  schedule:
+    - cron: '45 9 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: opener-scan
+  cancel-in-progress: true
+
+jobs:
+  opener-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Overnight Opener Scan
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
+          DISCORD_OPENER_WEBHOOK_URL: ${{ secrets.DISCORD_OPENER_WEBHOOK_URL }}
+          ENABLE_UNIFIED_SCAN: "true"
+          ENABLE_PLAYER_PROP_ALERTS: "true"
+          ENABLE_ALTERNATE_MARKET_ALERTS: "true"
+          ENABLE_PARTIAL_GAME_MARKET_ALERTS: "true"
+          ENABLE_MLB_H2H_ALERTS: "true"
+          UNIFIED_EV_THRESHOLD: "0.008"
+          UNIFIED_SPREAD_EV_THRESHOLD: "0.008"
+          UNIFIED_H2H_EV_THRESHOLD: "0.012"
+          UNIFIED_TOTAL_EV_THRESHOLD: "0.010"
+          UNIFIED_ALT_MARKET_EV_THRESHOLD: "0.020"
+          UNIFIED_PARTIAL_MARKET_EV_THRESHOLD: "0.020"
+          UNIFIED_MAX_ALERTS_PER_EVENT_MARKET: "5"
+        run: python continuous_scan.py --opener

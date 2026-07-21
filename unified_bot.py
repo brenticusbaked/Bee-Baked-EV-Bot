@@ -485,7 +485,13 @@ def evaluate_player_props(
     return alerts
 
 
-def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: str = "bet_alert"):
+def scan_markets(
+    cache_override=None,
+    source: str = "unified_bot",
+    alert_type: str = "bet_alert",
+    alert_prefix: str = "",
+    webhook_override: str | None = None,
+):
     cache = cache_override if cache_override is not None else get_master_cache()
     if not cache:
         print("Cloud cache is empty. Run fetcher first.")
@@ -785,11 +791,12 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
                 )
 
     for index, alert in enumerate(alerts):
+        description = f"{alert_prefix}{alert['description']}" if alert_prefix else alert["description"]
         send_discord_alert(
             {
                 "embeds": [
                     {
-                        "description": alert["description"],
+                        "description": description,
                         "color": 3066993,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
@@ -797,8 +804,9 @@ def scan_markets(cache_override=None, source: str = "unified_bot", alert_type: s
             },
             source=source,
             alert_type=alert_type,
-            dedupe_key=alert["description"][:200],
-            webhook_url=SPORT_ALERT_WEBHOOKS.get(alert.get("sport"), DISCORD_WEBHOOK_URL),
+            dedupe_key=description[:200],
+            webhook_url=webhook_override
+            or SPORT_ALERT_WEBHOOKS.get(alert.get("sport"), DISCORD_WEBHOOK_URL),
             add_bee_image=index == len(alerts) - 1,
         )
 

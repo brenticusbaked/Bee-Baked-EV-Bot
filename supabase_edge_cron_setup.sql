@@ -4,13 +4,16 @@
 -- Cadence is concentrated on the hours US sharp/rec markets are actually up and
 -- on the sports the syndicate is historically best at (MLB, then WNBA in-season;
 -- add NBA/NHL when their seasons resume). Ingestion is PAUSED overnight
--- (05:00-10:59 UTC = ~12am-6am Central) since no bets are placed then.
+-- (05:00-10:59 UTC = ~12am-6am Central) since no bets are placed then, EXCEPT
+-- one "opener" pull at 09:30 UTC (~4:30am CT) to capture the freshest, stalest
+-- opening lines for the pre-market opener scan to review.
 --
 --   Prime game hours  16:00-04:59 UTC  (~11am-midnight CT)  -> every 30 min
 --   Morning pregame   11:00-15:59 UTC  (~6am-11am CT)       -> every 60 min
---   Overnight/blackout 05:00-10:59 UTC (~12am-6am CT)        -> no runs
+--   Overnight opener   09:30 UTC       (~4:30am CT)          -> one run
+--   Overnight/blackout 05:00-09:29 UTC (~12am-4:30am CT)     -> no runs
 --
--- Budget: ~31 runs/day. Player props need BOTH a sharp (Pinnacle/EU) and a soft
+-- Budget: ~32 runs/day. Player props need BOTH a sharp (Pinnacle/EU) and a soft
 -- (US) per-event pull, budgeted as an atomic pair, so ODDS_MAX_CREDITS_PER_RUN
 -- must clear ~22 (2 sports main = 12 + one prop pair = 10). At 24 credits/run
 -- this lands ~20k credits/month. The old 14-credit ceiling could only fund the
@@ -33,7 +36,8 @@ where jobname in (
     'odds-cache-ingest-every-5-minutes',
     'odds-cache-ingest-every-10-minutes',
     'odds-cache-ingest-prime',
-    'odds-cache-ingest-morning'
+    'odds-cache-ingest-morning',
+    'odds-cache-ingest-opener'
 );
 
 -- Prime game hours: every 30 minutes, 16:00-04:59 UTC (~11am-midnight Central).
@@ -68,6 +72,27 @@ select cron.schedule(
     $$
 );
 
+-- Overnight opener: one run at 09:30 UTC (~4:30am Central). Captures the
+-- freshest opening lines so the pre-market opener scan has data to review.
+select cron.schedule(
+    'odds-cache-ingest-opener',
+    '30 9 * * *',
+    $$
+    select net.http_post(
+        url := 'https://<project-ref>.functions.supabase.co/odds-cache-ingest',
+        headers := jsonb_build_object(
+            'Content-Type', 'application/json',
+            'x-ingest-secret', '<replace-with-ODDS_INGEST_FUNCTION_SECRET>'
+        ),
+        body := jsonb_build_object('trigger', 'pg_cron_opener')
+    );
+    $$
+);
+
 -- Confirm they registered:
 select jobname, schedule, active from cron.job
-where jobname in ('odds-cache-ingest-prime', 'odds-cache-ingest-morning');
+where jobname in (
+    'odds-cache-ingest-prime',
+    'odds-cache-ingest-morning',
+    'odds-cache-ingest-opener'
+);
