@@ -133,9 +133,12 @@ supabase secrets set ODDS_API_ACTIVE_SPORTS=baseball_mlb,basketball_wnba
 
 The cron in `supabase_edge_cron_setup.sql` runs every 30 min during prime game
 hours (16:00-04:59 UTC ≈ 11am-midnight CT), every 60 min in the morning pregame
-window (11:00-15:59 UTC), and **pauses overnight** (05:00-10:59 UTC ≈ 12am-6am CT)
-since no bets are placed then. The continuous +EV alert workflow is paused in the
-same overnight window.
+window (11:00-15:59 UTC), and **pauses overnight** (05:00-09:29 UTC ≈ 12am-4:30am CT)
+since no bets are placed then. One exception: a single **opener** ingest at
+09:30 UTC (≈4:30am CT) captures the freshest opening lines, which the
+`Overnight Opener Scan` workflow (09:45 UTC) reads and posts to the opener stream
+tagged `[OPENER]` for morning review. The continuous +EV alert workflow is paused
+overnight; only the once-daily opener scan fires in that window.
 
 ### Alert dedup & opposite-side suppression
 
@@ -159,7 +162,7 @@ Run `supabase_edge_cron_setup.sql` after replacing:
 - `<project-ref>`
 - `<replace-with-ODDS_INGEST_FUNCTION_SECRET>`
 
-The schedule runs during game hours only (~31 runs/day): every 30 min in prime hours, every 60 min mornings, paused overnight. The Edge Function enforces a strict per-run credit ceiling (`ODDS_MAX_CREDITS_PER_RUN`) and rotates the main pulls and the expensive derivative/alternate/player-prop enrichment (sharp+soft pairs) across cycles so the monthly budget (~20k credits) is respected. Use Supabase cron controls to pause it on non-game days or narrow `ODDS_API_ACTIVE_SPORTS`.
+The schedule runs during game hours only, plus one overnight opener pull (~32 runs/day): every 30 min in prime hours, every 60 min mornings, paused overnight. The Edge Function enforces a strict per-run credit ceiling (`ODDS_MAX_CREDITS_PER_RUN`) and rotates the main pulls and the expensive derivative/alternate/player-prop enrichment (sharp+soft pairs) across cycles so the monthly budget (~20k credits) is respected. Use Supabase cron controls to pause it on non-game days or narrow `ODDS_API_ACTIVE_SPORTS`.
 
 ## 4. Realtime Subscriptions
 
