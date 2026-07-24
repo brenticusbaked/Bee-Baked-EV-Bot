@@ -246,12 +246,16 @@ async function leagueHasGames(sportKey: string): Promise<boolean> {
 // Free /events checks run in parallel. If everything is unreachable the run
 // simply yields no sports (a skipped tick), which is cheaper and safer than
 // blindly pulling every league.
-// Raw /v4/sports listing (free, 0 credits). Returns the currently-active sport
-// keys, or null if the listing couldn't be fetched/parsed. Kept separate so a
-// debug call can surface exactly what The Odds API is returning.
-async function fetchActiveSportKeys(): Promise<string[] | null> {
+// Raw /v4/sports listing (free, 0 credits). Returns the sport keys, or null if
+// the listing couldn't be fetched/parsed. `all=true` includes sports that are
+// out of season / not in the default in-season listing — needed for tennis,
+// whose per-tournament keys are frequently absent from the default listing even
+// while tournaments are running. Kept separate so a debug call can surface
+// exactly what The Odds API is returning.
+async function fetchSportKeys(all: boolean): Promise<string[] | null> {
   try {
     const url = new URL("https://api.the-odds-api.com/v4/sports/");
+    if (all) url.searchParams.set("all", "true");
     const response = await oddsFetch(url);
     if (!response.ok) return null;
     const listed = (await response.json()) as Array<
@@ -268,25 +272,37 @@ async function fetchActiveSportKeys(): Promise<string[] | null> {
 async function resolveActiveSports(universe: string[]): Promise<string[]> {
   const wantsTennis = universe.some(isTennisToken);
 
-  // Tennis discovery (only when a tennis umbrella token is present).
-  const activeKeys: string[] = wantsTennis
-    ? (await fetchActiveSportKeys()) ?? []
-    : [];
+  // Tennis discovery. Use the `all=true` listing because tennis tournaments are
+  // routinely missing from the default in-season listing, then keep only the
+  // tennis keys that actually have upcoming matches (leagueHasGames -> /events),
+  // exactly like the concrete leagues. This avoids requesting a listed-but-empty
+  // tournament and burns 0 credits (both endpoints are free).
+  let tennisCandidates: string[] = [];
+  if (wantsTennis) {
+    const allKeys = (await fetchSportKeys(true)) ?? [];
+    const tennisKeys = allKeys.filter((key) => key.startsWith("tennis"));
+    // Expand umbrella tokens (tennis / tennis_atp / tennis_wta) to candidates.
+    tennisCandidates = resolveSportsFromActive(
+      universe.filter(isTennisToken),
+      tennisKeys,
+    );
+  }
 
-  // Gate each concrete league on real upcoming games (parallel, all free).
+  // Gate concrete leagues AND tennis candidates on real upcoming games.
   const concrete = universe.filter((token) => !isTennisToken(token));
+  const gateTargets = [...concrete, ...tennisCandidates];
   const gates = await Promise.all(
-    concrete.map(async (key) => ({ key, inSeason: await leagueHasGames(key) })),
+    gateTargets.map(async (key) => [key, await leagueHasGames(key)] as const),
   );
-  const gamesByLeague = new Map(gates.map((g) => [g.key, g.inSeason]));
+  const gamesByKey = new Map(gates);
 
   const resolved: string[] = [];
   for (const token of universe) {
     if (isTennisToken(token)) {
-      for (const key of resolveSportsFromActive([token], activeKeys)) {
-        if (!resolved.includes(key)) resolved.push(key);
+      for (const key of tennisCandidates) {
+        if (gamesByKey.get(key) && !resolved.includes(key)) resolved.push(key);
       }
-    } else if (gamesByLeague.get(token) && !resolved.includes(token)) {
+    } else if (gamesByKey.get(token) && !resolved.includes(token)) {
       resolved.push(token);
     }
   }
@@ -685,7 +701,8 @@ serve(async (request) => {
   // gating, final resolved set) without pulling any odds. Use it to see why a
   // league/tennis is or isn't being requested.
   if (debug === "sports") {
-    const rawActive = await fetchActiveSportKeys();
+    const inSeason = await fetchSportKeys(false);
+    const allKeys = await fetchSportKeys(true);
     const universe = (!AUTODETECT_SPORTS && MANUAL_SPORTS.length > 0)
       ? MANUAL_SPORTS
       : SPORT_UNIVERSE;
@@ -698,11 +715,14 @@ serve(async (request) => {
       JSON.stringify({
         universe,
         autodetect: AUTODETECT_SPORTS,
-        rawSportsListOk: rawActive !== null,
-        tennisKeysListed: (rawActive ?? []).filter((k) =>
+        inSeasonListOk: inSeason !== null,
+        allListOk: allKeys !== null,
+        inSeasonCount: inSeason?.length ?? 0,
+        allCount: allKeys?.length ?? 0,
+        tennisKeysInSeason: (inSeason ?? []).filter((k) =>
           k.startsWith("tennis")
         ),
-        activeListCount: rawActive?.length ?? 0,
+        tennisKeysAll: (allKeys ?? []).filter((k) => k.startsWith("tennis")),
         leagueGames: Object.fromEntries(gameGate),
         resolved,
       }),
