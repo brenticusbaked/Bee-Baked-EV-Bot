@@ -39,7 +39,9 @@ supabase secrets set ODDS_API_KEY_3=<reserve-500-key>
 supabase secrets set ODDS_API_KEY_4=<reserve-500-key>
 supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 supabase secrets set ODDS_INGEST_FUNCTION_SECRET=<shared-secret>
-supabase secrets set ODDS_API_ACTIVE_SPORTS=basketball_nba,basketball_wnba,baseball_mlb,icehockey_nhl
+# In-season leagues are auto-detected from the universe (see "Sport selection"
+# below) — you normally do NOT set a sports list. Optionally override the universe:
+supabase secrets set ODDS_API_SPORT_UNIVERSE=baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl,americanfootball_nfl,tennis
 supabase secrets set ODDS_API_MARKETS=h2h,spreads,totals
 supabase secrets set ODDS_API_REGIONS=us,eu
 # Bovada is in the `us` region, so it is covered by the main pull at no extra cost.
@@ -164,16 +166,30 @@ watch `odds_ingest_runs.credits_used`. Unsupported / out-of-season markets retur
 Budget is concentrated on the sports the syndicate is historically best at and on
 the hours markets are actually up. From the transaction history, realized ROI on
 straight bets the engine would flag (predicted EV > 0) is: MLB +7.1% (n=1720),
-WNBA +4.1% (n=472), NBA +3.5% (n=2574), NHL +14% (small n). Keep the strongest
-**in-season** sports first (the first sport is favored by the always-run-first
-rule) and trim idle leagues so their main pulls don't burn credits:
+WNBA +4.1% (n=472), NBA +3.5% (n=2574), NHL +14% (small n).
+
+**In-season detection is automatic — you do NOT maintain a sports list.** The
+function keeps a fixed *universe* of leagues and, every run, narrows it to the
+leagues The Odds API currently lists as active (its free `/v4/sports` listing
+returns only in-season sports — 0 credits). So MLB/WNBA run in summer, NBA/NHL
+switch on by themselves when their seasons open, off-season leagues cost nothing,
+and you never edit a secret by season. Default universe (ROI priority order):
+
+```
+baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl,americanfootball_nfl,tennis
+```
+
+Override the universe only if you want a different set of leagues:
 
 ```bash
-# In-season now (summer). Add basketball_nba,icehockey_nhl when their seasons
-# resume — and either raise the ceiling or slow the cron, since each extra sport
-# adds ~6 credits/run to the main-market baseline.
-supabase secrets set ODDS_API_ACTIVE_SPORTS=baseball_mlb,basketball_wnba,tennis
+supabase secrets set ODDS_API_SPORT_UNIVERSE=baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl,americanfootball_nfl,tennis
 ```
+
+The legacy `ODDS_API_ACTIVE_SPORTS` secret is **ignored** while auto-detect is on
+(the default). To go back to a hand-pinned list, set
+`ODDS_API_AUTODETECT_SPORTS=false` and it will use `ODDS_API_ACTIVE_SPORTS`
+(still season-filtered and tennis-expanded). You can safely delete
+`ODDS_API_ACTIVE_SPORTS` in the default mode.
 
 The `tennis` token (also `tennis_atp` / `tennis_wta`) is expanded at runtime into
 the currently-active tournament keys via the free `/v4/sports` listing, since

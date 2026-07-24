@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { type ProximityConfig, sportDueThisSlot } from "./throttle.ts";
+import { isTennisToken, resolveSportsFromActive } from "./sports.ts";
 
 type OddsOutcome = {
   name: string;
@@ -176,61 +177,61 @@ const PROXIMITY_CONFIG: ProximityConfig = {
   cycleMinutes: CYCLE_MINUTES,
 };
 
-// Ordered by realized straight-bet +EV ROI from the syndicate's own history
-// (MLB best on volume, then WNBA; NBA/NHL follow for when their seasons resume).
+// Universe of leagues the syndicate cares about, in realized-ROI priority order
+// (MLB best on volume, then WNBA; NBA/NHL/NFL for their seasons; tennis).
 // The first sport is favored by the first-job-always-runs rule, so keep the
-// strongest in-season market first. Trim this to in-season sports to avoid
-// spending main-pull credits on idle leagues.
-// Tokens may be concrete Odds API sport keys (e.g. baseball_mlb) OR umbrella
-// tennis tokens (`tennis`, `tennis_atp`, `tennis_wta`). Tennis keys on The Odds
-// API are per-tournament and rotate week to week (tennis_atp_wimbledon, ...),
-// so umbrella tokens are expanded at runtime via the free /v4/sports endpoint.
-const ACTIVE_SPORTS = (Deno.env.get("ODDS_API_ACTIVE_SPORTS") ??
-  "baseball_mlb,basketball_wnba,tennis,basketball_nba,icehockey_nhl")
+// strongest market first. This is a *superset* — each run auto-narrows it to the
+// leagues actually in season (see resolveActiveSports), so idle leagues cost 0
+// credits and NBA/NHL/NFL switch on by themselves when their seasons open. No
+// need to edit this by season. Tokens may be concrete Odds API sport keys or
+// umbrella tennis tokens (`tennis`, `tennis_atp`, `tennis_wta`); tennis keys are
+// per-tournament and rotate weekly, so they're expanded at runtime.
+const SPORT_UNIVERSE = (Deno.env.get("ODDS_API_SPORT_UNIVERSE") ??
+  "baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl,americanfootball_nfl,tennis")
   .split(",")
   .map((sport) => sport.trim())
   .filter(Boolean);
 
-function isTennisToken(token: string): boolean {
-  return token === "tennis" || token === "tennis_atp" || token === "tennis_wta";
-}
+// Auto-detect in-season leagues by default. Set ODDS_API_AUTODETECT_SPORTS=false
+// to pin the run to an explicit ODDS_API_ACTIVE_SPORTS list instead (manual
+// override; still season-filtered and tennis-expanded).
+const AUTODETECT_SPORTS =
+  (Deno.env.get("ODDS_API_AUTODETECT_SPORTS") ?? "true").toLowerCase() !==
+    "false";
+const MANUAL_SPORTS = (Deno.env.get("ODDS_API_ACTIVE_SPORTS") ?? "")
+  .split(",")
+  .map((sport) => sport.trim())
+  .filter(Boolean);
 
-// Expand umbrella tennis tokens into the concrete, currently-active tournament
-// keys. The /v4/sports listing costs 0 credits. On any failure we simply drop
-// the umbrella token (no tennis this run) rather than fail the whole ingest.
-async function resolveActiveSports(tokens: string[]): Promise<string[]> {
-  if (!tokens.some(isTennisToken)) return tokens;
-
-  let activeTennis: string[] = [];
+// Fetch the currently-active sport keys from the free /v4/sports listing (0
+// credits — it returns only in-season sports) and resolve the desired universe
+// against them: concrete leagues are kept only while in season, tennis umbrella
+// tokens expand to active per-tournament keys. On a listing failure we fall
+// back to the concrete (non-tennis) universe tokens so ingestion never goes
+// dark just because the sports list was briefly unreachable.
+async function resolveActiveSports(universe: string[]): Promise<string[]> {
+  let activeKeys: string[] = [];
+  let listOk = false;
   try {
     const url = new URL("https://api.the-odds-api.com/v4/sports/");
     const response = await oddsFetch(url);
     if (response.ok) {
-      const listed = (await response.json()) as Array<{ key: string; group?: string; active?: boolean }>;
-      activeTennis = listed
-        .filter((sport) => sport.active !== false && String(sport.key).startsWith("tennis"))
+      const listed = (await response.json()) as Array<
+        { key: string; group?: string; active?: boolean }
+      >;
+      activeKeys = listed
+        .filter((sport) => sport.active !== false)
         .map((sport) => sport.key);
+      listOk = true;
     }
   } catch (_error) {
-    activeTennis = [];
+    listOk = false;
   }
 
-  const resolved: string[] = [];
-  for (const token of tokens) {
-    if (!isTennisToken(token)) {
-      resolved.push(token);
-      continue;
-    }
-    const tourFilter = token === "tennis_atp"
-      ? (key: string) => key.startsWith("tennis_atp")
-      : token === "tennis_wta"
-      ? (key: string) => key.startsWith("tennis_wta")
-      : (_key: string) => true;
-    for (const key of activeTennis) {
-      if (tourFilter(key) && !resolved.includes(key)) resolved.push(key);
-    }
+  if (!listOk) {
+    return universe.filter((token) => !isTennisToken(token));
   }
-  return resolved;
+  return resolveSportsFromActive(universe, activeKeys);
 }
 
 // Per-sport expansion markets, fetched from the per-event odds endpoint. Each
@@ -620,8 +621,14 @@ serve(async (request) => {
 
   const slot = currentSlot();
   const startedAt = new Date().toISOString();
-  // Expand umbrella tennis tokens into concrete active tournament keys.
-  const activeSports = await resolveActiveSports(ACTIVE_SPORTS);
+  // Narrow the desired league set to what's in season (and expand tennis to its
+  // active tournament keys). Default: auto-detect from the full universe. If
+  // auto-detect is disabled and an explicit ODDS_API_ACTIVE_SPORTS is set, use
+  // that as the desired set instead.
+  const desiredSports = (!AUTODETECT_SPORTS && MANUAL_SPORTS.length > 0)
+    ? MANUAL_SPORTS
+    : SPORT_UNIVERSE;
+  const activeSports = await resolveActiveSports(desiredSports);
 
   // Game-proximity throttle: only pull sports whose nearest game makes them due
   // on this tick. Spends nothing on sports whose next game is hours away.
