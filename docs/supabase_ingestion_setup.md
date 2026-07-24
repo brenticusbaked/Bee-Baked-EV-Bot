@@ -86,7 +86,35 @@ supabase secrets set ODDS_MAX_CREDITS_PER_RUN=24
 supabase secrets set ODDS_MAX_EVENTS_PER_ENRICH=2
 supabase secrets set ODDS_API_ENRICH_REGIONS=us
 supabase secrets set ENABLE_MARKET_ENRICHMENT=true
+
+# --- Game-proximity throttle (credit concentration) ---
+# On each cron tick the function looks up the nearest upcoming/live game per
+# sport (from cached `fixtures`, 0 API credits) and only pulls a sport when its
+# game is close enough to be "due" this tick. This reproduces a "poll faster as
+# the game approaches" schedule on the serverless pg_cron model — no long-running
+# process — and can only ever REDUCE spend vs. pulling every sport every tick.
+# Tiers (hours-until-game -> minutes-between-pulls), all overridable:
+#   > 24h            -> 240 min (sparse; also refreshes fixtures/openers)
+#   12-24h           ->  60 min
+#   2-12h            ->  15 min
+#   <= 2h (or live)  -> every tick
+# Nearest game unknown (no fixtures yet) -> 60 min discovery cadence.
+supabase secrets set ODDS_PROXIMITY_THROTTLE=true       # set false to pull all sports every tick
+supabase secrets set ODDS_PROXIMITY_FAR_HOURS=24
+supabase secrets set ODDS_PROXIMITY_MID_HOURS=12
+supabase secrets set ODDS_PROXIMITY_NEAR_HOURS=2
+supabase secrets set ODDS_POLL_FAR_MINUTES=240
+supabase secrets set ODDS_POLL_MID_MINUTES=60
+supabase secrets set ODDS_POLL_CLOSE_MINUTES=15
+supabase secrets set ODDS_POLL_UNKNOWN_MINUTES=60
 ```
+
+When no sport is due on a tick, the function writes a zero-credit
+`odds_ingest_runs` row with `status = 'skipped'` (so the schedule is visibly
+ticking rather than silently dead) and makes no Odds API calls. To get finer
+near-game resolution (closer to per-minute as tip-off approaches), tighten the
+prime-hours cron in `supabase_edge_cron_setup.sql`; the throttle keeps the
+extra ticks cheap because distant-game sports stay gated off.
 
 Player-prop coverage (`SPORT_EXTRAS` in the Edge Function) spans the standard
 counting-stat Over/Under props for each sport (MLB pitcher/batter props, NBA/WNBA

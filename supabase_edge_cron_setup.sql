@@ -26,7 +26,7 @@ create extension if not exists pg_cron;
 
 -- Store secrets with Supabase Vault or replace these placeholders in a private SQL session.
 -- Recommended secrets:
---   ODDS_INGEST_FUNCTION_URL = https://<project-ref>.functions.supabase.co/odds-cache-ingest
+--   ODDS_INGEST_FUNCTION_URL = https://<project-ref>.supabase.co/functions/v1/odds-cache-ingest
 --   ODDS_INGEST_FUNCTION_SECRET = <your ODDS_INGEST_FUNCTION_SECRET, kept out of git>
 
 -- Remove any prior schedules so we do not double-spend credits.
@@ -46,7 +46,7 @@ select cron.schedule(
     '*/30 16-23,0-4 * * *',
     $$
     select net.http_post(
-        url := 'https://<project-ref>.functions.supabase.co/odds-cache-ingest',
+        url := 'https://<project-ref>.supabase.co/functions/v1/odds-cache-ingest',
         headers := jsonb_build_object(
             'Content-Type', 'application/json',
             'x-ingest-secret', '<replace-with-ODDS_INGEST_FUNCTION_SECRET>'
@@ -62,7 +62,7 @@ select cron.schedule(
     '0 11-15 * * *',
     $$
     select net.http_post(
-        url := 'https://<project-ref>.functions.supabase.co/odds-cache-ingest',
+        url := 'https://<project-ref>.supabase.co/functions/v1/odds-cache-ingest',
         headers := jsonb_build_object(
             'Content-Type', 'application/json',
             'x-ingest-secret', '<replace-with-ODDS_INGEST_FUNCTION_SECRET>'
@@ -79,7 +79,7 @@ select cron.schedule(
     '30 9 * * *',
     $$
     select net.http_post(
-        url := 'https://<project-ref>.functions.supabase.co/odds-cache-ingest',
+        url := 'https://<project-ref>.supabase.co/functions/v1/odds-cache-ingest',
         headers := jsonb_build_object(
             'Content-Type', 'application/json',
             'x-ingest-secret', '<replace-with-ODDS_INGEST_FUNCTION_SECRET>'

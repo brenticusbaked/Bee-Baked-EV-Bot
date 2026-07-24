@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import { type ProximityConfig, sportDueThisSlot } from "./throttle.ts";
 
 type OddsOutcome = {
   name: string;
@@ -61,7 +62,9 @@ const ODDS_API_KEYS = [
   Deno.env.get("ODDS_API_KEY_3") ?? "",
   Deno.env.get("ODDS_API_KEY_4") ?? "",
 ].map((key) => key.trim()).filter(Boolean);
-const INGEST_SECRET = Deno.env.get("ODDS_INGEST_FUNCTION_SECRET") ?? "";
+// Trimmed so a stray trailing space/newline in the stored secret (a common
+// cause of spurious 401s) can't break the exact-match auth check below.
+const INGEST_SECRET = (Deno.env.get("ODDS_INGEST_FUNCTION_SECRET") ?? "").trim();
 const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
 // Target books. The Odds API bills per REGION (or per 10 bookmakers), not per
 // individual book, so widening this list up to 10 books adds ZERO credit cost
@@ -131,6 +134,47 @@ const MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "
 // in a single run. Events rotate across runs by the time-based slot.
 const MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_MAX_EVENTS_PER_ENRICH") ?? "2");
 const CYCLE_MINUTES = Number(Deno.env.get("ODDS_CYCLE_MINUTES") ?? "10");
+
+// --- Game-proximity throttle -------------------------------------------------
+// Concentrate the Odds API budget on games that are close to first pitch/tip and
+// spend almost nothing when the nearest game is far away. On each cron tick the
+// function looks up the nearest upcoming fixture per sport, derives a target
+// poll interval from how many hours out that game is, and only pulls the sport
+// on ticks that land on that interval (measured in CYCLE_MINUTES slots). This
+// reproduces a "poll faster as the game approaches" schedule while staying on
+// the serverless pg_cron model — no long-running process, no extra infra, and
+// it can only ever REDUCE spend versus pulling every sport every tick. The
+// tiers mirror the syndicate's requested schedule (far → sparse ... imminent →
+// every tick). Set ODDS_PROXIMITY_THROTTLE=false to pull every active sport on
+// every tick (previous behaviour).
+const PROXIMITY_THROTTLE =
+  (Deno.env.get("ODDS_PROXIMITY_THROTTLE") ?? "true").toLowerCase() !== "false";
+// Hour cutoffs (hours until nearest game) that define the tiers.
+const PROXIMITY_FAR_HOURS = Number(Deno.env.get("ODDS_PROXIMITY_FAR_HOURS") ?? "24");
+const PROXIMITY_MID_HOURS = Number(Deno.env.get("ODDS_PROXIMITY_MID_HOURS") ?? "12");
+const PROXIMITY_NEAR_HOURS = Number(Deno.env.get("ODDS_PROXIMITY_NEAR_HOURS") ?? "2");
+// Target minutes between pulls for each tier.
+//   > FAR_HOURS            -> POLL_FAR_MINUTES     (default 4h)
+//   MID_HOURS..FAR_HOURS   -> POLL_MID_MINUTES     (default 1h)
+//   NEAR_HOURS..MID_HOURS  -> POLL_CLOSE_MINUTES   (default 15m)
+//   <= NEAR_HOURS (or live)-> every tick (CYCLE_MINUTES)
+const POLL_FAR_MINUTES = Number(Deno.env.get("ODDS_POLL_FAR_MINUTES") ?? "240");
+const POLL_MID_MINUTES = Number(Deno.env.get("ODDS_POLL_MID_MINUTES") ?? "60");
+const POLL_CLOSE_MINUTES = Number(Deno.env.get("ODDS_POLL_CLOSE_MINUTES") ?? "15");
+// Nearest game unknown (no fixtures cached yet) -> moderate discovery cadence so
+// a fresh slate is still picked up promptly without polling a dead sport all day.
+const POLL_UNKNOWN_MINUTES = Number(Deno.env.get("ODDS_POLL_UNKNOWN_MINUTES") ?? "60");
+
+const PROXIMITY_CONFIG: ProximityConfig = {
+  farHours: PROXIMITY_FAR_HOURS,
+  midHours: PROXIMITY_MID_HOURS,
+  nearHours: PROXIMITY_NEAR_HOURS,
+  pollFarMinutes: POLL_FAR_MINUTES,
+  pollMidMinutes: POLL_MID_MINUTES,
+  pollCloseMinutes: POLL_CLOSE_MINUTES,
+  pollUnknownMinutes: POLL_UNKNOWN_MINUTES,
+  cycleMinutes: CYCLE_MINUTES,
+};
 
 // Ordered by realized straight-bet +EV ROI from the syndicate's own history
 // (MLB best on volume, then WNBA; NBA/NHL follow for when their seasons resume).
@@ -278,6 +322,31 @@ async function getUpcomingFixtureIds(sportKey: string): Promise<string[]> {
     .order("commence_time", { ascending: true });
   if (error || !data) return [];
   return data.map((row) => String(row.id));
+}
+
+// Hours until the nearest upcoming (or currently-live) game for a sport, read
+// from cached fixtures. Costs zero Odds API credits. Returns null when no
+// fixture is cached in range so the caller falls back to the discovery cadence.
+async function hoursUntilNearestGame(sportKey: string): Promise<number | null> {
+  const now = Date.now();
+  // Include games that started up to ~3h ago so in-play events still count as
+  // "near". Horizon of 72h keeps far-out openers visible for the sparse tier.
+  const lookbackHours = 3;
+  const horizonHours = 72;
+  const since = new Date(now - lookbackHours * 3600 * 1000).toISOString();
+  const until = new Date(now + horizonHours * 3600 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from("fixtures")
+    .select("commence_time")
+    .eq("sport_key", sportKey)
+    .gte("commence_time", since)
+    .lte("commence_time", until)
+    .order("commence_time", { ascending: true })
+    .limit(1);
+  if (error || !data || data.length === 0) return null;
+  const ts = Date.parse(String(data[0].commence_time));
+  if (!Number.isFinite(ts)) return null;
+  return (ts - now) / 3_600_000;
 }
 
 function buildJobs(slot: number, sports: string[]): IngestJob[] {
@@ -528,7 +597,7 @@ async function upsertOdds(sportKey: string, events: OddsEvent[]): Promise<number
 }
 
 serve(async (request) => {
-  if (INGEST_SECRET && request.headers.get("x-ingest-secret") !== INGEST_SECRET) {
+  if (INGEST_SECRET && (request.headers.get("x-ingest-secret") ?? "").trim() !== INGEST_SECRET) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
   }
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || ODDS_API_KEYS.length === 0) {
@@ -539,10 +608,49 @@ serve(async (request) => {
   const startedAt = new Date().toISOString();
   // Expand umbrella tennis tokens into concrete active tournament keys.
   const activeSports = await resolveActiveSports(ACTIVE_SPORTS);
+
+  // Game-proximity throttle: only pull sports whose nearest game makes them due
+  // on this tick. Spends nothing on sports whose next game is hours away.
+  let sportsToRun = activeSports;
+  const proximityBySport: Record<string, number | null> = {};
+  if (PROXIMITY_THROTTLE) {
+    const due: string[] = [];
+    for (let i = 0; i < activeSports.length; i++) {
+      const sportKey = activeSports[i];
+      const hours = await hoursUntilNearestGame(sportKey);
+      proximityBySport[sportKey] = hours;
+      if (sportDueThisSlot(hours, slot, i, PROXIMITY_CONFIG)) due.push(sportKey);
+    }
+    sportsToRun = due;
+  }
+
+  // Nothing due this tick — record a zero-credit skipped run (so the schedule is
+  // visibly ticking, not silently dead) and return without spending credits.
+  if (sportsToRun.length === 0) {
+    await supabase.from("odds_ingest_runs").insert({
+      status: "skipped",
+      sports_requested: activeSports,
+      rotation_slot: slot,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+      credits_used: 0,
+      api_requests: 0,
+    });
+    return new Response(
+      JSON.stringify({
+        status: "skipped",
+        slot,
+        reason: "no sport due this slot (proximity throttle)",
+        proximity: proximityBySport,
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    );
+  }
+
   let runId: string | undefined;
   const runInsert = await supabase.from("odds_ingest_runs").insert({
     status: "running",
-    sports_requested: activeSports,
+    sports_requested: sportsToRun,
     rotation_slot: slot,
     started_at: startedAt,
   }).select("id").single();
@@ -555,7 +663,7 @@ serve(async (request) => {
   let remaining: number | null = null;
 
   try {
-    const jobs = buildJobs(slot, activeSports);
+    const jobs = buildJobs(slot, sportsToRun);
     let enrichedEvents = 0;
 
     for (const job of jobs) {
@@ -572,7 +680,7 @@ serve(async (request) => {
         fixtures += await upsertFixtures(job.sportKey, events);
         oddsRows += await upsertOdds(job.sportKey, events);
       } else {
-        if (enrichedEvents >= MAX_EVENTS_PER_ENRICH * Math.max(activeSports.length, 1)) continue;
+        if (enrichedEvents >= MAX_EVENTS_PER_ENRICH * Math.max(sportsToRun.length, 1)) continue;
         const fixtureIds = await getUpcomingFixtureIds(job.sportKey);
         if (!fixtureIds.length) continue;
         const rotated = rotate(fixtureIds, slot).slice(0, MAX_EVENTS_PER_ENRICH);
