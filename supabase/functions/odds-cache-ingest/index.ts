@@ -604,6 +604,20 @@ serve(async (request) => {
     return new Response(JSON.stringify({ error: "missing required environment variables" }), { status: 500 });
   }
 
+  // Manual/forced invocations bypass the proximity throttle so a hand-fired
+  // test (or an ad-hoc backfill) always pulls every active sport instead of
+  // possibly landing on a "skipped" slot. Triggered by `{"force": true}` or any
+  // trigger string starting with "manual" in the request body.
+  let forceRun = false;
+  try {
+    const body = await request.json();
+    const trigger = String((body as { trigger?: unknown })?.trigger ?? "");
+    forceRun = (body as { force?: unknown })?.force === true ||
+      trigger.startsWith("manual");
+  } catch (_error) {
+    // No/invalid JSON body — treat as a normal scheduled tick.
+  }
+
   const slot = currentSlot();
   const startedAt = new Date().toISOString();
   // Expand umbrella tennis tokens into concrete active tournament keys.
@@ -613,7 +627,7 @@ serve(async (request) => {
   // on this tick. Spends nothing on sports whose next game is hours away.
   let sportsToRun = activeSports;
   const proximityBySport: Record<string, number | null> = {};
-  if (PROXIMITY_THROTTLE) {
+  if (PROXIMITY_THROTTLE && !forceRun) {
     const due: string[] = [];
     for (let i = 0; i < activeSports.length; i++) {
       const sportKey = activeSports[i];
