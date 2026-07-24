@@ -169,11 +169,17 @@ straight bets the engine would flag (predicted EV > 0) is: MLB +7.1% (n=1720),
 WNBA +4.1% (n=472), NBA +3.5% (n=2574), NHL +14% (small n).
 
 **In-season detection is automatic — you do NOT maintain a sports list.** The
-function keeps a fixed *universe* of leagues and, every run, narrows it to the
-leagues The Odds API currently lists as active (its free `/v4/sports` listing
-returns only in-season sports — 0 credits). So MLB/WNBA run in summer, NBA/NHL
-switch on by themselves when their seasons open, off-season leagues cost nothing,
-and you never edit a secret by season. Default universe (ROI priority order):
+function keeps a fixed *universe* of leagues and, every run, keeps only the ones
+that actually have a **real upcoming game**. It checks the free
+`/v4/sports/{league}/events` endpoint (0 credits) — which lists only dated games,
+never futures/outrights — and includes a league when it has a game within the
+next ~8 days (`ODDS_SEASON_HORIZON_HOURS`, default 192). This is deliberately
+NOT the `/v4/sports` "active" flag: that flag stays true year-round for leagues
+posting Super Bowl / Stanley Cup futures, so gating on it would burn main-pull
+credits on NFL/NHL in the dead of summer. So MLB/WNBA run in summer, NBA/NHL/NFL
+switch on by themselves the moment their seasons have games, off-season leagues
+cost nothing, and you never edit a secret by season. Default universe (ROI
+priority order):
 
 ```
 baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl,americanfootball_nfl,tennis
