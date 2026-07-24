@@ -116,6 +116,22 @@ near-game resolution (closer to per-minute as tip-off approaches), tighten the
 prime-hours cron in `supabase_edge_cron_setup.sql`; the throttle keeps the
 extra ticks cheap because distant-game sports stay gated off.
 
+**Forcing a full pull.** A manual test can land on a "skipped" slot. To bypass
+the throttle and pull every active sport immediately (e.g. to verify the
+pipeline or backfill), send `{"force": true}` — or any `trigger` starting with
+`manual` — in the request body:
+
+```sql
+select net.http_post(
+    url := 'https://<project-ref>.supabase.co/functions/v1/odds-cache-ingest',
+    headers := jsonb_build_object('Content-Type','application/json','x-ingest-secret','<INGEST_SECRET>'),
+    body := jsonb_build_object('trigger','manual_test')  -- or jsonb_build_object('force', true)
+);
+```
+
+Scheduled cron jobs use `trigger = 'pg_cron'` / `'pg_cron_opener'`, so they
+still respect the throttle.
+
 Player-prop coverage (`SPORT_EXTRAS` in the Edge Function) spans the standard
 counting-stat Over/Under props for each sport (MLB pitcher/batter props, NBA/WNBA
 points/rebounds/assists/threes/combos, NHL points/goals/assists/SOG/saves) plus
