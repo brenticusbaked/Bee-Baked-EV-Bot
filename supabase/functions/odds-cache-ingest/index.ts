@@ -246,27 +246,32 @@ async function leagueHasGames(sportKey: string): Promise<boolean> {
 // Free /events checks run in parallel. If everything is unreachable the run
 // simply yields no sports (a skipped tick), which is cheaper and safer than
 // blindly pulling every league.
+// Raw /v4/sports listing (free, 0 credits). Returns the currently-active sport
+// keys, or null if the listing couldn't be fetched/parsed. Kept separate so a
+// debug call can surface exactly what The Odds API is returning.
+async function fetchActiveSportKeys(): Promise<string[] | null> {
+  try {
+    const url = new URL("https://api.the-odds-api.com/v4/sports/");
+    const response = await oddsFetch(url);
+    if (!response.ok) return null;
+    const listed = (await response.json()) as Array<
+      { key: string; group?: string; active?: boolean }
+    >;
+    return listed
+      .filter((sport) => sport.active !== false)
+      .map((sport) => sport.key);
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function resolveActiveSports(universe: string[]): Promise<string[]> {
   const wantsTennis = universe.some(isTennisToken);
 
   // Tennis discovery (only when a tennis umbrella token is present).
-  let activeKeys: string[] = [];
-  if (wantsTennis) {
-    try {
-      const url = new URL("https://api.the-odds-api.com/v4/sports/");
-      const response = await oddsFetch(url);
-      if (response.ok) {
-        const listed = (await response.json()) as Array<
-          { key: string; group?: string; active?: boolean }
-        >;
-        activeKeys = listed
-          .filter((sport) => sport.active !== false)
-          .map((sport) => sport.key);
-      }
-    } catch (_error) {
-      activeKeys = [];
-    }
-  }
+  const activeKeys: string[] = wantsTennis
+    ? (await fetchActiveSportKeys()) ?? []
+    : [];
 
   // Gate each concrete league on real upcoming games (parallel, all free).
   const concrete = universe.filter((token) => !isTennisToken(token));
@@ -664,13 +669,45 @@ serve(async (request) => {
   // possibly landing on a "skipped" slot. Triggered by `{"force": true}` or any
   // trigger string starting with "manual" in the request body.
   let forceRun = false;
+  let debug = "";
   try {
     const body = await request.json();
     const trigger = String((body as { trigger?: unknown })?.trigger ?? "");
     forceRun = (body as { force?: unknown })?.force === true ||
       trigger.startsWith("manual");
+    debug = String((body as { debug?: unknown })?.debug ?? "");
   } catch (_error) {
     // No/invalid JSON body — treat as a normal scheduled tick.
+  }
+
+  // Zero-credit diagnostic: `{"debug":"sports"}` returns exactly what the
+  // sport-resolution sees (raw active listing, tennis keys, per-league game
+  // gating, final resolved set) without pulling any odds. Use it to see why a
+  // league/tennis is or isn't being requested.
+  if (debug === "sports") {
+    const rawActive = await fetchActiveSportKeys();
+    const universe = (!AUTODETECT_SPORTS && MANUAL_SPORTS.length > 0)
+      ? MANUAL_SPORTS
+      : SPORT_UNIVERSE;
+    const concrete = universe.filter((token) => !isTennisToken(token));
+    const gameGate = await Promise.all(
+      concrete.map(async (key) => [key, await leagueHasGames(key)] as const),
+    );
+    const resolved = await resolveActiveSports(universe);
+    return new Response(
+      JSON.stringify({
+        universe,
+        autodetect: AUTODETECT_SPORTS,
+        rawSportsListOk: rawActive !== null,
+        tennisKeysListed: (rawActive ?? []).filter((k) =>
+          k.startsWith("tennis")
+        ),
+        activeListCount: rawActive?.length ?? 0,
+        leagueGames: Object.fromEntries(gameGate),
+        resolved,
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    );
   }
 
   const slot = currentSlot();
