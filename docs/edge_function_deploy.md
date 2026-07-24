@@ -44,8 +44,13 @@ supabase functions deploy odds-cache-ingest --project-ref <YOUR_PROJECT_REF>
 After deploy it is live at:
 
 ```
-https://<YOUR_PROJECT_REF>.functions.supabase.co/odds-cache-ingest
+https://<YOUR_PROJECT_REF>.supabase.co/functions/v1/odds-cache-ingest
 ```
+
+Use this `/functions/v1/` form for `pg_cron` / `pg_net` invocation. The
+`<ref>.functions.supabase.co/...` host can issue an HTTP 303 redirect that
+`pg_net` does not follow, so the scheduled call never reaches the function
+(you'll see `status_code = 303` in `net._http_response` and no ingest run).
 
 ### Automated deploy (GitHub Action)
 

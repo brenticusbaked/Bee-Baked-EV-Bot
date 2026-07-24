@@ -62,7 +62,9 @@ const ODDS_API_KEYS = [
   Deno.env.get("ODDS_API_KEY_3") ?? "",
   Deno.env.get("ODDS_API_KEY_4") ?? "",
 ].map((key) => key.trim()).filter(Boolean);
-const INGEST_SECRET = Deno.env.get("ODDS_INGEST_FUNCTION_SECRET") ?? "";
+// Trimmed so a stray trailing space/newline in the stored secret (a common
+// cause of spurious 401s) can't break the exact-match auth check below.
+const INGEST_SECRET = (Deno.env.get("ODDS_INGEST_FUNCTION_SECRET") ?? "").trim();
 const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
 // Target books. The Odds API bills per REGION (or per 10 bookmakers), not per
 // individual book, so widening this list up to 10 books adds ZERO credit cost
@@ -595,7 +597,7 @@ async function upsertOdds(sportKey: string, events: OddsEvent[]): Promise<number
 }
 
 serve(async (request) => {
-  if (INGEST_SECRET && request.headers.get("x-ingest-secret") !== INGEST_SECRET) {
+  if (INGEST_SECRET && (request.headers.get("x-ingest-secret") ?? "").trim() !== INGEST_SECRET) {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
   }
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || ODDS_API_KEYS.length === 0) {
