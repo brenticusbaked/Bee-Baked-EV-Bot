@@ -1,5 +1,14 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { isTennisToken, resolveSportsFromActive } from "./sports.ts";
+import {
+  hasGameWithinHorizon,
+  isTennisToken,
+  resolveSportsFromActive,
+} from "./sports.ts";
+
+const HOUR = 3_600_000;
+const NOW = Date.parse("2026-07-24T00:00:00Z");
+const iso = (hoursFromNow: number) =>
+  new Date(NOW + hoursFromNow * HOUR).toISOString();
 
 const UNIVERSE = [
   "baseball_mlb",
@@ -83,4 +92,45 @@ Deno.test("de-duplicates without losing order", () => {
     "baseball_mlb",
     "tennis_atp_x",
   ]);
+});
+
+Deno.test("in-season when a game is within the horizon", () => {
+  // MLB game tonight -> in season.
+  assertEquals(hasGameWithinHorizon([{ commence_time: iso(3) }], NOW, 192), true);
+  // NFL preseason game ~6 days out -> in season within the 8-day horizon.
+  assertEquals(hasGameWithinHorizon([{ commence_time: iso(144) }], NOW, 192), true);
+});
+
+Deno.test("out of season when no game (futures-only) within horizon", () => {
+  // Empty events list (only outrights exist -> not returned by /events).
+  assertEquals(hasGameWithinHorizon([], NOW, 192), false);
+  // Lone game far beyond the horizon (e.g. a schedule stub) -> not in season.
+  assertEquals(
+    hasGameWithinHorizon([{ commence_time: iso(24 * 30) }], NOW, 192),
+    false,
+  );
+});
+
+Deno.test("counts a live/just-started game via the grace window", () => {
+  assertEquals(hasGameWithinHorizon([{ commence_time: iso(-1) }], NOW, 192), true);
+  // Long-finished game outside the grace window does not count.
+  assertEquals(
+    hasGameWithinHorizon([{ commence_time: iso(-48) }], NOW, 192),
+    false,
+  );
+});
+
+Deno.test("ignores unparseable commence_time values", () => {
+  assertEquals(
+    hasGameWithinHorizon(
+      [{ commence_time: "not-a-date" }, {}, { commence_time: iso(2) }],
+      NOW,
+      192,
+    ),
+    true,
+  );
+  assertEquals(
+    hasGameWithinHorizon([{ commence_time: "not-a-date" }, {}], NOW, 192),
+    false,
+  );
 });

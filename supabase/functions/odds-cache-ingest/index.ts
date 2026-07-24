@@ -1,7 +1,11 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { type ProximityConfig, sportDueThisSlot } from "./throttle.ts";
-import { isTennisToken, resolveSportsFromActive } from "./sports.ts";
+import {
+  hasGameWithinHorizon,
+  isTennisToken,
+  resolveSportsFromActive,
+} from "./sports.ts";
 
 type OddsOutcome = {
   name: string;
@@ -203,35 +207,85 @@ const MANUAL_SPORTS = (Deno.env.get("ODDS_API_ACTIVE_SPORTS") ?? "")
   .map((sport) => sport.trim())
   .filter(Boolean);
 
-// Fetch the currently-active sport keys from the free /v4/sports listing (0
-// credits — it returns only in-season sports) and resolve the desired universe
-// against them: concrete leagues are kept only while in season, tennis umbrella
-// tokens expand to active per-tournament keys. On a listing failure we fall
-// back to the concrete (non-tennis) universe tokens so ingestion never goes
-// dark just because the sports list was briefly unreachable.
-async function resolveActiveSports(universe: string[]): Promise<string[]> {
-  let activeKeys: string[] = [];
-  let listOk = false;
+// How far ahead a league must have a scheduled game to count as "in season".
+// Covers the current + upcoming slate (e.g. NFL/NHL preseason a week out) while
+// still excluding a league that only posts distant futures.
+const SEASON_HORIZON_HOURS = Number(
+  Deno.env.get("ODDS_SEASON_HORIZON_HOURS") ?? "192",
+);
+
+// True if a concrete league has at least one real, dated game within the season
+// horizon. Uses the FREE /v4/sports/{key}/events endpoint (0 credits) which
+// lists only actual game events — never futures/outrights — so a league that is
+// technically "active" year-round for Super Bowl/Stanley Cup futures does NOT
+// count as in season here. On any error we return false (exclude) rather than
+// spend main-pull credits on a league we can't confirm has games.
+async function leagueHasGames(sportKey: string): Promise<boolean> {
   try {
-    const url = new URL("https://api.the-odds-api.com/v4/sports/");
+    const url = new URL(
+      `https://api.the-odds-api.com/v4/sports/${sportKey}/events`,
+    );
+    url.searchParams.set("dateFormat", "iso");
     const response = await oddsFetch(url);
-    if (response.ok) {
-      const listed = (await response.json()) as Array<
-        { key: string; group?: string; active?: boolean }
-      >;
-      activeKeys = listed
-        .filter((sport) => sport.active !== false)
-        .map((sport) => sport.key);
-      listOk = true;
-    }
+    if (!response.ok) return false;
+    const events = (await response.json()) as Array<{ commence_time?: string }>;
+    return hasGameWithinHorizon(events, Date.now(), SEASON_HORIZON_HOURS);
   } catch (_error) {
-    listOk = false;
+    return false;
+  }
+}
+
+// Resolve the desired league universe into the concrete sport keys to pull this
+// run. Two independent free (0-credit) signals:
+//   - Concrete leagues (baseball_mlb, basketball_nba, ...): kept only if they
+//     have a real upcoming GAME (leagueHasGames -> /events). This is what makes
+//     NBA/NHL/NFL switch on exactly when their seasons have games and stay off
+//     — with zero wasted credits — the rest of the year.
+//   - Tennis umbrella tokens: expanded to the currently-active per-tournament
+//     keys from the /v4/sports listing (keys rotate weekly).
+// Free /events checks run in parallel. If everything is unreachable the run
+// simply yields no sports (a skipped tick), which is cheaper and safer than
+// blindly pulling every league.
+async function resolveActiveSports(universe: string[]): Promise<string[]> {
+  const wantsTennis = universe.some(isTennisToken);
+
+  // Tennis discovery (only when a tennis umbrella token is present).
+  let activeKeys: string[] = [];
+  if (wantsTennis) {
+    try {
+      const url = new URL("https://api.the-odds-api.com/v4/sports/");
+      const response = await oddsFetch(url);
+      if (response.ok) {
+        const listed = (await response.json()) as Array<
+          { key: string; group?: string; active?: boolean }
+        >;
+        activeKeys = listed
+          .filter((sport) => sport.active !== false)
+          .map((sport) => sport.key);
+      }
+    } catch (_error) {
+      activeKeys = [];
+    }
   }
 
-  if (!listOk) {
-    return universe.filter((token) => !isTennisToken(token));
+  // Gate each concrete league on real upcoming games (parallel, all free).
+  const concrete = universe.filter((token) => !isTennisToken(token));
+  const gates = await Promise.all(
+    concrete.map(async (key) => ({ key, inSeason: await leagueHasGames(key) })),
+  );
+  const gamesByLeague = new Map(gates.map((g) => [g.key, g.inSeason]));
+
+  const resolved: string[] = [];
+  for (const token of universe) {
+    if (isTennisToken(token)) {
+      for (const key of resolveSportsFromActive([token], activeKeys)) {
+        if (!resolved.includes(key)) resolved.push(key);
+      }
+    } else if (gamesByLeague.get(token) && !resolved.includes(token)) {
+      resolved.push(token);
+    }
   }
-  return resolveSportsFromActive(universe, activeKeys);
+  return resolved;
 }
 
 // Per-sport expansion markets, fetched from the per-event odds endpoint. Each
