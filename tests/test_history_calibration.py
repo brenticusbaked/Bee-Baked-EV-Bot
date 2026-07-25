@@ -23,6 +23,14 @@ SUMMARY = {
     "clv_by_book": {
         "draftkings": {"n": 3000, "avg_clv_pct": 0.77, "pct_beat_close": 0.45},
     },
+    "by_type": {
+        # Big sample, profitable -> negative delta (threshold nudged down)
+        "batter_total_bases": {"n": 800, "roi": 0.06},
+        # Big sample, losing -> positive delta (threshold nudged up)
+        "pitcher_strikeouts": {"n": 800, "roi": -0.08},
+        # Below min sample -> ignored (neutral)
+        "batter_home_runs": {"n": 10, "roi": 0.50},
+    },
 }
 
 
@@ -52,6 +60,31 @@ class TestHistoryCalibration(unittest.TestCase):
         with patch("services.history_calibration.load_summary", return_value=SUMMARY):
             self.assertAlmostEqual(hc.clv_baseline_for("Draftkings Sportsbook"), 0.77)
             self.assertIsNone(hc.clv_baseline_for("Novig"))
+
+    def test_prop_type_ev_adjustment_sign_and_bounds(self):
+        with patch("services.history_calibration.load_summary", return_value=SUMMARY):
+            profitable = hc.prop_type_ev_adjustment("batter_total_bases")
+            losing = hc.prop_type_ev_adjustment("pitcher_strikeouts")
+            small = hc.prop_type_ev_adjustment("batter_home_runs")
+            unknown = hc.prop_type_ev_adjustment("pitcher_outs")
+        # Profitable type lowers the threshold (negative), loser raises it.
+        self.assertLess(profitable, 0.0)
+        self.assertGreater(losing, 0.0)
+        # Clamped within the configured cap.
+        self.assertGreaterEqual(profitable, -hc.MAX_PROP_TYPE_EV_ADJUST)
+        self.assertLessEqual(losing, hc.MAX_PROP_TYPE_EV_ADJUST)
+        # Below-sample and unknown types are neutral.
+        self.assertEqual(small, 0.0)
+        self.assertEqual(unknown, 0.0)
+
+    def test_prop_type_adjustment_neutral_without_summary(self):
+        with patch("services.history_calibration.load_summary", return_value=None):
+            self.assertEqual(hc.history_prop_type_ev_deltas(), {})
+            self.assertEqual(hc.prop_type_ev_adjustment("batter_total_bases"), 0.0)
+
+    def test_prop_type_case_insensitive_lookup(self):
+        with patch("services.history_calibration.load_summary", return_value=SUMMARY):
+            self.assertLess(hc.prop_type_ev_adjustment("BATTER_TOTAL_BASES"), 0.0)
 
     def test_book_weight_for_applies_history_when_missing(self):
         with patch("services.history_calibration.load_summary", return_value=SUMMARY):

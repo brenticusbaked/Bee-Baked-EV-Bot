@@ -29,6 +29,13 @@ ROI_TO_WEIGHT_GAIN = float(os.getenv("HISTORY_ROI_WEIGHT_GAIN", "1.0"))
 # An EV bucket must clear this ROI and sample to "validate" as profitable.
 EV_FLOOR_MIN_ROI = float(os.getenv("HISTORY_EV_FLOOR_MIN_ROI", "0.0"))
 EV_FLOOR_MIN_SAMPLE = int(os.getenv("HISTORY_EV_FLOOR_MIN_SAMPLE", "200"))
+# A prop/market type needs this many settled bets before its realized ROI is
+# allowed to nudge the EV threshold for that type.
+MIN_PROP_TYPE_SAMPLE = int(os.getenv("HISTORY_MIN_PROP_TYPE_SAMPLE", "60"))
+# Cap (EV fraction) on how far a type's realized ROI can move its EV threshold.
+MAX_PROP_TYPE_EV_ADJUST = float(os.getenv("HISTORY_MAX_PROP_TYPE_EV_ADJUST", "0.01"))
+# Scales shrunk ROI into an EV-threshold delta before clamping.
+PROP_TYPE_ROI_GAIN = float(os.getenv("HISTORY_PROP_TYPE_ROI_GAIN", "1.0"))
 
 # Lower EV bound (fraction) implied by each bucket label.
 _BUCKET_FLOOR = {"neg": None, "0-2%": 0.0, "2-5%": 0.02, "5-10%": 0.05, "10%+": 0.10}
@@ -92,6 +99,39 @@ def history_clv_baseline() -> Dict[str, float]:
     }
 
 
+@lru_cache(maxsize=1)
+def history_prop_type_ev_deltas() -> Dict[str, float]:
+    """Market/prop type -> bounded EV-threshold delta from shrunk realized ROI.
+
+    A type the user has historically profited on gets a *negative* delta (its
+    alert threshold is nudged down, favoring it); a chronic loser gets a positive
+    delta (threshold nudged up). Shrinkage + a minimum sample keep small samples
+    from meaningfully moving the gate, and the delta is clamped to
+    ``MAX_PROP_TYPE_EV_ADJUST``. Types are keyed lower-case.
+    """
+    summary = load_summary()
+    if not summary:
+        return {}
+    deltas: Dict[str, float] = {}
+    for bet_type, stats in summary.get("by_type", {}).items():
+        key = str(bet_type).strip().lower()
+        if not key:
+            continue
+        n = int(stats.get("n", 0))
+        if n < MIN_PROP_TYPE_SAMPLE:
+            continue
+        roi = float(stats.get("roi", 0.0))
+        shrunk = roi * (n / (n + SHRINK_K))
+        delta = _clamp(-shrunk * PROP_TYPE_ROI_GAIN, -MAX_PROP_TYPE_EV_ADJUST, MAX_PROP_TYPE_EV_ADJUST)
+        deltas[key] = round(delta, 5)
+    return deltas
+
+
+def prop_type_ev_adjustment(market_type: str) -> float:
+    """Bounded EV-threshold delta for a market/prop type (0.0 when unknown)."""
+    return history_prop_type_ev_deltas().get(str(market_type).strip().lower(), 0.0)
+
+
 def book_factor_for(name: str) -> float:
     """History weight for a raw book title/key (1.0 when unknown)."""
     return history_book_factors().get(normalize_book(name), 1.0)
@@ -107,3 +147,4 @@ def reset_cache() -> None:
     history_book_factors.cache_clear()
     validated_ev_floor.cache_clear()
     history_clv_baseline.cache_clear()
+    history_prop_type_ev_deltas.cache_clear()
