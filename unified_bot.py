@@ -78,11 +78,13 @@ UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.015)
 # Off by default so the explicit UNIFIED_EV_FLOOR above is authoritative; set
 # ENABLE_HISTORY_EV_FLOOR_RAISE=true to re-enable the data-driven safety raise.
 ENABLE_HISTORY_EV_FLOOR_RAISE = os.getenv("ENABLE_HISTORY_EV_FLOOR_RAISE", "false").strip().lower() in {"1", "true", "yes", "on"}
-# When enabled, per-prop-type realized ROI from bet_history nudges each prop
-# type's EV alert threshold (favor historically-profitable stat types, tighten
-# chronic losers). Bounded by MAX_PROP_TYPE_EV_ADJUST and never below the hard
-# EV floor. Off by default so the explicit threshold above is authoritative.
-ENABLE_HISTORY_PROP_TYPE_OVERLAY = os.getenv("ENABLE_HISTORY_PROP_TYPE_OVERLAY", "false").strip().lower() in {"1", "true", "yes", "on"}
+# Per-prop-type realized ROI from bet_history nudges each prop type's EV alert
+# threshold (favor historically-profitable stat types, tighten chronic losers).
+# Bounded by MAX_PROP_TYPE_EV_ADJUST and never below the hard EV floor, and
+# neutral (no effect) until enough settled history exists per type — so it is
+# safe to leave ON permanently. Set ENABLE_HISTORY_PROP_TYPE_OVERLAY=false to
+# disable.
+ENABLE_HISTORY_PROP_TYPE_OVERLAY = os.getenv("ENABLE_HISTORY_PROP_TYPE_OVERLAY", "true").strip().lower() in {"1", "true", "yes", "on"}
 # Player props carry highly asymmetric juice (e.g. Over -140 / Under +110), so
 # they are de-vigged multiplicatively rather than with the power method used for
 # main markets (see .windsurfrules Rule 1 / the syndicate spec).

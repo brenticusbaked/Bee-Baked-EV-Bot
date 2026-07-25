@@ -85,12 +85,20 @@ Optional budget/expansion controls (defaults shown):
 # runs well under runs/day x ceiling. Default depth is 48/run and 4 enriched
 # events/run to cover more props/alternates while the throttle keeps monthly spend
 # near the 20k tier. Watch odds_ingest_runs.credits_used and dial back if it
-# trends much above ~600/day. For a temporary end-of-month burn, raise these
-# directly (no redeploy needed) and revert afterward.
+# trends much above ~600/day.
 supabase secrets set ODDS_MAX_CREDITS_PER_RUN=48
 # Per-event enrichment (derivatives / alternates / player props) is fetched from
 # the per-event odds endpoint and rotates across runs by a time-based slot.
 supabase secrets set ODDS_MAX_EVENTS_PER_ENRICH=4
+
+# Auto-expiring end-of-month burn: while today's UTC date is on or before
+# ODDS_BURN_UNTIL, ingestion uses the deeper burn caps and bypasses the proximity
+# throttle to spend down remaining credits; it reverts to the steady-state
+# defaults above by itself once the date passes (no manual revert / redeploy).
+# Leave unset to disable. Tune intensity with the two burn caps.
+supabase secrets set ODDS_BURN_UNTIL=2026-07-31
+supabase secrets set ODDS_BURN_MAX_CREDITS_PER_RUN=150
+supabase secrets set ODDS_BURN_MAX_EVENTS_PER_ENRICH=6
 supabase secrets set ODDS_API_ENRICH_REGIONS=us
 supabase secrets set ENABLE_MARKET_ENRICHMENT=true
 
