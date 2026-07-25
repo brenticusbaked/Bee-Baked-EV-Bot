@@ -96,6 +96,18 @@ class PlayerPropMarketRecognitionTests(unittest.TestCase):
         self.assertIn("Gerrit Cole", alerts[0]["description"])
         self.assertIn("PITCHER_STRIKEOUTS", alerts[0]["description"])
 
+    def test_sgo_event_extraction_handles_data_wrapped_payloads(self):
+        from bot_propodds_nba import _extract_sgo_events
+
+        payload = {"success": True, "data": [{"name": "example"}]}
+        self.assertEqual(_extract_sgo_events(payload), [{"name": "example"}])
+
+    def test_sgo_event_extraction_handles_nested_data_wrapped_payloads(self):
+        from bot_propodds_nba import _extract_sgo_events
+
+        payload = {"success": True, "data": {"events": [{"name": "example"}]}}
+        self.assertEqual(_extract_sgo_events(payload), [{"name": "example"}])
+
 
 class PlayerPropEvaluationTests(unittest.TestCase):
     def test_multiplicative_fair_probability(self):

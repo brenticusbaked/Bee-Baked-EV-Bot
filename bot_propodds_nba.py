@@ -228,6 +228,27 @@ def _parse_player_prop_leagues() -> List[str]:
 
 PLAYER_PROP_LEAGUES = _parse_player_prop_leagues()
 
+
+def _extract_sgo_events(payload) -> List[dict]:
+    """Normalize SportsGameOdds responses into a list of event dicts."""
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+
+    for key in ("events", "data", "results"):
+        events = payload.get(key)
+        if isinstance(events, list):
+            return events
+
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        for key in ("events", "data", "results"):
+            events = nested.get(key)
+            if isinstance(events, list):
+                return events
+    return []
+
 def _normalize_side(value: str) -> Optional[str]:
     text = str(value or "").lower()
     if "over" in text:
@@ -409,10 +430,7 @@ def get_sgo_edges():
             # UPDATED: retry_on_429 set to True to respect rate limits with exponential backoff
             data = request("GET", url, params=params, timeout=15, retry_on_429=True).json()
 
-            if isinstance(data, dict):
-                events_list = data.get("events", [])
-            else:
-                events_list = data if isinstance(data, list) else []
+            events_list = _extract_sgo_events(data)
 
             scan_stats["events"] += len(events_list)
 
