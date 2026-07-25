@@ -80,12 +80,17 @@ Optional budget/expansion controls (defaults shown):
 # and a soft (US) per-event pull, budgeted as an atomic pair, so the ceiling must
 # clear ~22 (2 sports main = 12 + one prop pair = 10) for props to land at all.
 # The old 14 could only fund the sharp half, so soft-book props never landed and
-# no prop could alert. Paired with the game-hours cron (~31 runs/day) 24 lands
-# ~20k credits/month. Raise/lower to match cron cadence and ODDS_API_ACTIVE_SPORTS.
-supabase secrets set ODDS_MAX_CREDITS_PER_RUN=24
+# no prop could alert. The ceiling is a SAFETY CAP, not the spend driver — the
+# game-proximity throttle only pulls a sport near its next game, so realized spend
+# runs well under runs/day x ceiling. Default depth is 48/run and 4 enriched
+# events/run to cover more props/alternates while the throttle keeps monthly spend
+# near the 20k tier. Watch odds_ingest_runs.credits_used and dial back if it
+# trends much above ~600/day. For a temporary end-of-month burn, raise these
+# directly (no redeploy needed) and revert afterward.
+supabase secrets set ODDS_MAX_CREDITS_PER_RUN=48
 # Per-event enrichment (derivatives / alternates / player props) is fetched from
 # the per-event odds endpoint and rotates across runs by a time-based slot.
-supabase secrets set ODDS_MAX_EVENTS_PER_ENRICH=2
+supabase secrets set ODDS_MAX_EVENTS_PER_ENRICH=4
 supabase secrets set ODDS_API_ENRICH_REGIONS=us
 supabase secrets set ENABLE_MARKET_ENRICHMENT=true
 

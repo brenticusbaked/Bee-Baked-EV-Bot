@@ -134,14 +134,21 @@ const ENABLE_MARKET_ENRICHMENT =
 // counterpart. With two in-season sports the mains cost ~12 credits (2 sports x
 // 3 markets x us,eu) and one prop pair costs ~10 (5 markets x eu + 5 x us), so
 // the ceiling must clear ~22 for props to land at all — 14 could only ever fit
-// the sharp half, which is why soft-book props were missing. Paired with a
-// ~30-runs/day cron (see supabase_edge_cron_setup.sql), 24 credits/run lands
-// ~20k credits/month. Raise/lower to match your cron cadence and in-season
-// sport count in ODDS_API_ACTIVE_SPORTS.
-const MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "24");
+// the sharp half, which is why soft-book props were missing.
+//
+// The per-run ceiling is a *safety cap*, not the spend driver: the game-proximity
+// throttle below only pulls a sport on ticks near its next game, so realized
+// spend has run far under the theoretical 30-runs/day x ceiling. Depth was raised
+// from 24 to 48 credits/run and from 2 to 4 enriched events/run to cover more
+// props/alternates while the throttle keeps actual monthly spend near the 20k
+// tier. Monitor odds_ingest_runs.credits_used; if it trends much above ~600/day,
+// lower these (or ODDS_MAX_EVENTS_PER_ENRICH) via env — no redeploy needed.
+// For a temporary end-of-month burn, override the env vars directly rather than
+// changing these permanent defaults.
+const MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "48");
 // Cap on how many events get per-event enrichment (props/alternates/derivatives)
 // in a single run. Events rotate across runs by the time-based slot.
-const MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_MAX_EVENTS_PER_ENRICH") ?? "2");
+const MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_MAX_EVENTS_PER_ENRICH") ?? "4");
 const CYCLE_MINUTES = Number(Deno.env.get("ODDS_CYCLE_MINUTES") ?? "10");
 
 // --- Game-proximity throttle -------------------------------------------------
