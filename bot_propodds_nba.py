@@ -390,6 +390,31 @@ def _sharp_prop_reference(sharp_by_book: Dict[str, Dict[str, dict]], side: str) 
     book, price = candidates[0]
     return f"{book.upper()} {decimal_to_american(price)}"
 
+def _log_unparsed_event_shape(league: str, event: dict) -> None:
+    """When events arrive but nothing parses, print the structural shape of the
+    first event/odd so we can see how SGO nests books/prices. No secrets: this
+    dumps keys and a single sanitized sample, never the API key."""
+    if not isinstance(event, dict):
+        print(f"[prop_bot] {league}: event is {type(event).__name__}, not a dict")
+        return
+    odds = event.get("odds")
+    if isinstance(odds, dict):
+        sample_key = next(iter(odds), None)
+        sample = odds.get(sample_key) if sample_key is not None else None
+        odds_kind, odds_count = "dict", len(odds)
+    elif isinstance(odds, list):
+        sample = odds[0] if odds else None
+        sample_key, odds_kind, odds_count = None, "list", len(odds)
+    else:
+        sample, sample_key, odds_kind, odds_count = None, None, type(odds).__name__, 0
+    sample_keys = sorted(sample.keys()) if isinstance(sample, dict) else None
+    print(
+        f"[prop_bot] {league}: {odds_kind} odds x{odds_count} parsed 0 | "
+        f"event keys={sorted(event.keys())} | sample oddID={sample_key} | "
+        f"sample field keys={sample_keys}"
+    )
+
+
 def get_sgo_edges():
     if not SGO_API_KEY:
         return [], [], {"reason": "SGO_API_KEY missing"}
@@ -453,6 +478,7 @@ def get_sgo_edges():
 
             scan_stats["events"] += len(events_list)
 
+            parsed_before = scan_stats["parsed_props"]
             for event in events_list:
                 _process_sgo_event(
                     event,
@@ -464,6 +490,9 @@ def get_sgo_edges():
                     near_misses,
                     scan_stats,
                 )
+
+            if events_list and scan_stats["parsed_props"] == parsed_before:
+                _log_unparsed_event_shape(league, events_list[0])
 
     except requests.HTTPError as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)
