@@ -10,7 +10,7 @@ from models.talent_model import TalentContext, adjusted_fair_probability, build_
 from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
-from services.history_calibration import validated_ev_floor
+from services.history_calibration import prop_type_ev_adjustment, validated_ev_floor
 from utils.correlation import ExposureEntry, ExposureTracker, check_exposure
 from utils.kelly import dynamic_kelly_units
 from utils.links import sportsbook_search_link
@@ -78,6 +78,11 @@ UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.015)
 # Off by default so the explicit UNIFIED_EV_FLOOR above is authoritative; set
 # ENABLE_HISTORY_EV_FLOOR_RAISE=true to re-enable the data-driven safety raise.
 ENABLE_HISTORY_EV_FLOOR_RAISE = os.getenv("ENABLE_HISTORY_EV_FLOOR_RAISE", "false").strip().lower() in {"1", "true", "yes", "on"}
+# When enabled, per-prop-type realized ROI from bet_history nudges each prop
+# type's EV alert threshold (favor historically-profitable stat types, tighten
+# chronic losers). Bounded by MAX_PROP_TYPE_EV_ADJUST and never below the hard
+# EV floor. Off by default so the explicit threshold above is authoritative.
+ENABLE_HISTORY_PROP_TYPE_OVERLAY = os.getenv("ENABLE_HISTORY_PROP_TYPE_OVERLAY", "false").strip().lower() in {"1", "true", "yes", "on"}
 # Player props carry highly asymmetric juice (e.g. Over -140 / Under +110), so
 # they are de-vigged multiplicatively rather than with the power method used for
 # main markets (see .windsurfrules Rule 1 / the syndicate spec).
@@ -213,6 +218,19 @@ def _market_ev_threshold(market_type: str) -> float:
     else:
         threshold = UNIFIED_EV_THRESHOLD
     return max(threshold, _effective_ev_floor())
+
+
+def _prop_ev_threshold(market_key: str) -> float:
+    """EV alert threshold for a prop stat type.
+
+    Defaults to ``UNIFIED_PROP_EV_THRESHOLD``; when the history overlay is
+    enabled, a bounded per-type ROI delta nudges it, clamped so it can never fall
+    below the hard EV floor.
+    """
+    threshold = UNIFIED_PROP_EV_THRESHOLD
+    if ENABLE_HISTORY_PROP_TYPE_OVERLAY:
+        threshold = max(_effective_ev_floor(), threshold + prop_type_ev_adjustment(market_key))
+    return threshold
 
 
 def _resolve_talent_prob(
@@ -450,7 +468,7 @@ def evaluate_player_props(
             if side not in fair_by_side:
                 continue
             edge = calculate_edge_from_probability(offer["price"], fair_by_side[side])
-            if edge < UNIFIED_PROP_EV_THRESHOLD:
+            if edge < _prop_ev_threshold(market_key):
                 continue
             weighted = edge * book_weight_for(book_weights, offer["book"])
             current = best_by_side.get(side)
