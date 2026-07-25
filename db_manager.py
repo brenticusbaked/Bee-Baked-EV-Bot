@@ -21,10 +21,39 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 DISCORD_DEAD_LETTER_WEBHOOK_URL = os.getenv("DISCORD_DEAD_LETTER_WEBHOOK_URL") or os.getenv("DISCORD_STATUS_WEBHOOK_URL")
 
+def _force_postgrest_http1(client: "Client") -> None:
+    """Swap the PostgREST httpx session for an HTTP/1.1 one.
+
+    supabase-py enables HTTP/2 on its PostgREST session, and the CI runner ↔
+    Supabase path intermittently drops HTTP/2 streams mid-response
+    (``httpx.RemoteProtocolError: Server disconnected``). That surfaced as
+    ``historical_odds empty or unreachable`` and blanked the scanner cache.
+    HTTP/1.1 avoids the GOAWAY/stream-reset behaviour without changing any
+    request semantics. Best-effort: never let this break client creation.
+    """
+    try:
+        import httpx
+
+        session = getattr(client.postgrest, "session", None)
+        if not isinstance(session, httpx.Client):
+            return
+        http1_session = httpx.Client(
+            base_url=session.base_url,
+            headers=session.headers,
+            timeout=session.timeout,
+            follow_redirects=session.follow_redirects,
+            http2=False,
+        )
+        client.postgrest.session = http1_session
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[supabase] Could not force HTTP/1.1 on PostgREST session: {exc}")
+
+
 supabase: Client = None
 if create_client and SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        _force_postgrest_http1(supabase)
     except Exception as exc:
         print(f"[supabase] Failed to create client: {exc}")
         supabase = None
