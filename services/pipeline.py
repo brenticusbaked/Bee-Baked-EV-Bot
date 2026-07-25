@@ -105,11 +105,17 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
 
     task_lines = []
     near_miss_lines = []
+    cache_coverage_line = ""
     for name, ok, detail, seconds, count, label, meta in result_list:
         status = "OK" if ok else "FAILED"
         count_text = f" | {count} {label}" if count else ""
         detail_text = f" - {detail}" if detail else ""
         task_lines.append(f"`{status}` {name} ({seconds:.2f}s){count_text}{detail_text}")
+        if name == "hydrate_market_cache" and meta:
+            cache_sports = meta.get("cache_sports")
+            cache_events = meta.get("cache_events")
+            if cache_sports or cache_events:
+                cache_coverage_line = f"Cache coverage: {cache_sports or '?'} sports / {cache_events or '?'} events"
         near_miss_summary = meta.get("near_miss_summary")
         if near_miss_summary:
             near_miss_lines.append(f"`{name}` {near_miss_summary}")
@@ -131,6 +137,8 @@ def send_pipeline_summary(title: str, results: Iterable[TaskResult]) -> None:
         f"**Task Timings**\n"
         + "\n".join(task_lines)
     )
+    if cache_coverage_line:
+        description += f"\n\n**Cache Coverage**\n{cache_coverage_line}"
     if near_miss_lines:
         description += "\n\n**Near Misses**\n" + "\n".join(near_miss_lines)
     if db_stats.get("bet_log_failure", 0) > 0:

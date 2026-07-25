@@ -1,4 +1,5 @@
 import os
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -121,7 +122,12 @@ def _build_alert(
     return {
         "lane": lane,
         "sport": sport,
+        "market": str(quote["market"]),
+        "book": str(quote["book"]),
+        "price": float(quote["price"]),
         "edge": edge,
+        "stale_score": staleness.staleness_score if staleness else None,
+        "sharp_move": staleness.sharp_implied_move if staleness else None,
         "dedupe_key": ":".join(
             [
                 lane,
@@ -153,6 +159,42 @@ def _build_alert(
             ]
         },
     }
+
+
+def summarize_live_edge_alerts(alerts: Iterable[dict], limit: int = 3) -> str:
+    alerts = list(alerts or [])
+    if not alerts:
+        return "No live-edge candidates crossed the watch threshold."
+
+    lane_counts = Counter(str(alert.get("lane", "watchlist")) for alert in alerts)
+    sport_counts = Counter(str(alert.get("sport", "unknown")) for alert in alerts)
+    market_counts = Counter(str(alert.get("market", "unknown")).upper() for alert in alerts)
+    top_alerts = sorted(alerts, key=lambda item: (-float(item.get("edge", 0.0)), item.get("lane") != "hammer"))[:limit]
+
+    top_lines = []
+    for alert in top_alerts:
+        stale_score = alert.get("stale_score")
+        sharp_move = alert.get("sharp_move")
+        stale_bits = []
+        if isinstance(stale_score, (int, float)):
+            stale_bits.append(f"stale={stale_score:.0%}")
+        if isinstance(sharp_move, (int, float)):
+            stale_bits.append(f"move={sharp_move * 100:.2f}pp")
+        stale_text = f" ({', '.join(stale_bits)})" if stale_bits else ""
+        top_lines.append(
+            f"{str(alert.get('lane', 'watchlist')).upper()} {alert.get('sport', 'unknown')} "
+            f"{alert.get('market', 'unknown').upper()} {alert.get('book', 'unknown')} "
+            f"@ {alert.get('edge', 0.0) * 100:.2f}%{stale_text}"
+        )
+
+    return (
+        f"alerts={len(alerts)} | "
+        f"hammer={lane_counts.get('hammer', 0)} | "
+        f"watchlist={lane_counts.get('watchlist', 0)} | "
+        f"sports={', '.join(f'{sport}:{count}' for sport, count in sport_counts.most_common(4)) or 'none'} | "
+        f"markets={', '.join(f'{market}:{count}' for market, count in market_counts.most_common(4)) or 'none'} | "
+        f"top={'; '.join(top_lines)}"
+    )
 
 
 def find_live_edge_alerts(previous_cache: Cache, current_cache: Cache, updated_cache: Cache) -> List[dict]:

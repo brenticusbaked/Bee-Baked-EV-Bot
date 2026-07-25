@@ -853,6 +853,10 @@ def hydrate_market_cache(max_age_minutes: Optional[int] = None) -> Dict[str, Any
         "detail": f"hydrated cache from historical_odds | sports={len(cache)} events={event_count}",
         "count": len(cache),
         "label": "updates",
+        "meta": {
+            "cache_sports": str(len(cache)),
+            "cache_events": str(event_count),
+        },
     }
 
 def load_tracker_state(state_key: str, fallback_path: str):

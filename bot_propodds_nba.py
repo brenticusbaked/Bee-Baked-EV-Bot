@@ -175,7 +175,9 @@ NEGATIVE_BINOMIAL_STATS = {
 
 SHARP_PROP_BOOKS = {
     book.strip().lower()
-    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,cris,betonline").split(",")
+    # Keep the prop baseline aligned with the sharper books used by the live
+    # edge pipeline so player-prop pricing stays consistent across models.
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
     if book.strip()
 }
 

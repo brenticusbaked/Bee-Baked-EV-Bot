@@ -21,7 +21,7 @@ SEASON_WINDOWS: Dict[str, List[tuple]] = {
     ],
     "baseball_mlb": [(3, 20, 11, 5)],            # late-Mar through early-Nov (World Series)
     "americanfootball_nfl": [
-        (9, 1, 12, 31),                          # Sep through Dec
+        (7, 15, 12, 31),                         # mid-Jul through Dec (preseason + regular season)
         (1, 1, 2, 15),                           # Jan through mid-Feb (playoffs + Super Bowl)
     ],
 }

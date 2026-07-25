@@ -6,9 +6,12 @@ name: Overnight Opener Scan
 # the Supabase cache (refreshed by the 09:30 UTC opener ingest cron), makes NO
 # Odds API requests, and posts to the opener stream tagged [OPENER] with a
 # distinct alert type so overnight finds don't dedupe against daytime alerts.
+#   21:45 UTC = ~4:45pm Central, catches the first overnight openers after the
+#   daytime slate is done.
 #   09:45 UTC = ~4:45am Central, ~15 min after the opener ingest lands.
 on:
   schedule:
+    - cron: '45 21 * * *'
     - cron: '45 9 * * *'
   workflow_dispatch:
 

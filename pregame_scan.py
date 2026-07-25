@@ -71,7 +71,17 @@ def filter_pregame_cache(cache: Cache, windows: Iterable[int], tolerance: int) -
     return filtered, matches
 
 
-def _send_status(matches: List[dict], alert_count: int, refresh_detail: str) -> None:
+def _sport_breakdown(matches: List[dict]) -> str:
+    counts: Dict[str, int] = {}
+    for item in matches:
+        counts[item["sport"]] = counts.get(item["sport"], 0) + 1
+    if not counts:
+        return ""
+    parts = [f"{sport}:{count}" for sport, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return ", ".join(parts[:5])
+
+
+def _send_status(matches: List[dict], alert_count: int, refresh_detail: str, scan_detail: str = "") -> None:
     if not STATUS_WEBHOOK_URL or not env_flag("PREGAME_STATUS_NOTIFY", False):
         return
     if matches:
@@ -82,6 +92,13 @@ def _send_status(matches: List[dict], alert_count: int, refresh_detail: str) -> 
         body = "\n".join(lines)
     else:
         body = "No events are inside the configured pregame windows."
+    sport_breakdown = _sport_breakdown(matches)
+    summary_bits = []
+    if sport_breakdown:
+        summary_bits.append(f"Sports: {sport_breakdown}")
+    if scan_detail:
+        summary_bits.append(f"Scan: {scan_detail[:220]}")
+    summary_text = ("\n".join(summary_bits) + "\n\n") if summary_bits else ""
     post_discord(
         {
             "embeds": [
@@ -89,6 +106,7 @@ def _send_status(matches: List[dict], alert_count: int, refresh_detail: str) -> 
                     "description": (
                         "**PREGAME WINDOW SCAN**\n"
                         f"{body}\n\n"
+                        f"{summary_text}"
                         f"Alerts sent: {alert_count}\n"
                         f"Refresh: {refresh_detail}"
                     ),
@@ -122,7 +140,10 @@ def run_pregame_scan() -> dict:
         alert_type="pregame_bet_alert",
     )
     alert_count = int(result.get("count", 0)) if isinstance(result, dict) else 0
-    _send_status(matches, alert_count, refresh_detail)
+    scan_detail = str(result.get("detail", "")) if isinstance(result, dict) else ""
+    if scan_detail.startswith("scan complete"):
+        scan_detail = scan_detail[len("scan complete"):].lstrip("; :")
+    _send_status(matches, alert_count, refresh_detail, scan_detail)
     return {
         "detail": f"pregame scan complete | events={len(matches)} | windows={','.join(map(str, windows))}",
         "count": alert_count,

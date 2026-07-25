@@ -1,4 +1,5 @@
 import os
+from collections import Counter
 from datetime import timedelta
 
 from db_manager import get_all_bets, get_market_cache, update_bet_clv
@@ -77,6 +78,8 @@ def run_clv_tracker():
     cache = get_market_cache()
     tracked_count = 0
     alert_count = 0
+    missing_sport_counts: Counter[str] = Counter()
+    missing_event_counts: Counter[tuple[str, str]] = Counter()
 
     if not bets or not cache:
         print("CLV Audit: Nothing to track or cache empty.")
@@ -99,7 +102,7 @@ def run_clv_tracker():
         sport = bet.get("sport")
         events = cache.get(sport)
         if not events:
-            print(f"CLV: No cached events for sport '{sport}' on bet {bet.get('id')}.")
+            missing_sport_counts[str(sport)] += 1
             continue
 
         game_data = next(
@@ -107,7 +110,7 @@ def run_clv_tracker():
             None,
         )
         if not game_data:
-            print(f"CLV: Event ID {bet.get('event_id')} not found in cache for {bet.get('selection')}.")
+            missing_event_counts[(str(sport), str(bet.get("event_id")))] += 1
             continue
 
         pinnacle = next(
@@ -192,6 +195,24 @@ def run_clv_tracker():
         if should_alert and alert_count < CLV_MAX_ALERTS:
             if _send_clv_update(bet, closing_price_american, clv_edge_pct, previous_clv):
                 alert_count += 1
+
+    if missing_sport_counts:
+        summary = ", ".join(f"{sport}:{count}" for sport, count in missing_sport_counts.most_common(5))
+        print(
+            "CLV: skipped "
+            f"{sum(missing_sport_counts.values())} bet(s) because the sport was absent from the current cache snapshot "
+            f"({summary})."
+        )
+    if missing_event_counts:
+        summary = ", ".join(
+            f"{sport}:{event_id[:8]}…x{count}"
+            for (sport, event_id), count in missing_event_counts.most_common(5)
+        )
+        print(
+            "CLV: skipped "
+            f"{sum(missing_event_counts.values())} bet(s) because the event ID was not present in cache "
+            f"({summary})."
+        )
 
     return {"detail": f"clv audit complete | movement alerts={alert_count}", "count": tracked_count, "label": "tracked"}
 

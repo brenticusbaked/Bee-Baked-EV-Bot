@@ -2,6 +2,7 @@
 
 import os
 import random
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from db_manager import get_all_graded_bets
@@ -15,6 +16,8 @@ MC_SIMULATIONS = max(100, env_int("MC_SIMULATIONS", 10000))
 MC_HORIZON_BETS = max(10, env_int("MC_HORIZON_BETS", 200))
 MC_BANKROLL_UNITS = env_float("MC_BANKROLL_UNITS", 100.0)
 MC_RUIN_THRESHOLD = env_float("MC_RUIN_THRESHOLD", 0.0)
+MC_LOOKBACK_DAYS = max(1, env_int("MC_LOOKBACK_DAYS", 30))
+MC_MIN_GRADED_BETS = max(10, env_int("MC_MIN_GRADED_BETS", 25))
 
 
 def _estimate_bet_profile(graded_bets: List[dict]) -> Dict[str, float]:
@@ -51,6 +54,25 @@ def _estimate_bet_profile(graded_bets: List[dict]) -> Dict[str, float]:
     }
 
 
+def _recent_graded_bets(graded_bets: List[dict]) -> List[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=MC_LOOKBACK_DAYS)
+    recent = []
+    for bet in graded_bets:
+        raw_date = str(bet.get("graded_at") or bet.get("date") or "").strip()
+        if not raw_date:
+            continue
+        try:
+            parsed = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(f"{raw_date}T00:00:00+00:00")
+            except ValueError:
+                continue
+        if parsed >= cutoff:
+            recent.append(bet)
+    return recent or graded_bets
+
+
 def _run_single_sim(
     profile: Dict[str, float],
     bankroll: float,
@@ -80,13 +102,37 @@ def _run_single_sim(
 
 def run_monte_carlo() -> dict:
     graded = get_all_graded_bets()
-    profile = _estimate_bet_profile(graded)
+    recent_graded = _recent_graded_bets(graded)
+    profile = _estimate_bet_profile(recent_graded)
 
     if not graded:
+        report = (
+            "**MONTE CARLO RISK REPORT**\n"
+            f"No graded bets found yet, so the simulation cannot run.\n"
+            f"Lookback: {MC_LOOKBACK_DAYS} days | Required minimum: {MC_MIN_GRADED_BETS} graded bets"
+        )
+        if DISCORD_STATUS_WEBHOOK_URL:
+            post_discord({"embeds": [{"description": report, "color": 16753920}]}, webhook_url=DISCORD_STATUS_WEBHOOK_URL)
         return {
             "detail": "no graded bets for simulation",
             "count": 0,
             "label": "updates",
+        }
+
+    if len(recent_graded) < MC_MIN_GRADED_BETS:
+        report = (
+            "**MONTE CARLO RISK REPORT**\n"
+            f"Not enough recent graded bets to simulate reliably.\n"
+            f"Recent graded bets: {len(recent_graded)} | Required minimum: {MC_MIN_GRADED_BETS}\n"
+            f"Lookback: {MC_LOOKBACK_DAYS} days"
+        )
+        if DISCORD_STATUS_WEBHOOK_URL:
+            post_discord({"embeds": [{"description": report, "color": 16753920}]}, webhook_url=DISCORD_STATUS_WEBHOOK_URL)
+        return {
+            "detail": f"monte carlo skipped | recent_graded={len(recent_graded)}",
+            "count": len(recent_graded),
+            "label": "updates",
+            "meta": {"lookback_days": str(MC_LOOKBACK_DAYS)},
         }
 
     finals = []
@@ -136,9 +182,10 @@ def run_monte_carlo() -> dict:
         )
 
     return {
-        "detail": f"monte carlo complete | ruin={ruin_pct:.2f}% | median={median:.1f}u",
+        "detail": f"monte carlo complete | ruin={ruin_pct:.2f}% | median={median:.1f}u | lookback={MC_LOOKBACK_DAYS}d",
         "count": MC_SIMULATIONS,
         "label": "updates",
+        "meta": {"lookback_days": str(MC_LOOKBACK_DAYS), "recent_graded": str(len(recent_graded))},
     }
 
 

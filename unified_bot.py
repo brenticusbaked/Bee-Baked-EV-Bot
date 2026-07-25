@@ -21,7 +21,7 @@ from utils.odds import (
     fair_probabilities_from_prices,
     multiplicative_unvig,
 )
-from utils.prop_pricing import prop_kelly_units
+from utils.prop_pricing import consensus_probabilities, prop_kelly_units
 from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
 from utils.thresholds import env_float, env_int
 from utils.time_decay import adjusted_threshold, compute_time_decay
@@ -84,6 +84,12 @@ ENABLE_HISTORY_EV_FLOOR_RAISE = os.getenv("ENABLE_HISTORY_EV_FLOOR_RAISE", "fals
 PROP_DEVIG_METHOD = "multiplicative"
 PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.125)
 PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
+UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(1, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 1))
+SHARP_PROP_BOOKS = {
+    book.strip().lower()
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
+    if book.strip()
+}
 UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVENT_MARKET", 3))
 DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
 ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -116,6 +122,19 @@ _PLAYER_PROP_PREFIXES = ("player_", "batter_", "pitcher_")
 
 def _is_player_prop_market(market_type: str) -> bool:
     return str(market_type).strip().lower().startswith(_PLAYER_PROP_PREFIXES)
+
+
+def _player_prop_sharp_reference(sharp_by_book: dict, side: str) -> str:
+    candidates = []
+    for book, sides in sharp_by_book.items():
+        offer = sides.get(side)
+        if offer:
+            candidates.append((book, offer["price"]))
+    if not candidates:
+        return "unavailable"
+    candidates = sorted(candidates, key=lambda item: (item[0] != "pinnacle", item[0]))
+    book, price = candidates[0]
+    return f"{book.upper()} {decimal_to_american(price)}"
 
 
 def _market_family(market_type: str) -> str:
@@ -376,11 +395,11 @@ def evaluate_player_props(
     Returns a list of alert dicts ready for routing through services/alerts.py.
     """
     matchup = f"{event['away_team']} @ {event['home_team']}"
-    # groups[(market_key, player, point)] = {"sharp": {side: price}, "soft": [offers]}
+    # groups[(market_key, player, point)] = {"sharp_by_book": {book: {side: price}}, "soft": [offers]}
     groups: dict = {}
 
     for bookmaker in event.get("bookmakers", []):
-        book_key = bookmaker.get("key")
+        book_key = str(bookmaker.get("key") or "").strip().lower()
         for market in bookmaker.get("markets", []):
             market_key = str(market.get("key", ""))
             if not _is_player_prop_market(market_key):
@@ -399,10 +418,10 @@ def evaluate_player_props(
                 point = str(outcome.get("point", ""))
                 group = groups.setdefault(
                     (market_key, player, point),
-                    {"sharp": {}, "soft": []},
+                    {"sharp_by_book": {}, "soft": []},
                 )
-                if book_key == "pinnacle":
-                    group["sharp"][side] = price
+                if book_key in SHARP_PROP_BOOKS:
+                    group["sharp_by_book"].setdefault(book_key, {})[side] = price
                 elif book_key in soft_books:
                     group["soft"].append(
                         {
@@ -415,15 +434,15 @@ def evaluate_player_props(
 
     alerts = []
     for (market_key, player, point), data in groups.items():
-        sharp = data["sharp"]
-        if "over" not in sharp or "under" not in sharp:
+        sharp_by_book = data["sharp_by_book"]
+        book_pairs = [sides for sides in sharp_by_book.values() if "over" in sides and "under" in sides]
+        if len(book_pairs) < UNIFIED_PROP_CONSENSUS_MIN_BOOKS:
             continue
 
-        implied = [decimal_implied_probability(sharp["over"]), decimal_implied_probability(sharp["under"])]
-        fair = multiplicative_unvig(implied)
-        if len(fair) != 2 or not all(fair):
+        fair = consensus_probabilities(book_pairs, method=PROP_DEVIG_METHOD)
+        if not fair or "over" not in fair or "under" not in fair:
             continue
-        fair_by_side = {"over": fair[0], "under": fair[1]}
+        fair_by_side = {"over": fair["over"], "under": fair["under"]}
 
         best_by_side: dict = {}
         for offer in data["soft"]:
@@ -461,7 +480,7 @@ def evaluate_player_props(
                 continue
 
             fair_price_american = decimal_to_american(fair_decimal)
-            pinnacle_price = sharp[side]
+            sharp_reference = _player_prop_sharp_reference(sharp_by_book, side)
             was_logged = log_bet_to_db(
                 matchup,
                 market_label,
@@ -473,11 +492,11 @@ def evaluate_player_props(
                 sport,
                 event["id"],
                 notes=(
-                    f"book={offer['book']};book_key={offer['book_key']};market=player_prop;"
-                    f"stat={market_key};line={point};devig={PROP_DEVIG_METHOD};"
-                    f"fair_probability={fair_probability:.4f};fair_decimal={fair_decimal:.4f}"
-                ),
-            )
+                        f"book={offer['book']};book_key={offer['book_key']};market=player_prop;"
+                        f"stat={market_key};line={point};devig={PROP_DEVIG_METHOD};"
+                        f"fair_probability={fair_probability:.4f};fair_decimal={fair_decimal:.4f}"
+                    ),
+                )
             if not was_logged:
                 print(f"Skipping prop alert because DB log failed for {selection}.")
                 continue
@@ -491,7 +510,7 @@ def evaluate_player_props(
                         f"**Match:** {matchup}\n"
                         f"**Prop:** {selection} ({market_label})\n"
                         f"**Book:** [{offer['book']}]({app_link}) @ {decimal_to_american(offer['price'])}\n"
-                        f"**Pinnacle:** {decimal_to_american(pinnacle_price)}\n"
+                        f"**Sharp:** {sharp_reference}\n"
                         f"**Fair Value:** {fair_price_american}\n"
                         f"**Edge:** {offer['edge'] * 100:.2f}%\n"
                         f"**De-vig:** {PROP_DEVIG_METHOD}\n"
