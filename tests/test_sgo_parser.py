@@ -1,4 +1,7 @@
 import unittest
+from unittest import mock
+
+import requests
 
 import bot_propodds_nba as prop_bot
 
@@ -134,6 +137,37 @@ class SgoConsensusTests(unittest.TestCase):
         self.assertTrue(source.startswith("consensus"))
         self.assertEqual(book_count, 2)
         self.assertIn("over", probabilities)
+
+
+class LeagueFetchToleranceTests(unittest.TestCase):
+    """A failing/unsupported league (e.g. SGO 400 on WNBA) must only skip that
+    league — never abort the scan and starve the working leagues of props."""
+
+    def _run(self, leagues, responder):
+        with mock.patch.object(prop_bot, "SGO_API_KEY", "test-key"), \
+             mock.patch.object(prop_bot, "PLAYER_PROP_LEAGUES", leagues), \
+             mock.patch.object(prop_bot, "get_book_weights", return_value={}), \
+             mock.patch.object(prop_bot, "request", side_effect=responder):
+            return prop_bot.get_sgo_edges()
+
+    def test_bad_league_does_not_abort_remaining_leagues(self):
+        def responder(method, url, params=None, **kwargs):
+            league = (params or {}).get("leagueID")
+            if league == "WNBA":
+                resp = requests.Response()
+                resp.status_code = 400
+                resp._content = b'{"success":false,"error":"unsupported league"}'
+                raise requests.HTTPError("400 Bad Request", response=resp)
+            fake = mock.Mock()
+            fake.json.return_value = {"success": True, "data": [_mlb_event()]}
+            return fake
+
+        # WNBA first so, under the old single-try loop, it would have aborted MLB.
+        picks, _near, stats = self._run(["WNBA", "MLB"], responder)
+        self.assertGreater(stats["parsed_props"], 0)
+        self.assertGreater(stats["events"], 0)
+        self.assertIn("WNBA:400", stats["errored_leagues"])
+        self.assertNotIn("reason", stats)
 
 
 if __name__ == "__main__":

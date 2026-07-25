@@ -578,16 +578,45 @@ def get_sgo_edges():
         "sharp_sides": 0,
         "soft_sides": 0,
         "qualified_groups": 0,
+        "errored_leagues": [],
     }
-    
-    try:
-        for league in PLAYER_PROP_LEAGUES:
-            params = {"apiKey": SGO_API_KEY, "leagueID": league, "oddsAvailable": "true"}
-            sport_key = LEAGUE_SPORT_KEYS.get(league, league.lower())
 
+    # Each league is fetched independently: a bad/unsupported leagueID (e.g. an
+    # SGO 400) or a transient error must only skip THAT league, never abort the
+    # whole scan — otherwise one bad league blocks props for every other league.
+    for league in PLAYER_PROP_LEAGUES:
+        params = {"apiKey": SGO_API_KEY, "leagueID": league, "oddsAvailable": "true"}
+        sport_key = LEAGUE_SPORT_KEYS.get(league, league.lower())
+
+        try:
             # UPDATED: retry_on_429 set to True to respect rate limits with exponential backoff
             data = request("GET", url, params=params, timeout=15, retry_on_429=True).json()
+        except requests.HTTPError as exc:
+            resp = getattr(exc, "response", None)
+            status_code = getattr(resp, "status_code", None)
+            # The SGO error body explains a 400 (e.g. unsupported league) and never
+            # contains the API key (that lives only in the URL/params), so it is
+            # safe to surface for diagnostics.
+            body = ""
+            try:
+                body = (resp.text or "")[:300] if resp is not None else ""
+            except Exception:
+                body = ""
+            print(
+                f"[prop_bot] {league}: fetch failed ({status_code or 'HTTPError'}); "
+                f"skipping league | body={body}"
+            )
+            scan_stats["errored_leagues"].append(f"{league}:{status_code or 'http'}")
+            if status_code == 429:
+                # Rate limited — stop hitting SGO for the rest of this run.
+                break
+            continue
+        except Exception as exc:
+            print(f"[prop_bot] {league}: fetch failed ({type(exc).__name__}); skipping league")
+            scan_stats["errored_leagues"].append(f"{league}:{type(exc).__name__}")
+            continue
 
+        try:
             events_list = _extract_sgo_events(data)
 
             if not events_list:
@@ -624,16 +653,12 @@ def get_sgo_edges():
 
             if events_list and scan_stats["parsed_props"] == parsed_before:
                 _log_unparsed_event_shape(league, events_list[0])
-
-    except requests.HTTPError as exc:
-        status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        print(f"Prop Bot Error: {exc}")
-        if status_code == 429:
-            return [], [], {"reason": "SGO rate limited", "status_code": 429}
-        return [], [], {"reason": f"error: {exc}", "status_code": status_code}
-    except Exception as exc:
-        print(f"Prop Bot Error: {exc}")
-        return [], [], {"reason": f"error: {exc}"}
+        except Exception as exc:
+            # Parsing/processing failure for this league only — log and move on
+            # so a single malformed event can't sink props for every league.
+            print(f"[prop_bot] {league}: processing failed ({type(exc).__name__}); skipping league")
+            scan_stats["errored_leagues"].append(f"{league}:{type(exc).__name__}")
+            continue
 
     return picks, near_misses, scan_stats
 
@@ -805,6 +830,9 @@ def main():
             f"{scan_stats.get('parsed_props', 0)} parsed props, "
             f"{scan_stats.get('qualified_groups', 0)} sharp markets"
         )
+        errored = scan_stats.get("errored_leagues") or []
+        if errored:
+            detail += f"; skipped leagues: {', '.join(errored)}"
         
     meta = {}
     near_miss_summary = _near_miss_summary(near_misses)
