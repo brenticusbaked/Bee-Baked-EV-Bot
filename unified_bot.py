@@ -395,7 +395,7 @@ def evaluate_player_props(
     Returns a list of alert dicts ready for routing through services/alerts.py.
     """
     matchup = f"{event['away_team']} @ {event['home_team']}"
-    # groups[(market_key, player, point)] = {"sharp_by_book": {book: {side: price}}, "soft": [offers]}
+    # groups[(market_key, player, point)] = {"sharp_by_book": {book: {side: {"price": price}}}, "soft": [offers]}
     groups: dict = {}
 
     for bookmaker in event.get("bookmakers", []):
@@ -421,7 +421,7 @@ def evaluate_player_props(
                     {"sharp_by_book": {}, "soft": []},
                 )
                 if book_key in SHARP_PROP_BOOKS:
-                    group["sharp_by_book"].setdefault(book_key, {})[side] = price
+                    group["sharp_by_book"].setdefault(book_key, {})[side] = {"price": price}
                 elif book_key in soft_books:
                     group["soft"].append(
                         {

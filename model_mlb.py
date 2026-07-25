@@ -1,8 +1,6 @@
-import os
-import requests
-
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db, load_tracker_state
 from services.alerts import send_discord_alert
+from services.http_client import get_json as _http_get_json
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.odds_reference import format_pinnacle_reference
 from utils.links import sportsbook_search_link
@@ -17,28 +15,14 @@ MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.25)
 MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.01)
 F5_MARKET_PRIORITY = {"h2h_1st_5_innings": 2, "h2h_1st_half": 2, "h2h": 1}
 
-_MLB_HTTP = requests.Session()
-_MLB_HTTP.trust_env = False
-_MLB_HTTP.headers.update(
-    {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json",
-    }
-)
-
-
 def get_dynamic_link(bookmaker, target_string):
     return sportsbook_search_link(bookmaker, target_string)
 
 
 def _get_json(url: str, timeout: int = 8):
-    response = _MLB_HTTP.get(url, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
+    # Route statsapi.mlb.com through the shared client: direct-first with a
+    # residential-proxy fallback if the runner IP is blocked (see http_client).
+    return _http_get_json(url, timeout=timeout)
 
 
 def _team_aliases(team_name: str):

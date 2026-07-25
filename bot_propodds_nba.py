@@ -434,6 +434,23 @@ def get_sgo_edges():
 
             events_list = _extract_sgo_events(data)
 
+            if not events_list:
+                # Reveal *why* a league came back empty without leaking the key
+                # (the apiKey lives only in params/URL, never in the body). The
+                # SGO v2 envelope carries success/error/message alongside data.
+                if isinstance(data, dict):
+                    envelope = {
+                        k: data.get(k)
+                        for k in ("success", "error", "message")
+                        if k in data
+                    }
+                    print(
+                        f"[prop_bot] {league}: 0 events "
+                        f"(response keys={sorted(data.keys())}, envelope={envelope})"
+                    )
+                else:
+                    print(f"[prop_bot] {league}: 0 events (non-dict response type={type(data).__name__})")
+
             scan_stats["events"] += len(events_list)
 
             for event in events_list:

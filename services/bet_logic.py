@@ -3,6 +3,11 @@ from typing import Dict, Optional, Tuple
 
 from utils.odds import parse_float
 
+# Player-prop market keys from The Odds API: NBA/NHL use ``player_``, MLB uses
+# ``batter_`` / ``pitcher_``. All are per-player Over/Under markets whose outcome
+# ``name`` is "Over"/"Under" and whose ``description`` holds the player name.
+PROP_MARKET_PREFIXES = ("player_", "batter_", "pitcher_")
+
 
 def normalize_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
@@ -56,15 +61,21 @@ def parse_selection(market: str, selection: str) -> Dict[str, Optional[object]]:
         return {"type": "spread", "team": selection, "team_norm": normalize_team_fragment(selection), "line": None}
 
     prop_markets = {"points", "assists", "rebounds", "goals"}
-    if market_key.replace("player_", "") in prop_markets:
+    is_prop_market = (
+        market_key.startswith(PROP_MARKET_PREFIXES)
+        or market_key.replace("player_", "") in prop_markets
+    )
+    if is_prop_market:
         prop_match = re.match(r"(.+?)\s+(over|under)\s+([0-9]+(?:\.[0-9]+)?)$", selection, flags=re.IGNORECASE)
         if prop_match:
+            player = prop_match.group(1).strip()
             return {
                 "type": "player_prop",
-                "player": prop_match.group(1).strip(),
+                "player": player,
+                "player_norm": normalize_team_fragment(player),
                 "side": prop_match.group(2).lower(),
                 "line": float(prop_match.group(3)),
-                "stat": market_key.replace("player_", ""),
+                "stat": market_key,
             }
 
     return {"type": "raw", "value": selection_norm}
@@ -95,6 +106,29 @@ def outcome_matches(selection_spec: Dict[str, Optional[object]], outcome: Dict[s
         if line is None or outcome_point is None:
             return False
         return side == outcome_side and abs(outcome_point - float(line)) <= tolerance
+
+    if kind == "player_prop":
+        line = selection_spec.get("line")
+        side = normalize_text(selection_spec.get("side", ""))
+        player_norm = selection_spec.get("player_norm")
+        # Player-prop outcomes carry the side in ``name`` (Over/Under) and the
+        # player in ``description`` — match all three so we never pick the wrong
+        # player when several share the same line.
+        if side and side != outcome_side:
+            return False
+        if line is not None and (outcome_point is None or abs(outcome_point - float(line)) > tolerance):
+            return False
+        if player_norm:
+            description_norm = normalize_team_fragment(str(outcome.get("description", "")))
+            if not description_norm:
+                return False
+            if not (
+                player_norm == description_norm
+                or player_norm in description_norm
+                or description_norm in player_norm
+            ):
+                return False
+        return True
 
     return False
 
