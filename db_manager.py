@@ -926,6 +926,36 @@ def log_alert_event(
         ).execute()
     _safe_execute(action, None)
 
+def alert_already_sent(
+    alert_type: str,
+    dedupe_key: str,
+    within_minutes: int,
+) -> bool:
+    """True when an ``alerts_sent`` row with the same ``alert_type`` +
+    ``dedupe_key`` was recorded within the last ``within_minutes``.
+
+    Used to suppress duplicate alerts across pipeline runs. Returns False on any
+    lookup failure so a transient DB hiccup never silently blocks alerting.
+    """
+    if not dedupe_key or within_minutes <= 0:
+        return False
+    cutoff_iso = (get_local_now() - timedelta(minutes=within_minutes)).isoformat()
+
+    def action():
+        rows = (
+            supabase.table("alerts_sent")
+            .select("id")
+            .eq("alert_type", alert_type)
+            .eq("dedupe_key", dedupe_key)
+            .gte("sent_at", cutoff_iso)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return bool(rows)
+
+    return bool(_safe_execute(action, False))
+
 def log_workflow_run(
     workflow_name: str,
     status: str,

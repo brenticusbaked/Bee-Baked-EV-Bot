@@ -4,6 +4,7 @@ from unittest import mock
 import execution_scanner
 from execution_scanner import (
     _execution_desk_alert_description,
+    _execution_dedup_key,
     _outcome_key,
     _selection_text,
     _send_execution_desk_alerts,
@@ -64,6 +65,37 @@ class ExecutionScannerTests(unittest.TestCase):
             sent = _send_execution_desk_alerts([_candidate(), _candidate(calibration=True)])
         self.assertEqual(sent, 1)
         self.assertEqual(send.call_count, 1)
+
+    def test_dedup_key_is_stable_across_price_moves(self):
+        first = _candidate()
+        second = _candidate()
+        second["best"]["price"] = 2.4
+        second["edge"] = 0.20
+        self.assertEqual(_execution_dedup_key(first), _execution_dedup_key(second))
+
+    def test_dedup_key_differs_by_selection(self):
+        over = _candidate()
+        over["best"]["selection"] = "Over 6.5"
+        self.assertNotEqual(_execution_dedup_key(_candidate()), _execution_dedup_key(over))
+
+    def test_already_sent_alert_is_suppressed(self):
+        with mock.patch.object(execution_scanner, "ENABLE_EXECUTION_DESK_ALERTS", True), \
+             mock.patch.object(execution_scanner, "EXECUTION_DESK_WEBHOOK_URL", "https://hook"), \
+             mock.patch.object(execution_scanner, "alert_already_sent", return_value=True), \
+             mock.patch.object(execution_scanner, "send_discord_alert", return_value=True) as send:
+            sent = _send_execution_desk_alerts([_candidate()])
+        self.assertEqual(sent, 0)
+        send.assert_not_called()
+
+    def test_fresh_alert_is_sent_with_stable_dedupe_key(self):
+        with mock.patch.object(execution_scanner, "ENABLE_EXECUTION_DESK_ALERTS", True), \
+             mock.patch.object(execution_scanner, "EXECUTION_DESK_WEBHOOK_URL", "https://hook"), \
+             mock.patch.object(execution_scanner, "alert_already_sent", return_value=False), \
+             mock.patch.object(execution_scanner, "send_discord_alert", return_value=True) as send:
+            candidate = _candidate()
+            sent = _send_execution_desk_alerts([candidate])
+        self.assertEqual(sent, 1)
+        self.assertEqual(send.call_args.kwargs["dedupe_key"], _execution_dedup_key(candidate))
 
     def test_alerts_disabled_sends_nothing(self):
         with mock.patch.object(execution_scanner, "ENABLE_EXECUTION_DESK_ALERTS", False), \

@@ -837,9 +837,22 @@ serve(async (request) => {
     const jobs = buildJobs(slot, sportsToRun);
     let enrichedEvents = 0;
 
+    // A forced/manual run (e.g. the pipeline's pre-scan trigger) refreshes EVERY
+    // active event's props/alternates so the scan and execution desk price off
+    // freshly-pulled odds instead of a rotating, possibly stale subset. It uses a
+    // higher force-only credit ceiling; the primary key is still hard-capped at
+    // the monthly tier so this can't overspend it.
+    const forceFull = forceRun;
+    const effMaxCredits = forceFull
+      ? Number(Deno.env.get("ODDS_FORCE_MAX_CREDITS_PER_RUN") ?? "500")
+      : MAX_CREDITS_PER_RUN;
+    const effMaxEventsPerEnrich = forceFull
+      ? Number.MAX_SAFE_INTEGER
+      : MAX_EVENTS_PER_ENRICH;
+
     for (const job of jobs) {
       const firstJob = apiRequests === 0;
-      if (!firstJob && creditsUsed + job.estimatedCredits > MAX_CREDITS_PER_RUN) {
+      if (!firstJob && creditsUsed + job.estimatedCredits > effMaxCredits) {
         continue;
       }
 
@@ -851,17 +864,17 @@ serve(async (request) => {
         fixtures += await upsertFixtures(job.sportKey, events);
         oddsRows += await upsertOdds(job.sportKey, events);
       } else {
-        if (enrichedEvents >= MAX_EVENTS_PER_ENRICH * Math.max(sportsToRun.length, 1)) continue;
+        if (!forceFull && enrichedEvents >= MAX_EVENTS_PER_ENRICH * Math.max(sportsToRun.length, 1)) continue;
         const fixtureIds = await getUpcomingFixtureIds(job.sportKey);
         if (!fixtureIds.length) continue;
-        const rotated = rotate(fixtureIds, slot).slice(0, MAX_EVENTS_PER_ENRICH);
+        const rotated = rotate(fixtureIds, slot).slice(0, effMaxEventsPerEnrich);
         const pairCredits = job.perEventCredits ?? job.estimatedCredits;
         for (const eventId of rotated) {
           const firstEnrich = apiRequests === 0;
           // Reserve the FULL sharp+soft pair budget before starting so we never
           // pay for a sharp pull that can't be de-vigged with a soft price into
           // an alert (the bug that left soft-book props missing).
-          if (!firstEnrich && creditsUsed + pairCredits > MAX_CREDITS_PER_RUN) break;
+          if (!firstEnrich && creditsUsed + pairCredits > effMaxCredits) break;
           // Sharp pull (Pinnacle/EU) — mandatory fair-value baseline.
           const sharp = await fetchEventOdds(
             job.sportKey,

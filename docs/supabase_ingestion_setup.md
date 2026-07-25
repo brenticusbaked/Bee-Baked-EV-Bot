@@ -144,6 +144,14 @@ select net.http_post(
 );
 ```
 
+A forced/manual run also **enriches every active event's props/alternates**
+(not the rotating per-run subset) so the scan and execution desk price off
+freshly-pulled odds instead of a stale cached line. The pipeline's pre-scan
+trigger (`{"trigger":"manual_pipeline","force":true}`) uses this. Forced runs use
+a higher credit ceiling — `ODDS_FORCE_MAX_CREDITS_PER_RUN` (default 500) — so the
+full enrich isn't cut short; the primary key is still hard-capped at the monthly
+tier, so this can't overspend it.
+
 Scheduled cron jobs use `trigger = 'pg_cron'` / `'pg_cron_opener'`, so they
 still respect the throttle.
 

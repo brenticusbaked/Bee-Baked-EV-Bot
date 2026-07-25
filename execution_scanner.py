@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from db_manager import get_master_cache, get_venue_metrics, log_execution_report_to_db
+from db_manager import (
+    alert_already_sent,
+    get_master_cache,
+    get_venue_metrics,
+    log_execution_report_to_db,
+)
 from execution.desk import ExecutionDesk, report_to_dict
 from execution.models import ParentOrder, Side, VenueQuote
 from execution.risk import RiskLimits, RiskManager
@@ -34,9 +39,14 @@ EXECUTION_VENUE_SCORE_LOOKBACK = max(1, env_int("EXECUTION_VENUE_SCORE_LOOKBACK"
 EXECUTION_VENUE_SCORE_MIN_SAMPLE = max(1, env_int("EXECUTION_VENUE_SCORE_MIN_SAMPLE", 3))
 # Post the selected execution-desk edges to Discord (their own stream, distinct
 # from the unified +EV alerter). These use the same Pinnacle-devig math but a
-# looser threshold and no exposure/dedup gating, and include exchange venues, so
-# they are labelled separately. Falls back to the bet-alerts webhook.
+# looser threshold and no exposure gating, and include exchange venues, so they
+# are labelled separately. Repeat alerts for the same bet are deduped (see
+# EXECUTION_DEDUP_MINUTES). Falls back to the bet-alerts webhook.
 ENABLE_EXECUTION_DESK_ALERTS = os.getenv("ENABLE_EXECUTION_DESK_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+# Suppress a repeat alert for the same bet (sport/event/market/selection) seen
+# within this many minutes, so the desk stops re-alerting an edge every run.
+# 0 disables dedup.
+EXECUTION_DEDUP_MINUTES = max(0, env_int("EXECUTION_DEDUP_MINUTES", 360))
 EXECUTION_DESK_WEBHOOK_URL = (
     os.getenv("DISCORD_EXECUTION_DESK_WEBHOOK_URL") or BET_ALERTS_WEBHOOK_URL or DEFAULT_WEBHOOK_URL
 )
@@ -275,6 +285,20 @@ def _execution_desk_alert_description(candidate: dict) -> str:
     )
 
 
+def _execution_dedup_key(candidate: dict) -> str:
+    """Stable identity for a desk edge (independent of the live odds/edge) so a
+    given bet dedupes across runs even as its price ticks."""
+    return "|".join(
+        str(part).strip().lower()
+        for part in (
+            candidate.get("sport"),
+            candidate.get("event_id"),
+            candidate.get("market_type"),
+            candidate["best"]["selection"],
+        )
+    )
+
+
 def _send_execution_desk_alerts(selected: List[dict]) -> int:
     """Post real (non-calibration) selected edges to Discord. Returns count sent."""
     if not (ENABLE_EXECUTION_DESK_ALERTS and EXECUTION_DESK_WEBHOOK_URL):
@@ -282,6 +306,9 @@ def _send_execution_desk_alerts(selected: List[dict]) -> int:
     sent = 0
     for candidate in selected:
         if candidate.get("calibration"):
+            continue
+        dedupe_key = _execution_dedup_key(candidate)
+        if alert_already_sent("execution_desk_edge", dedupe_key, EXECUTION_DEDUP_MINUTES):
             continue
         description = _execution_desk_alert_description(candidate)
         ok = send_discord_alert(
@@ -296,7 +323,7 @@ def _send_execution_desk_alerts(selected: List[dict]) -> int:
             },
             source="execution_scan",
             alert_type="execution_desk_edge",
-            dedupe_key=description[:200],
+            dedupe_key=dedupe_key,
             webhook_url=EXECUTION_DESK_WEBHOOK_URL,
         )
         if ok:
