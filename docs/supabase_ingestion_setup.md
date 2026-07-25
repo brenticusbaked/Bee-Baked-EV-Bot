@@ -135,11 +135,17 @@ Scheduled cron jobs use `trigger = 'pg_cron'` / `'pg_cron_opener'`, so they
 still respect the throttle.
 
 Player-prop coverage (`SPORT_EXTRAS` in the Edge Function) spans the standard
-counting-stat Over/Under props for each sport (MLB pitcher/batter props, NBA/WNBA
+counting-stat Over/Under props for each sport (NFL passing/rushing/receiving
+and defense/kicking props, MLB pitcher/batter props, NBA/WNBA
 points/rebounds/assists/threes/combos, NHL points/goals/assists/SOG/saves) plus
 team alternate spreads/totals and quarter/half derivatives. Markets are split into
-small groups (≤5 markets each) that rotate across cron slots so no single group
-blows the per-run ceiling.
+small groups that rotate across cron slots so no single group blows the per-run
+ceiling. You can override the market bundles with:
+
+```bash
+supabase secrets set ODDS_API_NFL_PROP_MARKETS=...
+supabase secrets set ODDS_API_WNBA_PROP_MARKETS=...
+```
 
 Because every prop is priced against the **Pinnacle** baseline (multiplicative
 de-vig; `.windsurfrules` Rule 1), each enrich group is pulled twice — once from

@@ -80,6 +80,10 @@ const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
 const BOOKMAKERS = Deno.env.get("ODDS_API_TARGET_BOOKS") ??
   "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers";
 const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals";
+const WNBA_PROP_MARKETS = Deno.env.get("ODDS_API_WNBA_PROP_MARKETS") ??
+  "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals,player_turnovers,player_points_rebounds_assists,player_points_rebounds,player_points_assists,player_rebounds_assists,player_field_goals,player_frees_made,player_frees_attempts";
+const NFL_PROP_MARKETS = Deno.env.get("ODDS_API_NFL_PROP_MARKETS") ??
+  "player_pass_attempts,player_pass_completions,player_pass_interceptions,player_pass_longest_completion,player_pass_rush_yds,player_pass_rush_reception_tds,player_pass_rush_reception_yds,player_pass_tds,player_pass_yds,player_pass_yds_q1,player_pats,player_receptions,player_reception_longest,player_reception_tds,player_reception_yds,player_rush_attempts,player_rush_longest,player_rush_reception_tds,player_rush_reception_yds,player_rush_tds,player_rush_yds,player_sacks,player_solo_tackles,player_tackles_assists,player_kicking_points,player_field_goals,player_defensive_interceptions";
 // Tennis is priced on the moneyline (h2h) only — game spreads/totals are thin
 // and less reliably posted by Pinnacle, and h2h keeps each tournament's main
 // pull cheap (1 market x regions). Override per-sport main markets here.
@@ -339,8 +343,7 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
   },
   basketball_wnba: {
     groups: [
-      "player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists",
-      "player_points_rebounds,player_points_assists,player_rebounds_assists,player_blocks,player_steals",
+      WNBA_PROP_MARKETS,
       "alternate_spreads,alternate_totals",
       "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
     ],
@@ -350,6 +353,13 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
       "player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists",
       "player_points_rebounds,player_points_assists,player_rebounds_assists,player_blocks,player_steals",
       "player_turnovers",
+      "alternate_spreads,alternate_totals",
+      "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
+    ],
+  },
+  americanfootball_nfl: {
+    groups: [
+      NFL_PROP_MARKETS,
       "alternate_spreads,alternate_totals",
       "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
     ],
