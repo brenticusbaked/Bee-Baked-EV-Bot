@@ -1,0 +1,140 @@
+import unittest
+
+import bot_propodds_nba as prop_bot
+
+
+def _mlb_event():
+    return {
+        "eventID": "evt_mlb",
+        "leagueID": "MLB",
+        "teams": {
+            "home": {"teamID": "STL", "names": {"long": "St. Louis Cardinals"}},
+            "away": {"teamID": "CIN", "names": {"long": "Cincinnati Reds"}},
+        },
+        "players": {
+            "DUSTIN_MAY_1_MLB": {"name": "Dustin May", "teamID": "CIN"},
+        },
+        "odds": {
+            "strikeouts-DUSTIN_MAY_1_MLB-game-ou-over": {
+                "oddID": "strikeouts-DUSTIN_MAY_1_MLB-game-ou-over",
+                "statID": "strikeouts",
+                "statEntityID": "DUSTIN_MAY_1_MLB",
+                "periodID": "game",
+                "betTypeID": "ou",
+                "sideID": "over",
+                "byBookmaker": {
+                    "pinnacle": {"odds": -110, "overUnder": "5.5", "available": True},
+                    "draftkings": {"odds": 120, "overUnder": "5.5", "available": True},
+                },
+            },
+            "strikeouts-DUSTIN_MAY_1_MLB-game-ou-under": {
+                "statID": "strikeouts",
+                "statEntityID": "DUSTIN_MAY_1_MLB",
+                "betTypeID": "ou",
+                "sideID": "under",
+                "byBookmaker": {
+                    "pinnacle": {"odds": -110, "overUnder": "5.5", "available": True},
+                },
+            },
+            # Team moneyline — must be ignored (not a player prop).
+            "points-away-game-ml-away": {
+                "statID": "points",
+                "statEntityID": "away",
+                "betTypeID": "ml",
+                "sideID": "away",
+                "byBookmaker": {"pinnacle": {"odds": 130, "available": True}},
+            },
+        },
+    }
+
+
+class SgoParserTests(unittest.TestCase):
+    def test_matchup_from_teams(self):
+        self.assertEqual(
+            prop_bot._matchup_from_event(_mlb_event()),
+            "Cincinnati Reds @ St. Louis Cardinals",
+        )
+
+    def test_over_under_parses_one_offer_per_book(self):
+        event = _mlb_event()
+        odd_obj = event["odds"]["strikeouts-DUSTIN_MAY_1_MLB-game-ou-over"]
+        offers = prop_bot._parse_prop_offers(odd_obj, event["players"])
+        self.assertEqual(len(offers), 2)
+        by_book = {offer["book"]: offer for offer in offers}
+        self.assertEqual(set(by_book), {"pinnacle", "draftkings"})
+        self.assertEqual(by_book["pinnacle"]["player"], "Dustin May")
+        self.assertEqual(by_book["pinnacle"]["stat"], "strikeouts")
+        self.assertEqual(by_book["pinnacle"]["side"], "over")
+        self.assertEqual(by_book["pinnacle"]["line"], "5.5")
+
+    def test_team_moneyline_is_ignored(self):
+        event = _mlb_event()
+        odd_obj = event["odds"]["points-away-game-ml-away"]
+        self.assertEqual(prop_bot._parse_prop_offers(odd_obj, event["players"]), [])
+
+    def test_unavailable_book_is_skipped(self):
+        odd_obj = {
+            "statID": "strikeouts",
+            "statEntityID": "DUSTIN_MAY_1_MLB",
+            "betTypeID": "ou",
+            "sideID": "over",
+            "byBookmaker": {
+                "pinnacle": {"odds": -110, "overUnder": "5.5", "available": False},
+                "fanduel": {"odds": -105, "overUnder": "5.5", "available": True},
+            },
+        }
+        offers = prop_bot._parse_prop_offers(odd_obj, {"DUSTIN_MAY_1_MLB": {"name": "Dustin May"}})
+        self.assertEqual([offer["book"] for offer in offers], ["fanduel"])
+
+    def test_unsupported_stat_returns_no_offers(self):
+        odd_obj = {
+            "statID": "double_plays_turned",
+            "statEntityID": "SOME_PLAYER_1_MLB",
+            "betTypeID": "ou",
+            "sideID": "over",
+            "byBookmaker": {"pinnacle": {"odds": -110, "overUnder": "1.5", "available": True}},
+        }
+        self.assertEqual(prop_bot._parse_prop_offers(odd_obj, {}), [])
+
+    def test_camelcase_statid_normalizes(self):
+        self.assertEqual(prop_bot._normalize_stat_name("homeRuns"), "home_runs")
+        self.assertEqual(prop_bot._normalize_stat_name("totalBases"), "total_bases")
+
+    def test_nfl_stats_supported(self):
+        for stat in ("passing_yards", "rushing_yards", "receiving_yards", "receptions"):
+            self.assertIn(stat, prop_bot.TARGET_STATS)
+
+    def test_player_resolved_from_players_map(self):
+        self.assertEqual(
+            prop_bot._resolve_player_name("DUSTIN_MAY_1_MLB", {"DUSTIN_MAY_1_MLB": {"name": "Dustin May"}}),
+            "Dustin May",
+        )
+
+    def test_player_falls_back_to_deslugged_id(self):
+        self.assertEqual(prop_bot._resolve_player_name("RHETT_LOWDER_1_MLB", {}), "Rhett Lowder")
+
+
+class SgoConsensusTests(unittest.TestCase):
+    def test_pinnacle_first_uses_pinnacle_alone(self):
+        sharp = {
+            "pinnacle": {"over": {"price": 1.90}, "under": {"price": 1.90}},
+            "circa": {"over": {"price": 1.50}, "under": {"price": 2.50}},
+        }
+        probabilities, source, book_count = prop_bot._consensus_from_sharp_books(sharp, "points", "25.5")
+        self.assertEqual(source.split("_")[0], "pinnacle")
+        self.assertEqual(book_count, 1)
+        self.assertAlmostEqual(probabilities["over"], 0.5, places=6)
+
+    def test_falls_back_to_sharp_consensus_without_pinnacle(self):
+        sharp = {
+            "circa": {"over": {"price": 1.90}, "under": {"price": 1.90}},
+            "cris": {"over": {"price": 1.90}, "under": {"price": 1.90}},
+        }
+        probabilities, source, book_count = prop_bot._consensus_from_sharp_books(sharp, "points", "25.5")
+        self.assertTrue(source.startswith("consensus"))
+        self.assertEqual(book_count, 2)
+        self.assertIn("over", probabilities)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import requests
 from dotenv import load_dotenv
 
@@ -45,6 +45,15 @@ DEFAULT_TARGET_STATS = [
     "rbis",
     "total_bases",
     "home_runs",
+    "passing_yards",
+    "rushing_yards",
+    "receiving_yards",
+    "receptions",
+    "passing_touchdowns",
+    "rushing_attempts",
+    "pass_attempts",
+    "pass_completions",
+    "interceptions",
 ]
 
 STAT_ALIASES = {
@@ -63,6 +72,8 @@ STAT_ALIASES = {
     "threes": "three_pointers",
     "three_pointers": "three_pointers",
     "three_points_made": "three_pointers",
+    "three_pointers_made": "three_pointers",
+    "made_threes": "three_pointers",
     "stl": "steals",
     "steal": "steals",
     "steals": "steals",
@@ -111,6 +122,43 @@ STAT_ALIASES = {
     "home_run": "home_runs",
     "home_runs": "home_runs",
     "batter_home_runs": "home_runs",
+    "passing_yards": "passing_yards",
+    "pass_yards": "passing_yards",
+    "pass_yds": "passing_yards",
+    "passing_yds": "passing_yards",
+    "player_pass_yds": "passing_yards",
+    "rushing_yards": "rushing_yards",
+    "rush_yards": "rushing_yards",
+    "rush_yds": "rushing_yards",
+    "rushing_yds": "rushing_yards",
+    "player_rush_yds": "rushing_yards",
+    "receiving_yards": "receiving_yards",
+    "reception_yards": "receiving_yards",
+    "rec_yards": "receiving_yards",
+    "rec_yds": "receiving_yards",
+    "receiving_yds": "receiving_yards",
+    "player_reception_yds": "receiving_yards",
+    "receptions": "receptions",
+    "reception": "receptions",
+    "recs": "receptions",
+    "player_receptions": "receptions",
+    "passing_touchdowns": "passing_touchdowns",
+    "passing_tds": "passing_touchdowns",
+    "pass_tds": "passing_touchdowns",
+    "passing_td": "passing_touchdowns",
+    "player_pass_tds": "passing_touchdowns",
+    "rushing_attempts": "rushing_attempts",
+    "rush_attempts": "rushing_attempts",
+    "carries": "rushing_attempts",
+    "pass_attempts": "pass_attempts",
+    "passing_attempts": "pass_attempts",
+    "pass_completions": "pass_completions",
+    "passing_completions": "pass_completions",
+    "completions": "pass_completions",
+    "interceptions": "interceptions",
+    "interception": "interceptions",
+    "ints": "interceptions",
+    "passing_interceptions": "interceptions",
 }
 
 STAT_LABELS = {
@@ -131,11 +179,23 @@ STAT_LABELS = {
     "rbis": "RBIS",
     "total_bases": "TOTAL BASES",
     "home_runs": "HOME RUNS",
+    "passing_yards": "PASS YARDS",
+    "rushing_yards": "RUSH YARDS",
+    "receiving_yards": "REC YARDS",
+    "receptions": "RECEPTIONS",
+    "passing_touchdowns": "PASS TDS",
+    "rushing_attempts": "RUSH ATT",
+    "pass_attempts": "PASS ATT",
+    "pass_completions": "COMPLETIONS",
+    "interceptions": "INTERCEPTIONS",
 }
 
 LEAGUE_SPORT_KEYS = {
     "NBA": "basketball_nba",
+    "WNBA": "basketball_wnba",
     "MLB": "baseball_mlb",
+    "NFL": "americanfootball_nfl",
+    "NHL": "icehockey_nhl",
 }
 
 PROP_EV_THRESHOLD = env_float("PROP_EV_THRESHOLD", 0.01)
@@ -163,6 +223,9 @@ LOW_COUNT_POISSON_STATS = {
     "rbis",
     "total_bases",
     "home_runs",
+    "receptions",
+    "passing_touchdowns",
+    "interceptions",
 }
 NEGATIVE_BINOMIAL_STATS = {
     stat.strip().lower()
@@ -209,7 +272,10 @@ def get_dynamic_link(bookmaker, target_string):
     return sportsbook_search_link(bookmaker, target_string)
 
 def _slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(value).lower()).strip("_")
+    # Split camelCase (e.g. "homeRuns" -> "home_Runs") before lowercasing so SGO
+    # statIDs in either camelCase or snake_case normalize identically.
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value))
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 def _normalize_stat_name(value: str) -> Optional[str]:
     if not value:
@@ -220,7 +286,7 @@ def _normalize_stat_name(value: str) -> Optional[str]:
 TARGET_STATS = _parse_target_stats()
 
 def _parse_player_prop_leagues() -> List[str]:
-    raw = os.getenv("PLAYER_PROP_LEAGUES", "NBA,MLB")
+    raw = os.getenv("PLAYER_PROP_LEAGUES", "NBA,WNBA,MLB,NFL")
     leagues = []
     for item in raw.split(","):
         league = item.strip().upper()
@@ -260,90 +326,145 @@ def _normalize_side(value: str) -> Optional[str]:
     return None
 
 def _clean_player_name(value: str) -> str:
-    text = str(value or "").replace("_1_", " ")
+    text = str(value or "")
+    # SGO entity IDs look like "DUSTIN_MAY_1_MLB" — drop the trailing
+    # "_<index>_<LEAGUE>" suffix before de-slugging into a display name.
+    text = re.sub(r"_\d+_[A-Za-z]+$", "", text)
     text = text.replace("_", " ").strip()
     text = re.sub(r"\s+", " ", text)
     return text.title()
 
-def _extract_player_name(parts: Iterable[str], odd_obj: dict) -> str:
-    for field in ("playerName", "player", "participantName", "name"):
-        candidate = str(odd_obj.get(field, "")).strip()
-        if candidate and "over" not in candidate.lower() and "under" not in candidate.lower():
-            return _clean_player_name(candidate)
-    parts_list = list(parts)
-    if len(parts_list) > 1:
-        return _clean_player_name(parts_list[1])
+# Non-player statEntityID values in SGO (team/game-level markets, never props).
+_NON_PLAYER_ENTITIES = {"home", "away", "all", "home1", "away1", "home2", "away2"}
+# betTypeID values that denote an over/under (player-prop) market.
+_OVER_UNDER_BET_TYPES = {"ou", "over_under", "overunder"}
+
+
+def _resolve_player_name(player_id: str, players_map: dict) -> str:
+    """Resolve an SGO statEntityID (player ID) to a display name using the
+    event-level `players` map, falling back to a de-slugged ID."""
+    info = players_map.get(player_id) if isinstance(players_map, dict) else None
+    if isinstance(info, dict):
+        for field in ("name", "displayName", "fullName", "shortName"):
+            candidate = str(info.get(field, "")).strip()
+            if candidate:
+                return _clean_player_name(candidate)
+        first = str(info.get("firstName", "")).strip()
+        last = str(info.get("lastName", "")).strip()
+        if first or last:
+            return _clean_player_name(f"{first} {last}".strip())
+    return _clean_player_name(player_id)
+
+
+def _team_display_name(team: dict) -> str:
+    if not isinstance(team, dict):
+        return ""
+    names = team.get("names")
+    if isinstance(names, dict):
+        for field in ("long", "medium", "short"):
+            candidate = str(names.get(field, "")).strip()
+            if candidate:
+                return candidate
+    for field in ("name", "teamID"):
+        candidate = str(team.get(field, "")).strip()
+        if candidate:
+            return candidate
     return ""
 
-def _extract_line(odd_obj: dict, parts: Iterable[str]) -> Optional[str]:
-    for field in ("handicap", "line", "points", "value"):
-        value = odd_obj.get(field)
-        if value not in (None, ""):
-            return str(value)
-    for part in reversed(list(parts)):
-        part_text = str(part).strip()
-        if re.fullmatch(r"-?\d+(\.\d+)?", part_text):
-            return part_text
+
+def _matchup_from_event(event: dict) -> str:
+    """Build 'Away @ Home' from SGO's teams block, falling back to any name."""
+    name = str(event.get("name", "")).strip()
+    if name:
+        return name
+    teams = event.get("teams")
+    if isinstance(teams, dict):
+        away = _team_display_name(teams.get("away", {}))
+        home = _team_display_name(teams.get("home", {}))
+        if away and home:
+            return f"{away} @ {home}"
+        if home or away:
+            return home or away
+    return "Unknown Matchup"
+
+
+def _book_line(book_data: dict, odd_obj: dict) -> Optional[str]:
+    """Over/under line for a book. SGO carries the line per-book (books can post
+    different lines) under overUnder/line; fall back to the odd-level value."""
+    for source in (book_data, odd_obj):
+        for field in ("overUnder", "line", "handicap", "points"):
+            value = source.get(field)
+            if value not in (None, ""):
+                return str(value)
     return None
 
-def _extract_stat(odd_obj: dict, parts: Iterable[str]) -> Optional[str]:
-    candidates: List[str] = []
-    parts_list = list(parts)
-    if parts_list:
-        candidates.append(parts_list[0])
-    for field in ("marketName", "marketType", "propType", "statType", "stat", "market", "label"):
-        value = odd_obj.get(field)
-        if value:
-            candidates.append(str(value))
-    for candidate in candidates:
-        normalized = _normalize_stat_name(candidate)
-        if normalized:
-            return normalized
-    return None
 
-def _extract_side(odd_obj: dict, parts: Iterable[str]) -> Optional[str]:
-    for field in ("side", "selection", "label", "name", "description"):
-        value = odd_obj.get(field)
-        side = _normalize_side(value)
-        if side:
-            return side
-    for part in reversed(list(parts)):
-        side = _normalize_side(part)
-        if side:
-            return side
-    return None
-
-def _parse_prop_offer(odd_key: str, odd_obj: dict) -> Optional[dict]:
-    odd_id = str(odd_obj.get("oddID", odd_key) or odd_key)
-    parts = [part for part in odd_id.split("-") if part]
-    stat = _extract_stat(odd_obj, parts)
+def _parse_prop_offers(odd_obj: dict, players_map: dict) -> List[dict]:
+    """SGO v2: one odd object is a single market SIDE priced across many books.
+    Player props have betTypeID 'ou', a player ID in statEntityID, sideID
+    over/under, and per-book prices under `byBookmaker`. Returns one offer per
+    available book (or [] for non-prop / unsupported-stat markets)."""
+    if str(odd_obj.get("betTypeID", "")).strip().lower() not in _OVER_UNDER_BET_TYPES:
+        return []
+    side = _normalize_side(odd_obj.get("sideID"))
+    if not side:
+        return []
+    player_id = str(odd_obj.get("statEntityID", "")).strip()
+    if not player_id or player_id.lower() in _NON_PLAYER_ENTITIES:
+        return []
+    stat = _normalize_stat_name(str(odd_obj.get("statID", "")))
     if stat not in TARGET_STATS:
-        return None
-    player = _extract_player_name(parts, odd_obj)
-    side = _extract_side(odd_obj, parts)
-    line = _extract_line(odd_obj, parts)
-    book = str(odd_obj.get("bookmakerID", "unknown")).strip().lower()
-    if not player or not side or line is None or not book:
-        return None
-    return {
-        "stat": stat,
-        "player": player,
-        "side": side,
-        "line": str(line),
-        "book": book,
-        "price": to_decimal(odd_obj.get("price")),
-        "prop_link": odd_obj.get("deepLink"),
-    }
+        return []
+    player = _resolve_player_name(player_id, players_map)
+    if not player:
+        return []
+
+    by_book = odd_obj.get("byBookmaker")
+    if not isinstance(by_book, dict):
+        return []
+
+    offers: List[dict] = []
+    for book_id, book_data in by_book.items():
+        if not isinstance(book_data, dict):
+            continue
+        if book_data.get("available") is False:
+            continue
+        raw_price = book_data.get("odds")
+        if raw_price in (None, ""):
+            continue
+        line = _book_line(book_data, odd_obj)
+        if line is None:
+            continue
+        offers.append(
+            {
+                "stat": stat,
+                "player": player,
+                "side": side,
+                "line": line,
+                "book": str(book_id).strip().lower(),
+                "price": to_decimal(raw_price),
+                "prop_link": book_data.get("deepLink") or book_data.get("link"),
+            }
+        )
+    return offers
 
 def _consensus_from_sharp_books(sharp_by_book: Dict[str, Dict[str, dict]], stat_type: str, line_value: str) -> tuple[Dict[str, float], str, int]:
-    book_pairs = [
-        sides for sides in sharp_by_book.values()
-        if "over" in sides and "under" in sides
-    ]
-    if len(book_pairs) < PROP_CONSENSUS_MIN_BOOKS:
-        return {}, "none", len(book_pairs)
+    pinnacle_sides = sharp_by_book.get("pinnacle")
+    if isinstance(pinnacle_sides, dict) and "over" in pinnacle_sides and "under" in pinnacle_sides:
+        # Pinnacle-first: when the sharpest book prices the prop, use it alone as
+        # the fair-value baseline. Fall back to the sharp-book consensus only when
+        # Pinnacle doesn't post this prop (common for player props).
+        book_pairs = [pinnacle_sides]
+        source = "pinnacle"
+    else:
+        book_pairs = [
+            sides for sides in sharp_by_book.values()
+            if "over" in sides and "under" in sides
+        ]
+        if len(book_pairs) < PROP_CONSENSUS_MIN_BOOKS:
+            return {}, "none", len(book_pairs)
+        source = f"consensus_{PROP_DEVIG_METHOD}"
     probabilities = consensus_probabilities(book_pairs, method=PROP_DEVIG_METHOD)
-    source = f"consensus_{PROP_DEVIG_METHOD}"
     if not probabilities:
         return {}, "none", len(book_pairs)
     if ENABLE_PROP_NEGATIVE_BINOMIAL and stat_type in NEGATIVE_BINOMIAL_STATS:
@@ -408,10 +529,20 @@ def _log_unparsed_event_shape(league: str, event: dict) -> None:
     else:
         sample, sample_key, odds_kind, odds_count = None, None, type(odds).__name__, 0
     sample_keys = sorted(sample.keys()) if isinstance(sample, dict) else None
+    # Also surface the distinct over/under statIDs present so we can see which
+    # player-prop stats aren't mapping to TARGET_STATS (drives alias fixes).
+    ou_stats: set = set()
+    odd_values = odds.values() if isinstance(odds, dict) else (odds if isinstance(odds, list) else [])
+    for odd_obj in odd_values:
+        if isinstance(odd_obj, dict) and str(odd_obj.get("betTypeID", "")).strip().lower() in _OVER_UNDER_BET_TYPES:
+            stat_id = str(odd_obj.get("statID", "")).strip()
+            if stat_id:
+                ou_stats.add(stat_id)
     print(
         f"[prop_bot] {league}: {odds_kind} odds x{odds_count} parsed 0 | "
         f"event keys={sorted(event.keys())} | sample oddID={sample_key} | "
-        f"sample field keys={sample_keys}"
+        f"sample field keys={sample_keys} | "
+        f"over/under statIDs seen={sorted(ou_stats)[:25]}"
     )
 
 
@@ -516,7 +647,8 @@ def _process_sgo_event(
     near_misses: List[dict],
     scan_stats: dict,
 ) -> None:
-            matchup = event.get("name", "Unknown Matchup")
+            matchup = _matchup_from_event(event)
+            players_map = event.get("players") if isinstance(event.get("players"), dict) else {}
             market_groups: Dict[Tuple[str, str, str], Dict[str, Dict[str, dict]]] = {}
             odds_map = event.get("odds", {})
             
@@ -529,21 +661,20 @@ def _process_sgo_event(
                 if not isinstance(odd_obj, dict):
                     continue
                 scan_stats["raw_odds"] += 1
-                offer = _parse_prop_offer(str(odd_key), odd_obj)
-                if not offer:
-                    continue
-                scan_stats["parsed_props"] += 1
-                market_key = (offer["player"], offer["stat"], offer["line"])
-                market_groups.setdefault(market_key, {"sharp": {}, "soft": {}})
-                
-                if offer["book"] in SHARP_PROP_BOOKS:
-                    market_groups[market_key]["sharp"].setdefault(offer["book"], {})[offer["side"]] = offer
-                    scan_stats["sharp_sides"] += 1
-                elif offer["book"] in soft_list:
-                    current = market_groups[market_key]["soft"].get(offer["side"])
-                    if not current or offer["price"] > current["price"]:
-                        market_groups[market_key]["soft"][offer["side"]] = offer
-                    scan_stats["soft_sides"] += 1
+                offers = _parse_prop_offers(odd_obj, players_map)
+                for offer in offers:
+                    scan_stats["parsed_props"] += 1
+                    market_key = (offer["player"], offer["stat"], offer["line"])
+                    market_groups.setdefault(market_key, {"sharp": {}, "soft": {}})
+
+                    if offer["book"] in SHARP_PROP_BOOKS:
+                        market_groups[market_key]["sharp"].setdefault(offer["book"], {})[offer["side"]] = offer
+                        scan_stats["sharp_sides"] += 1
+                    elif offer["book"] in soft_list:
+                        current = market_groups[market_key]["soft"].get(offer["side"])
+                        if not current or offer["price"] > current["price"]:
+                            market_groups[market_key]["soft"][offer["side"]] = offer
+                        scan_stats["soft_sides"] += 1
                     
             for (player_name, stat_type, line_value), value in market_groups.items():
                 sharp, soft = value["sharp"], value["soft"]
