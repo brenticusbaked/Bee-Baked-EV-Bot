@@ -143,12 +143,34 @@ const ENABLE_MARKET_ENRICHMENT =
 // props/alternates while the throttle keeps actual monthly spend near the 20k
 // tier. Monitor odds_ingest_runs.credits_used; if it trends much above ~600/day,
 // lower these (or ODDS_MAX_EVENTS_PER_ENRICH) via env — no redeploy needed.
-// For a temporary end-of-month burn, override the env vars directly rather than
+// For a temporary end-of-month burn, set ODDS_BURN_UNTIL (below) rather than
 // changing these permanent defaults.
-const MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "48");
+
+// --- Auto-expiring end-of-month credit burn ----------------------------------
+// Set ODDS_BURN_UNTIL to a UTC date (YYYY-MM-DD, inclusive) to temporarily
+// deepen ingestion and spend down the remaining monthly credits before the tier
+// resets. While today's UTC date is on or before ODDS_BURN_UNTIL, the burn caps
+// apply and the proximity throttle is bypassed (pull every active sport every
+// tick); once the date passes, the function reverts to the steady-state defaults
+// automatically — no manual change or redeploy needed. Leave unset to disable.
+// The primary key is hard-capped at the monthly tier, so a burn can't exceed it;
+// tune intensity with ODDS_BURN_MAX_CREDITS_PER_RUN / ODDS_BURN_MAX_EVENTS_PER_ENRICH.
+const BURN_UNTIL = (Deno.env.get("ODDS_BURN_UNTIL") ?? "").trim();
+const BURN_ACTIVE = BURN_UNTIL !== "" && new Date().toISOString().slice(0, 10) <= BURN_UNTIL;
+const BURN_MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_BURN_MAX_CREDITS_PER_RUN") ?? "150");
+const BURN_MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_BURN_MAX_EVENTS_PER_ENRICH") ?? "6");
+if (BURN_ACTIVE) {
+  console.log(`[burn] active until ${BURN_UNTIL}: depth raised, proximity throttle bypassed`);
+}
+
+const MAX_CREDITS_PER_RUN = BURN_ACTIVE
+  ? BURN_MAX_CREDITS_PER_RUN
+  : Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "48");
 // Cap on how many events get per-event enrichment (props/alternates/derivatives)
 // in a single run. Events rotate across runs by the time-based slot.
-const MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_MAX_EVENTS_PER_ENRICH") ?? "4");
+const MAX_EVENTS_PER_ENRICH = BURN_ACTIVE
+  ? BURN_MAX_EVENTS_PER_ENRICH
+  : Number(Deno.env.get("ODDS_MAX_EVENTS_PER_ENRICH") ?? "4");
 const CYCLE_MINUTES = Number(Deno.env.get("ODDS_CYCLE_MINUTES") ?? "10");
 
 // --- Game-proximity throttle -------------------------------------------------
@@ -163,7 +185,7 @@ const CYCLE_MINUTES = Number(Deno.env.get("ODDS_CYCLE_MINUTES") ?? "10");
 // tiers mirror the syndicate's requested schedule (far → sparse ... imminent →
 // every tick). Set ODDS_PROXIMITY_THROTTLE=false to pull every active sport on
 // every tick (previous behaviour).
-const PROXIMITY_THROTTLE =
+const PROXIMITY_THROTTLE = !BURN_ACTIVE &&
   (Deno.env.get("ODDS_PROXIMITY_THROTTLE") ?? "true").toLowerCase() !== "false";
 // Hour cutoffs (hours until nearest game) that define the tiers.
 const PROXIMITY_FAR_HOURS = Number(Deno.env.get("ODDS_PROXIMITY_FAR_HOURS") ?? "24");
