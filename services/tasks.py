@@ -22,7 +22,17 @@ def get_refresh_tasks() -> List[PipelineTask]:
     if env_flag("ENABLE_SUPABASE_FIRST_INGESTION", True):
         from db_manager import hydrate_market_cache
 
-        return [PipelineTask(name="hydrate_market_cache", func=hydrate_market_cache)]
+        tasks: List[PipelineTask] = []
+        # Force a fresh Edge Function ingest first so the cache is current even
+        # on manual/off-hours runs that fall outside the pg_cron schedule
+        # (otherwise hydrate reads odds older than the freshness cutoff and the
+        # cache looks empty). Disable with ENABLE_INGEST_TRIGGER=false.
+        if env_flag("ENABLE_INGEST_TRIGGER", True):
+            from services.ingest_trigger import trigger_odds_ingest
+
+            tasks.append(PipelineTask(name="trigger_odds_ingest", func=trigger_odds_ingest))
+        tasks.append(PipelineTask(name="hydrate_market_cache", func=hydrate_market_cache))
+        return tasks
 
     from master_odds_fetcher import run_fetcher
 
