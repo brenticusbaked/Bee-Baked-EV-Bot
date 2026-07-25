@@ -103,14 +103,15 @@ jobs:
           EXECUTION_MAX_NOTIONAL: "1000"
           
           # --- PROXY AUTHENTICATION ---
+          # Residential proxy pool for the selective statsapi.mlb.com fallback
+          # (services/http_client.py). We intentionally do NOT set a global
+          # HTTP_PROXY/HTTPS_PROXY: that forced ALL egress (Odds API, Supabase,
+          # Discord, statsapi) through the webshare gateway, so any proxy-auth
+          # failure (407) broke the entire pipeline. statsapi now goes direct
+          # first and only uses these creds if the runner IP is blocked.
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
-          
-          # --- FANGRAPHS / REQUESTS BYPASS ---
-          # We use quotes and strict formatting to prevent DNS resolution errors
-          HTTP_PROXY: "http://${{ secrets.PROXY_USERNAME }}:${{ secrets.PROXY_PASSWORD }}@p.webshare.io:80"
-          HTTPS_PROXY: "http://${{ secrets.PROXY_USERNAME }}:${{ secrets.PROXY_PASSWORD }}@p.webshare.io:80"
           USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         run: |
           python master_run.py

@@ -25,10 +25,11 @@ _MLB_STATS_HEADERS: dict[str, str] = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# statsapi.mlb.com blocks datacenter egress IPs (GitHub Actions runners) with
-# HTTP 406. Route those calls through the project's residential proxy pool, and
-# rotate to a fresh residential IP on each 406/403 retry. Falls back to a direct
-# request when no proxy is configured (e.g. local dev), preserving old behavior.
+# statsapi.mlb.com serves most egress IPs directly but occasionally blocks a
+# datacenter IP (GitHub Actions runner) with HTTP 403/406. We therefore try a
+# DIRECT request first (fast, and independent of proxy credentials) and only
+# fall back to the rotating residential proxy pool when the direct call is
+# blocked. This keeps MLB stats flowing even when the proxy creds are expired.
 _PROXY_USERNAME = os.getenv("PROXY_USERNAME")
 _PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
 _PROXY_IPS = [
@@ -97,28 +98,45 @@ def request(method: str, url: str, retry_on_429: bool = True, **kwargs) -> reque
 
 
 def _mlb_request(session: requests.Session, method: str, url: str, **kwargs) -> requests.Response:
-    """statsapi.mlb.com request that rotates residential proxies on 406/403."""
+    """statsapi.mlb.com request: try direct first, then rotate residential
+    proxies only if the direct call is blocked (403/406) or fails to connect."""
+    direct_response: Optional[requests.Response] = None
+    try:
+        response = session.request(method=method, url=url, **kwargs)
+        if response.status_code not in (403, 406):
+            response.raise_for_status()
+            return response
+        direct_response = response
+    except requests.exceptions.RequestException:
+        direct_response = None
+
     proxies = _residential_proxies()
     if proxies is None:
+        if direct_response is not None:
+            direct_response.raise_for_status()
+            return direct_response
+        # Direct connection failed and no proxy is configured — retry direct to
+        # surface a clean error to the caller.
         response = session.request(method=method, url=url, **kwargs)
         response.raise_for_status()
         return response
 
-    last_response: Optional[requests.Response] = None
+    last_response: Optional[requests.Response] = direct_response
     for _ in range(_MLB_PROXY_MAX_ATTEMPTS):
         try:
             response = session.request(method=method, url=url, proxies=proxies, **kwargs)
         except requests.exceptions.ProxyError:
-            last_response = None
             break
         if response.status_code not in (403, 406, 407):
             response.raise_for_status()
             return response
         last_response = response
         proxies = _residential_proxies() or proxies
-    if last_response is not None and last_response.status_code != 407:
-        last_response.raise_for_status()
 
+    if last_response is not None:
+        last_response.raise_for_status()
+        return last_response
+    # Every proxy attempt failed to connect — final direct attempt for a clean error.
     response = session.request(method=method, url=url, **kwargs)
     response.raise_for_status()
     return response

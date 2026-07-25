@@ -9,9 +9,8 @@ import logging
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
-import requests
-
 from db_manager import load_tracker_state
+from services.http_client import get_json as _http_get_json
 from utils.thresholds import env_float
 from utils.time import get_local_now
 
@@ -23,24 +22,12 @@ FATIGUE_MAX_ADJUSTMENT = env_float("TALENT_FATIGUE_MAX_ADJ", 0.03)
 BULLPEN_LOOKBACK_DAYS = 3
 LEAGUE_AVG_OPS = 0.710
 LEAGUE_AVG_FIP = 4.00
-_MLB_HTTP = requests.Session()
-_MLB_HTTP.trust_env = False
-_MLB_HTTP.headers.update(
-    {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json",
-    }
-)
 
 
 def _mlb_get_json(url: str, timeout: int = 6):
-    response = _MLB_HTTP.get(url, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
+    # Route statsapi.mlb.com through the shared client: direct-first with a
+    # residential-proxy fallback if the runner IP is blocked (see http_client).
+    return _http_get_json(url, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------

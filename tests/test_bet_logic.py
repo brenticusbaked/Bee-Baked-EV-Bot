@@ -37,6 +37,38 @@ class BetLogicTests(unittest.TestCase):
         result = grade_game_bet("totals", "Over 210", "Chicago Bulls @ Miami Heat", {"Chicago Bulls": 100, "Miami Heat": 110})
         self.assertEqual(result, "PUSH")
 
+    def test_parse_mlb_prop_selection(self):
+        spec = parse_selection("pitcher_outs", "Dustin May OVER 17.5")
+        self.assertEqual(spec["type"], "player_prop")
+        self.assertEqual(spec["player"], "Dustin May")
+        self.assertEqual(spec["side"], "over")
+        self.assertEqual(spec["line"], 17.5)
+
+    def test_outcome_matches_prop_by_player_side_and_point(self):
+        spec = parse_selection("pitcher_strikeouts", "Rhett Lowder OVER 3.5")
+        # Same line, different players in the market — must match on description.
+        self.assertTrue(
+            outcome_matches(spec, {"name": "Over", "description": "Rhett Lowder", "point": 3.5})
+        )
+        self.assertFalse(
+            outcome_matches(spec, {"name": "Over", "description": "Dustin May", "point": 3.5})
+        )
+        self.assertFalse(
+            outcome_matches(spec, {"name": "Under", "description": "Rhett Lowder", "point": 3.5})
+        )
+        self.assertFalse(
+            outcome_matches(spec, {"name": "Over", "description": "Rhett Lowder", "point": 5.5})
+        )
+
+    def test_outcome_matches_batter_prop_multiple_same_line(self):
+        spec = parse_selection("batter_total_bases", "Ernie Clement OVER 1.5")
+        self.assertTrue(
+            outcome_matches(spec, {"name": "Over", "description": "Ernie Clement", "point": 1.5})
+        )
+        self.assertFalse(
+            outcome_matches(spec, {"name": "Over", "description": "Vladimir Guerrero Jr", "point": 1.5})
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
