@@ -286,7 +286,12 @@ def _normalize_stat_name(value: str) -> Optional[str]:
 TARGET_STATS = _parse_target_stats()
 
 def _parse_player_prop_leagues() -> List[str]:
-    raw = os.getenv("PLAYER_PROP_LEAGUES", "NBA,WNBA,MLB,NFL")
+    # WNBA is intentionally excluded from the default: it is not available on the
+    # current SGO subscription tier (the /events call 400s), so requesting it just
+    # wastes one SGO call per run. WNBA player props still flow via the Odds API
+    # Edge Function cache path. Re-add WNBA here (or via PLAYER_PROP_LEAGUES) if
+    # the SGO plan is upgraded.
+    raw = os.getenv("PLAYER_PROP_LEAGUES", "NBA,MLB,NFL")
     leagues = []
     for item in raw.split(","):
         league = item.strip().upper()

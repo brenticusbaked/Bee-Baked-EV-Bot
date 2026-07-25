@@ -49,6 +49,10 @@ jobs:
           ODDS_API_KEY_4: ${{ secrets.ODDS_API_KEY_4 }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # Auth for the startup ingest trigger (services/ingest_trigger.py). Must
+          # match the odds-cache-ingest Edge Function's ODDS_INGEST_FUNCTION_SECRET;
+          # without it the forced pre-hydrate ingest is rejected with HTTP 401.
+          ODDS_INGEST_FUNCTION_SECRET: ${{ secrets.ODDS_INGEST_FUNCTION_SECRET }}
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
