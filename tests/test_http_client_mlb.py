@@ -76,6 +76,17 @@ class MlbRequestTests(unittest.TestCase):
                 http_client._mlb_request(session, "GET", "https://statsapi.mlb.com/x")
         self.assertEqual(session.request.call_count, http_client._MLB_PROXY_MAX_ATTEMPTS)
 
+    def test_falls_back_to_direct_after_proxy_auth_failure(self):
+        session = mock.Mock()
+        session.request.side_effect = [_FakeResponse(407), _FakeResponse(200)]
+        with mock.patch.object(
+            http_client, "_residential_proxies",
+            return_value={"http": "p", "https": "p"},
+        ):
+            resp = http_client._mlb_request(session, "GET", "https://statsapi.mlb.com/x")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(session.request.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

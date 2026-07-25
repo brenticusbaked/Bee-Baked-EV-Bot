@@ -72,6 +72,7 @@ def build_session(retry_on_429: bool = True) -> requests.Session:
     )
     adapter = HTTPAdapter(max_retries=retry)
     session = requests.Session()
+    session.trust_env = False
     session.headers.update({"User-Agent": "BeeBakedEVBot/1.0"})
     session.mount("https://", adapter)
     session.mount("http://", adapter)
@@ -105,15 +106,22 @@ def _mlb_request(session: requests.Session, method: str, url: str, **kwargs) -> 
 
     last_response: Optional[requests.Response] = None
     for _ in range(_MLB_PROXY_MAX_ATTEMPTS):
-        response = session.request(method=method, url=url, proxies=proxies, **kwargs)
-        if response.status_code not in (403, 406):
+        try:
+            response = session.request(method=method, url=url, proxies=proxies, **kwargs)
+        except requests.exceptions.ProxyError:
+            last_response = None
+            break
+        if response.status_code not in (403, 406, 407):
             response.raise_for_status()
             return response
         last_response = response
         proxies = _residential_proxies() or proxies
-    if last_response is not None:
+    if last_response is not None and last_response.status_code != 407:
         last_response.raise_for_status()
-    return last_response  # unreachable; raise_for_status above raises on 406
+
+    response = session.request(method=method, url=url, **kwargs)
+    response.raise_for_status()
+    return response
 
 
 def get_json(url: str, **kwargs):
