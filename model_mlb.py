@@ -1,9 +1,9 @@
 import os
+import requests
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db, load_tracker_state
 from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
-from services.http_client import get_json
 from services.odds_reference import format_pinnacle_reference
 from utils.links import sportsbook_search_link
 from utils.model_pricing import fair_american_from_probability, model_edge_from_probability
@@ -17,9 +17,28 @@ MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.25)
 MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.01)
 F5_MARKET_PRIORITY = {"h2h_1st_5_innings": 2, "h2h_1st_half": 2, "h2h": 1}
 
+_MLB_HTTP = requests.Session()
+_MLB_HTTP.trust_env = False
+_MLB_HTTP.headers.update(
+    {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
+)
+
 
 def get_dynamic_link(bookmaker, target_string):
     return sportsbook_search_link(bookmaker, target_string)
+
+
+def _get_json(url: str, timeout: int = 8):
+    response = _MLB_HTTP.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
 
 def _team_aliases(team_name: str):
@@ -114,7 +133,7 @@ def get_advanced_pitcher_stats(pitcher_id, api_cache, fip_cache):
         source = "fangraphs"
         
     try:
-        person = get_json(url).get("people", [{}])[0]
+        person = _get_json(url).get("people", [{}])[0]
         splits = person.get("stats", [{}])[0].get("splits", [{}])
         if splits:
             stats = splits[0].get("stat", {})
@@ -135,7 +154,7 @@ def run_mlb_model():
     url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}&hydrate=probablePitcher"
 
     try:
-        data = get_json(url)
+        data = _get_json(url)
         dates = data.get("dates", [])
         if not dates:
             return {"detail": "no mlb games scheduled", "count": 0, "label": "alerts"}

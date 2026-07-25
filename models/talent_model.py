@@ -9,8 +9,9 @@ import logging
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
+import requests
+
 from db_manager import load_tracker_state
-from services.http_client import get_json
 from utils.thresholds import env_float
 from utils.time import get_local_now
 
@@ -22,6 +23,24 @@ FATIGUE_MAX_ADJUSTMENT = env_float("TALENT_FATIGUE_MAX_ADJ", 0.03)
 BULLPEN_LOOKBACK_DAYS = 3
 LEAGUE_AVG_OPS = 0.710
 LEAGUE_AVG_FIP = 4.00
+_MLB_HTTP = requests.Session()
+_MLB_HTTP.trust_env = False
+_MLB_HTTP.headers.update(
+    {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+    }
+)
+
+
+def _mlb_get_json(url: str, timeout: int = 6):
+    response = _MLB_HTTP.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +53,7 @@ def _fetch_all_team_stats() -> Dict[str, Dict[str, float]]:
 
     try:
         url = "https://statsapi.mlb.com/api/v1/teams/stats?stats=season&group=hitting&sportIds=1"
-        data = get_json(url)
+        data = _mlb_get_json(url)
         for record in data.get("stats", []):
             for split in record.get("splits", []):
                 team_name = split.get("team", {}).get("name", "")
@@ -49,7 +68,7 @@ def _fetch_all_team_stats() -> Dict[str, Dict[str, float]]:
 
     try:
         url = "https://statsapi.mlb.com/api/v1/teams/stats?stats=season&group=pitching&sportIds=1"
-        data = get_json(url)
+        data = _mlb_get_json(url)
         for record in data.get("stats", []):
             for split in record.get("splits", []):
                 team_name = split.get("team", {}).get("name", "")
@@ -77,7 +96,7 @@ def _get_pitcher_fip(
     pitcher_id: Optional[int],
     fip_cache: Dict[str, Any],
 ) -> Optional[float]:
-    """Get a starting pitcher's FIP from the FanGraphs cache or estimate it."""
+    """Get a starting pitcher's FIP from cache or a live Stats API lookup."""
     if not pitcher_id:
         return None
 
@@ -90,7 +109,7 @@ def _get_pitcher_fip(
             f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}"
             "?hydrate=stats(group=[pitching],type=[season])"
         )
-        person = get_json(url).get("people", [{}])[0]
+        person = _mlb_get_json(url, timeout=4).get("people", [{}])[0]
         splits = person.get("stats", [{}])[0].get("splits", [{}])
         if splits:
             stat = splits[0].get("stat", {})
@@ -101,7 +120,7 @@ def _get_pitcher_fip(
     except Exception as exc:
         logger.warning("Failed to estimate FIP for pitcher %s: %s", pitcher_id, exc)
 
-    return None
+    return LEAGUE_AVG_FIP
 
 
 def _fetch_probable_pitchers() -> Dict[str, Dict[str, Any]]:
@@ -111,7 +130,7 @@ def _fetch_probable_pitchers() -> Dict[str, Dict[str, Any]]:
     pitchers: Dict[str, Dict[str, Any]] = {}
 
     try:
-        data = get_json(url)
+        data = _mlb_get_json(url)
         for date_entry in data.get("dates", []):
             for game in date_entry.get("games", []):
                 away = game["teams"]["away"]
@@ -144,7 +163,7 @@ def _fetch_recent_schedule() -> Dict[str, List[Dict[str, int]]]:
 
     team_games: Dict[str, List[Dict[str, int]]] = {}
     try:
-        data = get_json(url)
+        data = _mlb_get_json(url)
         for date_entry in data.get("dates", []):
             for game in date_entry.get("games", []):
                 status = game.get("status", {}).get("abstractGameCode", "")
