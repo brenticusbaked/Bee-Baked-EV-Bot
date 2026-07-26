@@ -26,9 +26,12 @@ ENABLE_SOCCER_STAT_INGEST = os.getenv("ENABLE_SOCCER_STAT_INGEST", "true").strip
 ENABLE_TENNIS_STAT_INGEST = os.getenv("ENABLE_TENNIS_STAT_INGEST", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 # Soccer leagues (soccerdata FBref names) to ingest. Kept small to bound cost.
+# A blank env value falls back to the default (the daily workflow passes the repo
+# variable through, which is empty when unset — that must NOT wipe the list).
+_DEFAULT_SOCCER_LEAGUES = "ENG-Premier League,USA-Major League Soccer"
 SOCCER_STAT_LEAGUES = [
     league.strip()
-    for league in os.getenv("SOCCER_STAT_LEAGUES", "ENG-Premier League,USA-Major League Soccer").split(",")
+    for league in (os.getenv("SOCCER_STAT_LEAGUES", "").strip() or _DEFAULT_SOCCER_LEAGUES).split(",")
     if league.strip()
 ]
 
@@ -47,52 +50,113 @@ def _num(value: Any) -> Any:
         return None
 
 
-def fetch_mlb_logs(game_date: date) -> List[Dict[str, Any]]:
-    """Yesterday's MLB batter+pitcher lines via pybaseball statcast/game logs."""
-    try:
-        import pybaseball  # noqa: F401
-        from pybaseball import statcast
-    except ImportError:
-        print("[stat_ingest] pybaseball not installed; skipping MLB")
-        return []
+def _ip_to_outs(innings_pitched: Any) -> Any:
+    """Convert MLB 'inningsPitched' (e.g. 6.2 = 6 ip + 2 outs) to total outs."""
+    value = _num(innings_pitched)
+    if value is None:
+        return None
+    whole = int(value)
+    frac = round((value - whole) * 10)  # .0/.1/.2 -> 0/1/2 outs
+    return whole * 3 + frac
 
-    day = game_date.isoformat()
-    try:
-        data = statcast(start_dt=day, end_dt=day)
-    except Exception as exc:  # pragma: no cover - network/provider dependent
-        print(f"[stat_ingest] MLB fetch failed: {exc}")
-        return []
-    if data is None or getattr(data, "empty", True):
-        return []
 
+def _parse_mlb_boxscore(box: Dict[str, Any], day: str) -> List[Dict[str, Any]]:
+    """Parse a statsapi boxscore_data dict into per-player log rows.
+
+    Uses official full names ("First Last") so they match the odds feed, and
+    captures both batting (hits/total bases/HR) and pitching (strikeouts/outs/
+    hits allowed) — the marquee prop metrics.
+    """
     rows: List[Dict[str, Any]] = []
-    # statcast is pitch-level; aggregate to per-batter events for total bases etc.
-    # Detailed aggregation is provider-specific; we store the raw daily line in
-    # ``stats`` and populate the columns we can derive so get_l10_hit_rate works.
-    try:
-        for name, group in data.groupby("player_name"):
-            events = group.get("events")
-            singles = doubles = triples = hrs = hits = 0
-            if events is not None:
-                counts = events.value_counts().to_dict()
-                singles = int(counts.get("single", 0))
-                doubles = int(counts.get("double", 0))
-                triples = int(counts.get("triple", 0))
-                hrs = int(counts.get("home_run", 0))
-                hits = singles + doubles + triples + hrs
-            total_bases = singles + 2 * doubles + 3 * triples + 4 * hrs
+    for side in ("home", "away"):
+        team_block = box.get(side) or {}
+        players = team_block.get("players") or {}
+        team_abbr = str(((team_block.get("team") or {}).get("abbreviation")) or "")
+        for player in players.values():
+            name = str(((player.get("person") or {}).get("fullName")) or "").strip()
+            if not name:
+                continue
+            stats = player.get("stats") or {}
+            batting = stats.get("batting") or {}
+            pitching = stats.get("pitching") or {}
+
+            hits = _num(batting.get("hits"))
+            doubles = _num(batting.get("doubles")) or 0
+            triples = _num(batting.get("triples")) or 0
+            hrs = _num(batting.get("homeRuns"))
+            total_bases = None
+            if hits is not None:
+                # TB = hits + doubles + 2*triples + 3*HR (each hit already counts 1).
+                total_bases = hits + doubles + 2 * triples + 3 * (hrs or 0)
+
+            k_pitch = _num(pitching.get("strikeOuts"))
+            outs = _ip_to_outs(pitching.get("inningsPitched"))
+            hits_allowed = _num(pitching.get("hits"))
+
+            has_batting = bool(batting)
+            has_pitching = bool(pitching)
+            if not (has_batting or has_pitching):
+                continue
+
             rows.append({
                 "game_date": day,
                 "league": "baseball_mlb",
-                "player_name": str(name),
+                "player_name": name,
+                "team": team_abbr,
                 "hits": hits,
                 "total_bases": total_bases,
                 "home_runs": hrs,
-                "stats": {"hits": hits, "total_bases": total_bases, "home_runs": hrs},
+                "rbis": _num(batting.get("rbi")),
+                "runs": _num(batting.get("runs")),
+                "walks": _num(batting.get("baseOnBalls")),
+                "stolen_bases": _num(batting.get("stolenBases")),
+                "strikeouts": k_pitch,
+                "outs": outs,
+                "hits_allowed": hits_allowed,
+                "earned_runs": _num(pitching.get("earnedRuns")),
+                "walks_allowed": _num(pitching.get("baseOnBalls")),
+                "stats": {
+                    "hits": hits,
+                    "total_bases": total_bases,
+                    "home_runs": hrs,
+                    "strikeouts": k_pitch,
+                    "outs": outs,
+                    "hits_allowed": hits_allowed,
+                },
             })
-    except Exception as exc:  # pragma: no cover - schema drift guard
-        print(f"[stat_ingest] MLB aggregation failed: {exc}")
+    return rows
+
+
+def fetch_mlb_logs(game_date: date) -> List[Dict[str, Any]]:
+    """Yesterday's MLB batter+pitcher box scores via MLB-StatsAPI (statsapi).
+
+    statsapi returns official "First Last" names (matching the odds feed) plus
+    both batting and pitching lines, so pitcher strikeouts/outs props resolve.
+    """
+    try:
+        import statsapi
+    except ImportError:
+        print("[stat_ingest] MLB-StatsAPI (statsapi) not installed; skipping MLB")
         return []
+
+    try:
+        schedule = statsapi.schedule(date=game_date.strftime("%m/%d/%Y"))
+    except Exception as exc:  # pragma: no cover - network/provider dependent
+        print(f"[stat_ingest] MLB schedule fetch failed: {exc}")
+        return []
+
+    day = game_date.isoformat()
+    rows: List[Dict[str, Any]] = []
+    for game in schedule or []:
+        game_id = game.get("game_id")
+        if not game_id:
+            continue
+        try:
+            box = statsapi.boxscore_data(game_id)
+        except Exception as exc:  # pragma: no cover - network/provider dependent
+            print(f"[stat_ingest] MLB boxscore {game_id} failed: {exc}")
+            continue
+        rows.extend(_parse_mlb_boxscore(box, day))
     return rows
 
 
@@ -104,6 +168,14 @@ def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict
         print(f"[stat_ingest] nba_api not installed; skipping {league}")
         return []
 
+    # stats.nba.com blocks datacenter IPs (GitHub Actions), causing read
+    # timeouts. Route through the shared residential proxy pool when configured
+    # and give the endpoint a longer timeout.
+    from services.http_client import _residential_proxies
+
+    proxies = _residential_proxies()
+    proxy = proxies["https"] if proxies else ""
+
     season_type = "Regular Season"
     try:
         logs = playergamelogs.PlayerGameLogs(
@@ -111,6 +183,8 @@ def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict
             date_to_nullable=game_date.strftime("%m/%d/%Y"),
             league_id_nullable="10" if league == "basketball_wnba" else "00",
             season_type_nullable=season_type,
+            proxy=proxy or None,
+            timeout=60,
         )
         frame = logs.get_data_frames()[0]
     except Exception as exc:  # pragma: no cover - network/provider dependent

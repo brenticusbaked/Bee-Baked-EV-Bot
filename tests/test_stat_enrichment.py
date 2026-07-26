@@ -90,6 +90,58 @@ class SoccerRoutingTest(unittest.TestCase):
             self.assertFalse(unified_bot._market_allowed_for_sport("soccer_epl", "h2h"))
 
 
+class MlbBoxscoreParseTest(unittest.TestCase):
+    def test_ip_to_outs(self):
+        self.assertEqual(stat_ingest._ip_to_outs("6.2"), 20)
+        self.assertEqual(stat_ingest._ip_to_outs(5.0), 15)
+        self.assertEqual(stat_ingest._ip_to_outs(0.1), 1)
+        self.assertIsNone(stat_ingest._ip_to_outs(None))
+
+    def test_parse_batter_and_pitcher(self):
+        box = {
+            "home": {
+                "team": {"abbreviation": "TEX"},
+                "players": {
+                    "ID1": {
+                        "person": {"fullName": "Wyatt Langford"},
+                        "stats": {"batting": {"hits": 2, "doubles": 1, "triples": 0, "homeRuns": 1, "rbi": 3}},
+                    }
+                },
+            },
+            "away": {
+                "team": {"abbreviation": "SEA"},
+                "players": {
+                    "ID2": {
+                        "person": {"fullName": "Logan Gilbert"},
+                        "stats": {"pitching": {"strikeOuts": 8, "inningsPitched": "6.2", "hits": 4}},
+                    },
+                    "ID3": {"person": {"fullName": "Nobody"}, "stats": {"batting": {}, "pitching": {}}},
+                },
+            },
+        }
+        rows = stat_ingest._parse_mlb_boxscore(box, "2026-07-25")
+        by_name = {r["player_name"]: r for r in rows}
+        self.assertIn("Wyatt Langford", by_name)
+        self.assertIn("Logan Gilbert", by_name)
+        self.assertNotIn("Nobody", by_name)  # no batting/pitching -> skipped
+        # TB = hits + doubles + 2*triples + 3*HR = 2 + 1 + 0 + 3 = 6
+        self.assertEqual(by_name["Wyatt Langford"]["total_bases"], 6)
+        self.assertEqual(by_name["Wyatt Langford"]["home_runs"], 1)
+        self.assertEqual(by_name["Logan Gilbert"]["strikeouts"], 8)
+        self.assertEqual(by_name["Logan Gilbert"]["outs"], 20)
+        self.assertEqual(by_name["Logan Gilbert"]["hits_allowed"], 4)
+
+
+class SoccerLeagueDefaultTest(unittest.TestCase):
+    def test_blank_env_falls_back_to_default(self):
+        import importlib
+
+        with mock.patch.dict("os.environ", {"SOCCER_STAT_LEAGUES": ""}, clear=False):
+            reloaded = importlib.reload(stat_ingest)
+            self.assertTrue(reloaded.SOCCER_STAT_LEAGUES)  # not wiped by blank env
+        importlib.reload(stat_ingest)  # restore module state for other tests
+
+
 class IngestAllTest(unittest.TestCase):
     def test_ingest_all_isolates_and_returns_counts(self):
         # All library-backed fetchers return [] when the lib is absent; force it

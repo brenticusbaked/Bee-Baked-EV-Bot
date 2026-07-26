@@ -41,6 +41,13 @@ jobs:
           ENABLE_NFL_STAT_INGEST: "true"
           ENABLE_SOCCER_STAT_INGEST: "true"
           ENABLE_TENNIS_STAT_INGEST: "true"
-          SOCCER_STAT_LEAGUES: ${{ vars.SOCCER_STAT_LEAGUES }}
+          # Fall back to the code default when the repo variable is unset, so an
+          # empty value doesn't wipe the soccer league list.
+          SOCCER_STAT_LEAGUES: ${{ vars.SOCCER_STAT_LEAGUES || 'ENG-Premier League,USA-Major League Soccer' }}
+          # nba_api hits stats.nba.com, which blocks GitHub Actions IPs; route it
+          # (and the statsapi fallback) through the residential proxy pool.
+          PROXY_LIST: ${{ secrets.PROXY_LIST }}
+          PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
+          PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
         run: |
           python daily_stat_ingest.py
