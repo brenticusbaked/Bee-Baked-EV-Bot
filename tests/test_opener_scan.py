@@ -4,7 +4,13 @@ from unittest.mock import patch
 
 import continuous_scan
 import unified_bot
-from tests.test_opposite_side_suppression import _wnba_h2h_cache
+try:
+    # `unittest discover -s tests` puts the tests dir on sys.path, so the bare
+    # import works. Prefer it: a dependency in site-packages can ship its own
+    # top-level `tests` package that shadows this repo's `tests` namespace.
+    from test_opposite_side_suppression import _wnba_h2h_cache
+except ImportError:
+    from tests.test_opposite_side_suppression import _wnba_h2h_cache
 
 
 class ScanMarketsRoutingTests(unittest.TestCase):
