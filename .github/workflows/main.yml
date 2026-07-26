@@ -5,6 +5,10 @@ on:
     # 14:00/20:00 UTC = 9 AM/3 PM Central during daylight time.
     # Two runs/day keeps all 3 Odds API keys within the 500 credit/month free tier.
     - cron: '0 14,20 * * *'
+    # 03:30 UTC = 10:30 PM Central (daylight). Late-night opener run: with the
+    # 48h enrichment horizon (ODDS_UPCOMING_HORIZON_HOURS) it fetches tomorrow's
+    # opening lines. Does not change the 9 AM / 3 PM runs above.
+    - cron: '30 3 * * *'
   workflow_dispatch:
 
 concurrency:

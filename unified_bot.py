@@ -2,7 +2,14 @@ import os
 import re
 from datetime import datetime, timezone
 
-from db_manager import get_all_graded_bets, get_master_cache, get_today_bets, is_already_logged, log_bet_to_db
+from db_manager import (
+    get_all_graded_bets,
+    get_l10_hit_rate,
+    get_master_cache,
+    get_today_bets,
+    is_already_logged,
+    log_bet_to_db,
+)
 from models.nba_pace import PaceContext, build_pace_context, pace_total_adjustment
 from models.nfl_proe import PROEContext, build_proe_context, proe_spread_adjustment, proe_total_adjustment
 from models.nhl_pdo import PDOContext, build_pdo_context, pdo_total_adjustment
@@ -35,15 +42,23 @@ SPORT_ALERT_WEBHOOKS = {
     "basketball_nba": os.getenv("DISCORD_NBA_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "americanfootball_nfl": os.getenv("DISCORD_NFL_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
 }
-# Tennis sport keys are per-tournament (tennis_atp_*, tennis_wta_*), so they are
-# routed by prefix rather than an exact key match.
+# Tennis sport keys are per-tournament (tennis_atp_*, tennis_wta_*) and soccer
+# spans many league keys (soccer_epl, soccer_usa_mls, ...), so both are routed by
+# prefix rather than an exact key match.
 TENNIS_ALERT_WEBHOOK = os.getenv("DISCORD_TENNIS_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL
+SOCCER_ALERT_WEBHOOK = (
+    os.getenv("DISCORD_SOCCER_BETS_WEBHOOK_URL")
+    or os.getenv("DISCORD_SOCCER_UPDATES_WEBHOOK_URL")
+    or DISCORD_WEBHOOK_URL
+)
 
 
 def webhook_for_sport(sport: object) -> str:
     sport_key = str(sport or "").strip().lower()
     if sport_key.startswith("tennis"):
         return TENNIS_ALERT_WEBHOOK
+    if sport_key.startswith("soccer"):
+        return SOCCER_ALERT_WEBHOOK
     return SPORT_ALERT_WEBHOOKS.get(sport_key, DISCORD_WEBHOOK_URL)
 
 
@@ -65,9 +80,16 @@ ENABLE_NFL_H2H_ALERTS = os.getenv("ENABLE_NFL_H2H_ALERTS", "true").strip().lower
 ENABLE_ALTERNATE_MARKET_ALERTS = os.getenv("ENABLE_ALTERNATE_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PARTIAL_GAME_MARKET_ALERTS = os.getenv("ENABLE_PARTIAL_GAME_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PLAYER_PROP_ALERTS = os.getenv("ENABLE_PLAYER_PROP_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+# Append a "Last 10" historical hit-rate line to +EV prop slips, read from the
+# Supabase stat-log cache (Contextual Stat Enrichment Engine). Cache-only: it
+# never calls an external stat API during the scan. Set false to disable.
+ENABLE_L10_CONTEXT = os.getenv("ENABLE_L10_CONTEXT", "true").strip().lower() in {"1", "true", "yes", "on"}
 # Tennis is priced on the moneyline (h2h) only. Sport keys are per-tournament
 # (tennis_atp_wimbledon, tennis_wta_*), so tennis is matched by prefix.
 ENABLE_TENNIS_ALERTS = os.getenv("ENABLE_TENNIS_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+# Soccer spans many league keys (soccer_epl, soccer_usa_mls, ...). Priced on the
+# 3-way moneyline (h2h, incl. Draw) and totals; matched by prefix.
+ENABLE_SOCCER_ALERTS = os.getenv("ENABLE_SOCCER_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 UNIFIED_PROP_EV_THRESHOLD = env_float("UNIFIED_PROP_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
 # Hard EV floor: never alert below this EV band. Configurable.
 UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.015)
@@ -144,6 +166,34 @@ def _player_prop_sharp_reference(sharp_by_book: dict, side: str) -> str:
     return f"{book.upper()} {decimal_to_american(price)}"
 
 
+def _l10_context_line(player: str, market_key: str, point: object, side: str, sport: str) -> str:
+    """A 'Last 10' hit-rate line for a prop slip, read from the cached stat logs.
+
+    Returns an empty string when the context can't be built (feature off, sport
+    untracked, no logs, unusable line) so callers can append unconditionally.
+    Reads Supabase only — never an external stat API during the scan.
+    """
+    if not ENABLE_L10_CONTEXT:
+        return ""
+    if point in (None, ""):
+        return ""
+    try:
+        line_value = float(point)
+    except (TypeError, ValueError):
+        return ""
+    result = get_l10_hit_rate(player, market_key, line_value, sport)
+    if not result or not result.get("games"):
+        return ""
+    games = int(result["games"])
+    cleared = int(result["over"]) if str(side).strip().lower() == "over" else int(result["under"])
+    direction = "cleared" if str(side).strip().lower() == "over" else "stayed under"
+    stat_label = str(market_key).split("_", 1)[-1].replace("_", " ")
+    return (
+        f"\n📊 **Historical Context:** {player} has {direction} {line_value:g} "
+        f"{stat_label} in {cleared}/{games} of their last games."
+    )
+
+
 def _market_family(market_type: str) -> str:
     market_key = str(market_type).strip().lower()
     if market_key.startswith(_PLAYER_PROP_PREFIXES):
@@ -172,6 +222,8 @@ def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
 
     if sport_key.startswith("tennis"):
         return market_family == "h2h" and ENABLE_TENNIS_ALERTS
+    if sport_key.startswith("soccer"):
+        return market_family in {"h2h", "totals"} and ENABLE_SOCCER_ALERTS
     if sport_key == "basketball_nba":
         return market_family == "spreads" or (market_family == "totals" and ENABLE_NBA_TOTAL_ALERTS)
     if sport_key == "icehockey_nhl":
@@ -522,6 +574,7 @@ def evaluate_player_props(
                 continue
 
             app_link = sportsbook_search_link(offer["book_key"], matchup)
+            l10_context = _l10_context_line(player, market_key, point, side, sport)
             alerts.append(
                 {
                     "sport": sport,
@@ -535,6 +588,7 @@ def evaluate_player_props(
                         f"**Edge:** {offer['edge'] * 100:.2f}%\n"
                         f"**De-vig:** {PROP_DEVIG_METHOD}\n"
                         f"**Suggested:** {units:.2f} Units"
+                        f"{l10_context}"
                     ),
                 }
             )

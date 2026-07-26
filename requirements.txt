@@ -7,3 +7,9 @@ pybaseball
 oddsharvester
 websockets>=12.0
 discord.py>=2.4.1
+# Contextual Stat Enrichment Engine — free box-score sources (batch job only,
+# never imported by the live odds scan). Imported lazily in services/stat_ingest.py.
+MLB-StatsAPI
+nba_api
+nfl_data_py
+soccerdata

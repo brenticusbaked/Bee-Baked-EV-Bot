@@ -223,11 +223,40 @@ const PROXIMITY_CONFIG: ProximityConfig = {
 // need to edit this by season. Tokens may be concrete Odds API sport keys or
 // umbrella tennis tokens (`tennis`, `tennis_atp`, `tennis_wta`); tennis keys are
 // per-tournament and rotate weekly, so they're expanded at runtime.
-const SPORT_UNIVERSE = (Deno.env.get("ODDS_API_SPORT_UNIVERSE") ??
+const SPORT_UNIVERSE_BASE = (Deno.env.get("ODDS_API_SPORT_UNIVERSE") ??
   "baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl,americanfootball_nfl,tennis")
   .split(",")
   .map((sport) => sport.trim())
   .filter(Boolean);
+
+// Multi-sport expansion toggles. Soccer/tennis are gated so we don't drain the
+// Odds API budget: every candidate is still leagueHasGames()-gated (free
+// /events, 0 credits), so an off-season / no-games league costs nothing.
+//   - ENABLE_TENNIS_SCAN (default on): keep the `tennis` umbrella token.
+//   - ENABLE_SOCCER_SCAN (default off): add the SOCCER_LEAGUES_FILTER keys.
+//   - SOCCER_LEAGUES_FILTER: which soccer leagues to consider (bounds the pull).
+const ENABLE_TENNIS_SCAN =
+  (Deno.env.get("ENABLE_TENNIS_SCAN") ?? "true").toLowerCase() !== "false";
+const ENABLE_SOCCER_SCAN =
+  (Deno.env.get("ENABLE_SOCCER_SCAN") ?? "false").toLowerCase() === "true";
+const SOCCER_LEAGUES_FILTER = (Deno.env.get("SOCCER_LEAGUES_FILTER") ??
+  "soccer_epl,soccer_usa_mls,soccer_uefa_champs_league,soccer_spain_la_liga")
+  .split(",")
+  .map((league) => league.trim())
+  .filter(Boolean);
+
+const SPORT_UNIVERSE = (() => {
+  let universe = [...SPORT_UNIVERSE_BASE];
+  if (!ENABLE_TENNIS_SCAN) {
+    universe = universe.filter((sport) => !sport.startsWith("tennis"));
+  }
+  if (ENABLE_SOCCER_SCAN) {
+    for (const league of SOCCER_LEAGUES_FILTER) {
+      if (!universe.includes(league)) universe.push(league);
+    }
+  }
+  return universe;
+})();
 
 // Auto-detect in-season leagues by default. Set ODDS_API_AUTODETECT_SPORTS=false
 // to pin the run to an explicit ODDS_API_ACTIVE_SPORTS list instead (manual
@@ -402,6 +431,24 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
   },
 };
 
+// Soccer shares one enrichment profile across all soccer_* league keys. Limited
+// to clean two-way Over/Under player props Pinnacle posts (shots / shots on
+// target) plus alternate totals — anytime-scorer is not a clean two-way market
+// so it's excluded (same rationale as the note above).
+const SOCCER_PROP_MARKETS = Deno.env.get("ODDS_API_SOCCER_PROP_MARKETS") ??
+  "player_shots_on_target,player_shots";
+const SOCCER_EXTRAS: SportExtras = {
+  groups: [SOCCER_PROP_MARKETS, "alternate_totals"],
+};
+
+// Enrichment profile for a sport key. Soccer is resolved by prefix since every
+// soccer_* league uses the same profile.
+function extrasFor(sportKey: string): SportExtras | undefined {
+  if (SPORT_EXTRAS[sportKey]) return SPORT_EXTRAS[sportKey];
+  if (sportKey.startsWith("soccer_")) return SOCCER_EXTRAS;
+  return undefined;
+}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
@@ -422,10 +469,18 @@ function currentSlot(): number {
   return Math.floor(Date.now() / (CYCLE_MINUTES * 60 * 1000));
 }
 
+// How far ahead enrichment (props/alternates/derivatives) reaches for upcoming
+// fixtures. Raised from 30h to 48h so late-night runs (e.g. the 03:30 UTC slot)
+// pick up tomorrow's opening lines instead of stopping at ~30h — the late-night
+// date-scoping fix. Tunable via env without a redeploy.
+const UPCOMING_HORIZON_HOURS = Number(
+  Deno.env.get("ODDS_UPCOMING_HORIZON_HOURS") ?? "48",
+);
+
 async function getUpcomingFixtureIds(sportKey: string): Promise<string[]> {
   // Live and near-term fixtures only (avoids paying to enrich finished games).
   const lookbackHours = 6;
-  const horizonHours = 30;
+  const horizonHours = UPCOMING_HORIZON_HOURS;
   const since = new Date(Date.now() - lookbackHours * 3600 * 1000).toISOString();
   const until = new Date(Date.now() + horizonHours * 3600 * 1000).toISOString();
   const { data, error } = await supabase
@@ -505,7 +560,7 @@ function buildJobs(slot: number, sports: string[]): IngestJob[] {
   const enrichJobs: IngestJob[] = [];
   if (ENABLE_MARKET_ENRICHMENT) {
     for (const sportKey of sports) {
-      const extras = SPORT_EXTRAS[sportKey];
+      const extras = extrasFor(sportKey);
       if (!extras) continue;
       for (const group of extras.groups) {
         if (!group) continue;

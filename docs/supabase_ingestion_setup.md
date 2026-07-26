@@ -266,6 +266,33 @@ Run `supabase_edge_cron_setup.sql` after replacing:
 
 The schedule runs during game hours only, plus one overnight opener pull (~32 runs/day): every 30 min in prime hours, every 60 min mornings, paused overnight. The Edge Function enforces a strict per-run credit ceiling (`ODDS_MAX_CREDITS_PER_RUN`) and rotates the main pulls and the expensive derivative/alternate/player-prop enrichment (sharp+soft pairs) across cycles so the monthly budget (~20k credits) is respected. Use Supabase cron controls to pause it on non-game days or narrow `ODDS_API_ACTIVE_SPORTS`.
 
+## 3b. Multi-sport expansion + late-night scoping
+
+New env toggles on the `odds-cache-ingest` Edge Function (no redeploy needed):
+
+- `ODDS_UPCOMING_HORIZON_HOURS` (default `48`): how far ahead enrichment
+  (props/alternates) reaches. Raised from 30h so the 03:30 UTC late-night run
+  fetches tomorrow's opening lines.
+- `ENABLE_TENNIS_SCAN` (default `true`), `ENABLE_SOCCER_SCAN` (default `false`),
+  `SOCCER_LEAGUES_FILTER` (default `soccer_epl,soccer_usa_mls,soccer_uefa_champs_league,soccer_spain_la_liga`).
+  Every soccer/tennis candidate is still `/events`-gated (0 credits), so an
+  off-season league with no games costs nothing.
+- `ODDS_SOCCER_PROP_MARKETS` (default `player_shots_on_target,player_shots`).
+
+Python scan side: `ENABLE_SOCCER_ALERTS`, `ENABLE_TENNIS_ALERTS`,
+`ENABLE_L10_CONTEXT` (append "Last 10" hit-rate to prop slips, cache-only).
+
+## 3c. Contextual Stat Enrichment Engine
+
+`supabase_historical_stats_schema.sql` adds `mlb_/nba_/wnba_/nfl_/soccer_player_logs`
+and `tennis_match_logs`. The `Daily Stat Ingest` workflow
+(`.github/workflows/daily_stat_ingest.yml`, 09:00 UTC / 4 AM CDT) runs
+`daily_stat_ingest.py` → `services/stat_ingest.py`, which fetches yesterday's box
+scores from free libraries (pybaseball, nba_api, nfl_data_py, soccerdata,
+Sackmann tennis CSVs) and upserts via `db_manager.upsert_player_logs`. The live
+scan reads these through `db_manager.get_l10_hit_rate` only — it never calls an
+external stat API synchronously.
+
 ## 4. Realtime Subscriptions
 
 Frontend or agent clients can subscribe to fixture and odds changes:

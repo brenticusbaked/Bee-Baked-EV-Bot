@@ -983,3 +983,179 @@ def log_workflow_run(
             }
         ).execute()
     _safe_execute(action, None)
+
+
+# ---------------------------------------------------------------------------
+# Historical player-stat logs (Contextual Stat Enrichment Engine)
+#
+# These tables are written once daily by the daily_stat_ingest workflow and read
+# (never written) by the live scan to append "Last 10" hit rates to slips. All
+# access routes through db_manager so the live scan never touches an external
+# stat API synchronously.
+# ---------------------------------------------------------------------------
+
+# Odds API sport key -> Supabase player-log table.
+STAT_LOG_TABLES: Dict[str, str] = {
+    "baseball_mlb": "mlb_player_logs",
+    "basketball_nba": "nba_player_logs",
+    "basketball_wnba": "wnba_player_logs",
+    "americanfootball_nfl": "nfl_player_logs",
+    "tennis_atp": "tennis_match_logs",
+    "tennis_wta": "tennis_match_logs",
+}
+
+# Soccer spans many league keys; they all share soccer_player_logs.
+def _stat_log_table(sport: str) -> Optional[str]:
+    sport_key = str(sport).strip().lower()
+    if sport_key in STAT_LOG_TABLES:
+        return STAT_LOG_TABLES[sport_key]
+    if sport_key.startswith("soccer_"):
+        return "soccer_player_logs"
+    return None
+
+
+# Odds API prop-market key -> dedicated stat column on the log table. Anything
+# not listed falls back to a same-named key inside the row's ``stats`` jsonb.
+PROP_STAT_COLUMNS: Dict[str, str] = {
+    # MLB batter
+    "batter_hits": "hits",
+    "batter_total_bases": "total_bases",
+    "batter_runs_scored": "runs",
+    "batter_rbis": "rbis",
+    "batter_home_runs": "home_runs",
+    "batter_stolen_bases": "stolen_bases",
+    "batter_walks": "walks",
+    # MLB pitcher
+    "pitcher_strikeouts": "strikeouts",
+    "pitcher_outs": "outs",
+    "pitcher_earned_runs": "earned_runs",
+    "pitcher_hits_allowed": "hits_allowed",
+    "pitcher_walks": "walks_allowed",
+    # NBA / WNBA
+    "player_points": "points",
+    "player_rebounds": "rebounds",
+    "player_assists": "assists",
+    "player_threes": "threes_made",
+    "player_steals": "steals",
+    "player_blocks": "blocks",
+    "player_turnovers": "turnovers",
+    # NFL
+    "player_pass_yds": "passing_yards",
+    "player_pass_tds": "passing_tds",
+    "player_rush_yds": "rushing_yards",
+    "player_rush_tds": "rushing_tds",
+    "player_reception_yds": "receiving_yards",
+    "player_receptions": "receptions",
+    "player_reception_tds": "receiving_tds",
+    "player_anytime_td": "total_tds",
+    # Soccer
+    "player_shots_on_target": "shots_on_target",
+    "player_shots": "shots",
+    "player_goal_scorer_anytime": "goals",
+    "player_assists_soccer": "assists",
+    # Tennis
+    "player_aces": "aces",
+    "player_double_faults": "double_faults",
+}
+
+
+def _normalize_player_name(name: str) -> str:
+    return " ".join(str(name or "").strip().lower().split())
+
+
+def upsert_player_logs(table: str, rows: List[Dict[str, Any]]) -> int:
+    """Upsert daily player-log rows into a historical stats table.
+
+    Returns the number of rows sent. Conflict target is
+    ``(player_name, game_date, league)`` so re-ingesting a day is idempotent.
+    """
+    if not table or not rows:
+        return 0
+    payload = [_json_safe(row) for row in rows]
+
+    def action():
+        supabase.table(table).upsert(
+            payload, on_conflict="player_name,game_date,league"
+        ).execute()
+        return len(payload)
+
+    return int(_safe_execute(action, 0) or 0)
+
+
+def _stat_value_for_prop(row: Dict[str, Any], prop: str) -> Optional[float]:
+    """Pull the metric a prop measures from a log row (column, else stats jsonb)."""
+    column = PROP_STAT_COLUMNS.get(str(prop).strip().lower())
+    value = None
+    if column is not None and row.get(column) is not None:
+        value = row.get(column)
+    else:
+        stats = row.get("stats") or {}
+        if isinstance(stats, dict):
+            lookup = column or str(prop).strip().lower()
+            value = stats.get(lookup)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_l10_hit_rate(
+    player: str,
+    prop: str,
+    line: float,
+    sport: str,
+    games: int = 10,
+) -> Optional[Dict[str, Any]]:
+    """Last-N hit rate for a player prop, read from the cached stat logs.
+
+    Returns ``{"over": int, "under": int, "games": int, "line": float,
+    "values": [...]}`` where ``over`` counts games strictly above ``line`` and
+    ``under`` counts games strictly below. Returns ``None`` when the sport isn't
+    tracked, the player has no logs, or the metric can't be resolved — so the
+    caller simply omits the context line. Never raises; never writes.
+    """
+    table = _stat_log_table(sport)
+    if not table:
+        return None
+    try:
+        line_value = float(line)
+    except (TypeError, ValueError):
+        return None
+    name = _normalize_player_name(player)
+    if not name:
+        return None
+
+    def action():
+        return (
+            supabase.table(table)
+            .select("*")
+            .ilike("player_name", name)
+            .order("game_date", desc=True)
+            .limit(max(1, int(games)))
+            .execute()
+            .data
+        )
+
+    rows = _safe_execute(action, None)
+    if not rows:
+        return None
+
+    values: List[float] = []
+    for row in rows:
+        value = _stat_value_for_prop(row, prop)
+        if value is not None:
+            values.append(value)
+    if not values:
+        return None
+
+    over = sum(1 for value in values if value > line_value)
+    under = sum(1 for value in values if value < line_value)
+    return {
+        "over": over,
+        "under": under,
+        "games": len(values),
+        "line": line_value,
+        "values": values,
+    }
