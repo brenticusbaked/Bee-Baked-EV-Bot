@@ -1,0 +1,46 @@
+name: Daily Stat Ingest
+
+on:
+  schedule:
+    # 09:00 UTC = 4:00 AM Central (daylight). Runs after the slate finishes so
+    # yesterday's box scores are final. Populates the *_player_logs tables that
+    # feed the "Last 10" hit-rate context on Discord slips. No Odds API credits.
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-stat-ingest
+  cancel-in-progress: true
+
+jobs:
+  ingest-stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Daily Stat Ingest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ENABLE_MLB_STAT_INGEST: "true"
+          ENABLE_NBA_STAT_INGEST: "true"
+          ENABLE_WNBA_STAT_INGEST: "true"
+          ENABLE_NFL_STAT_INGEST: "true"
+          ENABLE_SOCCER_STAT_INGEST: "true"
+          ENABLE_TENNIS_STAT_INGEST: "true"
+          SOCCER_STAT_LEAGUES: ${{ vars.SOCCER_STAT_LEAGUES }}
+        run: |
+          python daily_stat_ingest.py
