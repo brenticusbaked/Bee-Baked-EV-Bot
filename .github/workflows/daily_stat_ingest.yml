@@ -39,7 +39,10 @@ jobs:
           ENABLE_NBA_STAT_INGEST: "true"
           ENABLE_WNBA_STAT_INGEST: "true"
           ENABLE_NFL_STAT_INGEST: "true"
-          ENABLE_SOCCER_STAT_INGEST: "true"
+          # soccerdata scrapes FBref, which serves a CAPTCHA to GitHub Actions
+          # IPs (can't be solved from CI). Off by default; flip the repo variable
+          # to "true" only if running from an unblocked/residential runner.
+          ENABLE_SOCCER_STAT_INGEST: ${{ vars.ENABLE_SOCCER_STAT_INGEST || 'false' }}
           ENABLE_TENNIS_STAT_INGEST: "true"
           # Fall back to the code default when the repo variable is unset, so an
           # empty value doesn't wipe the soccer league list.
@@ -49,5 +52,8 @@ jobs:
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+          # This provider uses a fixed zone/gateway username (no rotating
+          # -session- suffix), which otherwise 407s. Send the username verbatim.
+          PROXY_STICKY_SESSIONS: "false"
         run: |
           python daily_stat_ingest.py
