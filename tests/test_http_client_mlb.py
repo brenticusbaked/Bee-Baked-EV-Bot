@@ -30,6 +30,16 @@ class ResidentialProxyTests(unittest.TestCase):
         self.assertIn("user-session-", proxies["http"])
         self.assertIn("@1.2.3.4:8080", proxies["http"])
 
+    def test_plain_username_when_sticky_sessions_disabled(self):
+        with mock.patch.object(http_client, "_PROXY_IPS", ["1.2.3.4:8080"]), \
+             mock.patch.object(http_client, "_PROXY_USERNAME", "acct-resi"), \
+             mock.patch.object(http_client, "_PROXY_PASSWORD", "pass"), \
+             mock.patch.object(http_client, "_PROXY_STICKY_SESSIONS", False):
+            proxies = http_client._residential_proxies()
+        self.assertIsNotNone(proxies)
+        self.assertNotIn("-session-", proxies["http"])
+        self.assertIn("acct-resi:pass@1.2.3.4:8080", proxies["http"])
+
     def test_url_encodes_credentials_with_special_chars(self):
         with mock.patch.object(http_client, "_PROXY_IPS", ["1.2.3.4:8080"]), \
              mock.patch.object(http_client, "_PROXY_USERNAME", "us@r"), \
