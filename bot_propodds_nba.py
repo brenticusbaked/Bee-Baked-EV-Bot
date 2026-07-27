@@ -238,8 +238,6 @@ NEGATIVE_BINOMIAL_STATS = {
 
 SHARP_PROP_BOOKS = {
     book.strip().lower()
-    # Keep the prop baseline aligned with the sharper books used by the live
-    # edge pipeline so player-prop pricing stays consistent across models.
     for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
     if book.strip()
 }
@@ -272,8 +270,6 @@ def get_dynamic_link(bookmaker, target_string):
     return sportsbook_search_link(bookmaker, target_string)
 
 def _slugify(value: str) -> str:
-    # Split camelCase (e.g. "homeRuns" -> "home_Runs") before lowercasing so SGO
-    # statIDs in either camelCase or snake_case normalize identically.
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value))
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
@@ -286,11 +282,6 @@ def _normalize_stat_name(value: str) -> Optional[str]:
 TARGET_STATS = _parse_target_stats()
 
 def _parse_player_prop_leagues() -> List[str]:
-    # WNBA is intentionally excluded from the default: it is not available on the
-    # current SGO subscription tier (the /events call 400s), so requesting it just
-    # wastes one SGO call per run. WNBA player props still flow via the Odds API
-    # Edge Function cache path. Re-add WNBA here (or via PLAYER_PROP_LEAGUES) if
-    # the SGO plan is upgraded.
     raw = os.getenv("PLAYER_PROP_LEAGUES", "NBA,MLB,NFL")
     leagues = []
     for item in raw.split(","):
@@ -303,7 +294,6 @@ PLAYER_PROP_LEAGUES = _parse_player_prop_leagues()
 
 
 def _extract_sgo_events(payload) -> List[dict]:
-    """Normalize SportsGameOdds responses into a list of event dicts."""
     if isinstance(payload, list):
         return payload
     if not isinstance(payload, dict):
@@ -332,22 +322,16 @@ def _normalize_side(value: str) -> Optional[str]:
 
 def _clean_player_name(value: str) -> str:
     text = str(value or "")
-    # SGO entity IDs look like "DUSTIN_MAY_1_MLB" — drop the trailing
-    # "_<index>_<LEAGUE>" suffix before de-slugging into a display name.
     text = re.sub(r"_\d+_[A-Za-z]+$", "", text)
     text = text.replace("_", " ").strip()
     text = re.sub(r"\s+", " ", text)
     return text.title()
 
-# Non-player statEntityID values in SGO (team/game-level markets, never props).
 _NON_PLAYER_ENTITIES = {"home", "away", "all", "home1", "away1", "home2", "away2"}
-# betTypeID values that denote an over/under (player-prop) market.
 _OVER_UNDER_BET_TYPES = {"ou", "over_under", "overunder"}
 
 
 def _resolve_player_name(player_id: str, players_map: dict) -> str:
-    """Resolve an SGO statEntityID (player ID) to a display name using the
-    event-level `players` map, falling back to a de-slugged ID."""
     info = players_map.get(player_id) if isinstance(players_map, dict) else None
     if isinstance(info, dict):
         for field in ("name", "displayName", "fullName", "shortName"):
@@ -378,7 +362,6 @@ def _team_display_name(team: dict) -> str:
 
 
 def _matchup_from_event(event: dict) -> str:
-    """Build 'Away @ Home' from SGO's teams block, falling back to any name."""
     name = str(event.get("name", "")).strip()
     if name:
         return name
@@ -394,8 +377,6 @@ def _matchup_from_event(event: dict) -> str:
 
 
 def _book_line(book_data: dict, odd_obj: dict) -> Optional[str]:
-    """Over/under line for a book. SGO carries the line per-book (books can post
-    different lines) under overUnder/line; fall back to the odd-level value."""
     for source in (book_data, odd_obj):
         for field in ("overUnder", "line", "handicap", "points"):
             value = source.get(field)
@@ -405,10 +386,6 @@ def _book_line(book_data: dict, odd_obj: dict) -> Optional[str]:
 
 
 def _parse_prop_offers(odd_obj: dict, players_map: dict) -> List[dict]:
-    """SGO v2: one odd object is a single market SIDE priced across many books.
-    Player props have betTypeID 'ou', a player ID in statEntityID, sideID
-    over/under, and per-book prices under `byBookmaker`. Returns one offer per
-    available book (or [] for non-prop / unsupported-stat markets)."""
     if str(odd_obj.get("betTypeID", "")).strip().lower() not in _OVER_UNDER_BET_TYPES:
         return []
     side = _normalize_side(odd_obj.get("sideID"))
@@ -456,9 +433,6 @@ def _parse_prop_offers(odd_obj: dict, players_map: dict) -> List[dict]:
 def _consensus_from_sharp_books(sharp_by_book: Dict[str, Dict[str, dict]], stat_type: str, line_value: str) -> tuple[Dict[str, float], str, int]:
     pinnacle_sides = sharp_by_book.get("pinnacle")
     if isinstance(pinnacle_sides, dict) and "over" in pinnacle_sides and "under" in pinnacle_sides:
-        # Pinnacle-first: when the sharpest book prices the prop, use it alone as
-        # the fair-value baseline. Fall back to the sharp-book consensus only when
-        # Pinnacle doesn't post this prop (common for player props).
         book_pairs = [pinnacle_sides]
         source = "pinnacle"
     else:
@@ -517,9 +491,6 @@ def _sharp_prop_reference(sharp_by_book: Dict[str, Dict[str, dict]], side: str) 
     return f"{book.upper()} {decimal_to_american(price)}"
 
 def _log_unparsed_event_shape(league: str, event: dict) -> None:
-    """When events arrive but nothing parses, print the structural shape of the
-    first event/odd so we can see how SGO nests books/prices. No secrets: this
-    dumps keys and a single sanitized sample, never the API key."""
     if not isinstance(event, dict):
         print(f"[prop_bot] {league}: event is {type(event).__name__}, not a dict")
         return
@@ -534,8 +505,6 @@ def _log_unparsed_event_shape(league: str, event: dict) -> None:
     else:
         sample, sample_key, odds_kind, odds_count = None, None, type(odds).__name__, 0
     sample_keys = sorted(sample.keys()) if isinstance(sample, dict) else None
-    # Also surface the distinct over/under statIDs present so we can see which
-    # player-prop stats aren't mapping to TARGET_STATS (drives alias fixes).
     ou_stats: set = set()
     odd_values = odds.values() if isinstance(odds, dict) else (odds if isinstance(odds, list) else [])
     for odd_obj in odd_values:
@@ -586,48 +555,47 @@ def get_sgo_edges():
         "errored_leagues": [],
     }
 
-    # Each league is fetched independently: a bad/unsupported leagueID (e.g. an
-    # SGO 400) or a transient error must only skip THAT league, never abort the
-    # whole scan — otherwise one bad league blocks props for every other league.
     for league in PLAYER_PROP_LEAGUES:
         params = {"apiKey": SGO_API_KEY, "leagueID": league, "oddsAvailable": "true"}
         sport_key = LEAGUE_SPORT_KEYS.get(league, league.lower())
 
         try:
-            # UPDATED: retry_on_429 set to True to respect rate limits with exponential backoff
             data = request("GET", url, params=params, timeout=15, retry_on_429=True).json()
         except requests.HTTPError as exc:
             resp = getattr(exc, "response", None)
             status_code = getattr(resp, "status_code", None)
-            # The SGO error body explains a 400 (e.g. unsupported league) and never
-            # contains the API key (that lives only in the URL/params), so it is
-            # safe to surface for diagnostics.
             body = ""
             try:
                 body = (resp.text or "")[:300] if resp is not None else ""
             except Exception:
                 body = ""
-            print(
-                f"[prop_bot] {league}: fetch failed ({status_code or 'HTTPError'}); "
-                f"skipping league | body={body}"
-            )
-            scan_stats["errored_leagues"].append(f"{league}:{status_code or 'http'}")
+            
+            # FIX: Handle 400 Bad Request / unsupported league as a clean skip without logging it as a hard task failure
+            if status_code == 400 or "unsupported league" in body.lower():
+                print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
+            else:
+                print(
+                    f"[prop_bot] {league}: fetch failed ({status_code or 'HTTPError'}); "
+                    f"skipping league | body={body}"
+                )
+                scan_stats["errored_leagues"].append(f"{league}:{status_code or 'http'}")
+            
             if status_code == 429:
-                # Rate limited — stop hitting SGO for the rest of this run.
                 break
             continue
         except Exception as exc:
-            print(f"[prop_bot] {league}: fetch failed ({type(exc).__name__}); skipping league")
-            scan_stats["errored_leagues"].append(f"{league}:{type(exc).__name__}")
+            exc_str = str(exc)
+            if "400" in exc_str or "unsupported league" in exc_str.lower():
+                print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
+            else:
+                print(f"[prop_bot] {league}: fetch failed ({type(exc).__name__}); skipping league")
+                scan_stats["errored_leagues"].append(f"{league}:{type(exc).__name__}")
             continue
 
         try:
             events_list = _extract_sgo_events(data)
 
             if not events_list:
-                # Reveal *why* a league came back empty without leaking the key
-                # (the apiKey lives only in params/URL, never in the body). The
-                # SGO v2 envelope carries success/error/message alongside data.
                 if isinstance(data, dict):
                     envelope = {
                         k: data.get(k)
@@ -659,8 +627,6 @@ def get_sgo_edges():
             if events_list and scan_stats["parsed_props"] == parsed_before:
                 _log_unparsed_event_shape(league, events_list[0])
         except Exception as exc:
-            # Parsing/processing failure for this league only — log and move on
-            # so a single malformed event can't sink props for every league.
             print(f"[prop_bot] {league}: processing failed ({type(exc).__name__}); skipping league")
             scan_stats["errored_leagues"].append(f"{league}:{type(exc).__name__}")
             continue
@@ -677,125 +643,125 @@ def _process_sgo_event(
     near_misses: List[dict],
     scan_stats: dict,
 ) -> None:
-            matchup = _matchup_from_event(event)
-            players_map = event.get("players") if isinstance(event.get("players"), dict) else {}
-            market_groups: Dict[Tuple[str, str, str], Dict[str, Dict[str, dict]]] = {}
-            odds_map = event.get("odds", {})
-            
-            if isinstance(odds_map, list):
-                odds_iterable = enumerate(odds_map)
-            else:
-                odds_iterable = odds_map.items()
-                
-            for odd_key, odd_obj in odds_iterable:
-                if not isinstance(odd_obj, dict):
-                    continue
-                scan_stats["raw_odds"] += 1
-                offers = _parse_prop_offers(odd_obj, players_map)
-                for offer in offers:
-                    scan_stats["parsed_props"] += 1
-                    market_key = (offer["player"], offer["stat"], offer["line"])
-                    market_groups.setdefault(market_key, {"sharp": {}, "soft": {}})
+    matchup = _matchup_from_event(event)
+    players_map = event.get("players") if isinstance(event.get("players"), dict) else {}
+    market_groups: Dict[Tuple[str, str, str], Dict[str, Dict[str, dict]]] = {}
+    odds_map = event.get("odds", {})
+    
+    if isinstance(odds_map, list):
+        odds_iterable = enumerate(odds_map)
+    else:
+        odds_iterable = odds_map.items()
+        
+    for odd_key, odd_obj in odds_iterable:
+        if not isinstance(odd_obj, dict):
+            continue
+        scan_stats["raw_odds"] += 1
+        offers = _parse_prop_offers(odd_obj, players_map)
+        for offer in offers:
+            scan_stats["parsed_props"] += 1
+            market_key = (offer["player"], offer["stat"], offer["line"])
+            market_groups.setdefault(market_key, {"sharp": {}, "soft": {}})
 
-                    if offer["book"] in SHARP_PROP_BOOKS:
-                        market_groups[market_key]["sharp"].setdefault(offer["book"], {})[offer["side"]] = offer
-                        scan_stats["sharp_sides"] += 1
-                    elif offer["book"] in soft_list:
-                        current = market_groups[market_key]["soft"].get(offer["side"])
-                        if not current or offer["price"] > current["price"]:
-                            market_groups[market_key]["soft"][offer["side"]] = offer
-                        scan_stats["soft_sides"] += 1
-                    
-            for (player_name, stat_type, line_value), value in market_groups.items():
-                sharp, soft = value["sharp"], value["soft"]
-                if not soft:
-                    continue
-                probabilities, probability_source, consensus_books = _consensus_from_sharp_books(sharp, stat_type, line_value)
-                if not probabilities:
-                    continue
-                scan_stats["qualified_groups"] += 1
+            if offer["book"] in SHARP_PROP_BOOKS:
+                market_groups[market_key]["sharp"].setdefault(offer["book"], {})[offer["side"]] = offer
+                scan_stats["sharp_sides"] += 1
+            elif offer["book"] in soft_list:
+                current = market_groups[market_key]["soft"].get(offer["side"])
+                if not current or offer["price"] > current["price"]:
+                    market_groups[market_key]["soft"][offer["side"]] = offer
+                scan_stats["soft_sides"] += 1
+            
+    for (player_name, stat_type, line_value), value in market_groups.items():
+        sharp, soft = value["sharp"], value["soft"]
+        if not soft:
+            continue
+        probabilities, probability_source, consensus_books = _consensus_from_sharp_books(sharp, stat_type, line_value)
+        if not probabilities:
+            continue
+        scan_stats["qualified_groups"] += 1
+        
+        for side in ("over", "under"):
+            if side not in soft:
+                continue
+            edge = (soft[side]["price"] * probabilities[side]) - 1
+            book_weight = book_weight_for(book_weights, soft[side]["book"])
+            weighted_score = edge * book_weight
+            selection = f"{player_name} {side.upper()} {line_value}"
+            
+            if PROP_NEAR_MISS_THRESHOLD <= edge < PROP_EV_THRESHOLD:
+                near_misses.append(
+                    {
+                        "matchup": matchup,
+                        "selection": selection,
+                        "book": soft[side]["book"],
+                        "edge": edge,
+                        "weight": book_weight,
+                        "stat": STAT_LABELS.get(stat_type, stat_type.upper()),
+                    }
+                )
                 
-                for side in ("over", "under"):
-                    if side not in soft:
-                        continue
-                    edge = (soft[side]["price"] * probabilities[side]) - 1
-                    book_weight = book_weight_for(book_weights, soft[side]["book"])
-                    weighted_score = edge * book_weight
-                    selection = f"{player_name} {side.upper()} {line_value}"
-                    
-                    if PROP_NEAR_MISS_THRESHOLD <= edge < PROP_EV_THRESHOLD:
-                        near_misses.append(
-                            {
-                                "matchup": matchup,
-                                "selection": selection,
-                                "book": soft[side]["book"],
-                                "edge": edge,
-                                "weight": book_weight,
-                                "stat": STAT_LABELS.get(stat_type, stat_type.upper()),
-                            }
-                        )
-                        
-                    if edge < PROP_EV_THRESHOLD:
-                        continue
-                    
-                    market = STAT_LABELS.get(stat_type, stat_type.upper())
-                    if is_already_logged(matchup, market, selection):
-                        continue
-                    
-                    confidence = min(1.0, consensus_books / PROP_CONFIDENCE_FULL_BOOKS)
-                    units, adjusted_edge, adjusted_probability = uncertainty_adjusted_prop_kelly_units(
-                        probabilities[side],
-                        soft[side]["price"],
-                        confidence=confidence,
-                        fraction=PROP_KELLY_FRACTION,
-                        cap=PROP_MAX_UNITS,
-                        z_score=PROP_UNCERTAINTY_Z,
-                        effective_samples=PROP_UNCERTAINTY_EFFECTIVE_SAMPLES,
-                    )
-                    if units <= 0:
-                        continue
-                    was_logged = log_bet_to_db(
-                        matchup.strip(),
-                        market,
-                        selection,
-                        decimal_to_american(soft[side]["price"]),
-                        edge,
-                        f"{units:.2f}",
-                        decimal_to_american(1 / probabilities[side]),
-                        sport_key,
-                        str(event.get("id", "")),
-                        notes=(
-                            f"book={soft[side]['book']};market=prop;stat={stat_type};line={line_value};"
-                            f"fair_source={probability_source};consensus_books={consensus_books};"
-                            f"confidence={confidence:.4f};adjusted_edge={adjusted_edge:.4f};"
-                            f"adjusted_probability={adjusted_probability:.4f};"
-                            f"prop_kelly_fraction={PROP_KELLY_FRACTION}"
-                        ),
-                    )
-                    
-                    if not was_logged:
-                        continue
-                    
-                    link = soft[side].get("prop_link") or get_dynamic_link(soft[side]["book"], player_name)
-                    sharp_reference = _sharp_prop_reference(sharp, side)
-                    picks.append(
-                        {
-                            "score": weighted_score,
-                            "msg": (
-                                f"**{league} PROP ALERT**\n"
-                                f"**Match:** {matchup}\n"
-                                f"**Prop:** {selection} ({market})\n"
-                                f"**Book:** [{soft[side]['book'].upper()}]({link}) @ {decimal_to_american(soft[side]['price'])}\n"
-                                f"**Sharp Ref:** {sharp_reference}\n"
-                                f"**Edge:** {edge * 100:.2f}%\n"
-                                f"**Adj Edge:** {adjusted_edge * 100:.2f}% ({confidence:.0%} confidence)\n"
-                                f"**Fair Price:** {decimal_to_american(1 / probabilities[side])}\n"
-                                f"**Fair Source:** {probability_source} ({consensus_books} book consensus)\n"
-                                f"**Suggested:** {units:.2f} Units\n"
-                                f"**Book Weight:** {book_weight:.2f}x"
-                            ),
-                        }
-                    )
+            if edge < PROP_EV_THRESHOLD:
+                continue
+            
+            market = STAT_LABELS.get(stat_type, stat_type.upper())
+            if is_already_logged(matchup, market, selection):
+                continue
+            
+            confidence = min(1.0, consensus_books / PROP_CONFIDENCE_FULL_BOOKS)
+            units, adjusted_edge, adjusted_probability = uncertainty_adjusted_prop_kelly_units(
+                probabilities[side],
+                soft[side]["price"],
+                confidence=confidence,
+                fraction=PROP_KELLY_FRACTION,
+                cap=PROP_MAX_UNITS,
+                z_score=PROP_UNCERTAINTY_Z,
+                effective_samples=PROP_UNCERTAINTY_EFFECTIVE_SAMPLES,
+            )
+            if units <= 0:
+                continue
+            was_logged = log_bet_to_db(
+                matchup.strip(),
+                market,
+                selection,
+                decimal_to_american(soft[side]["price"]),
+                edge,
+                f"{units:.2f}",
+                decimal_to_american(1 / probabilities[side]),
+                sport_key,
+                str(event.get("id", "")),
+                notes=(
+                    f"book={soft[side]['book']};market=prop;stat={stat_type};line={line_value};"
+                    f"fair_source={probability_source};consensus_books={consensus_books};"
+                    f"confidence={confidence:.4f};adjusted_edge={adjusted_edge:.4f};"
+                    f"adjusted_probability={adjusted_probability:.4f};"
+                    f"prop_kelly_fraction={PROP_KELLY_FRACTION}"
+                ),
+            )
+            
+            if not was_logged:
+                continue
+            
+            link = soft[side].get("prop_link") or get_dynamic_link(soft[side]["book"], player_name)
+            sharp_reference = _sharp_prop_reference(sharp, side)
+            picks.append(
+                {
+                    "score": weighted_score,
+                    "msg": (
+                        f"**{league} PROP ALERT**\n"
+                        f"**Match:** {matchup}\n"
+                        f"**Prop:** {selection} ({market})\n"
+                        f"**Book:** [{soft[side]['book'].upper()}]({link}) @ {decimal_to_american(soft[side]['price'])}\n"
+                        f"**Sharp Ref:** {sharp_reference}\n"
+                        f"**Edge:** {edge * 100:.2f}%\n"
+                        f"**Adj Edge:** {adjusted_edge * 100:.2f}% ({confidence:.0%} confidence)\n"
+                        f"**Fair Price:** {decimal_to_american(1 / probabilities[side])}\n"
+                        f"**Fair Source:** {probability_source} ({consensus_books} book consensus)\n"
+                        f"**Suggested:** {units:.2f} Units\n"
+                        f"**Book Weight:** {book_weight:.2f}x"
+                    ),
+                }
+            )
 
 def _near_miss_summary(near_misses: List[dict]) -> str:
     if not near_misses:
