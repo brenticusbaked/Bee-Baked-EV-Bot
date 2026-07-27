@@ -408,4 +408,165 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
             {
                 "fill_id": fill_id,
                 "child_order_id": fill.get("child_order_id"),
-                "parent_order_id": fill.get("parent
+                "parent_order_id": fill.get("parent_order_id") or order_id,
+                "venue_id": fill.get("venue_id"),
+                "symbol": fill.get("symbol"),
+                "side": fill.get("side"),
+                "quantity": fill.get("quantity"),
+                "price": fill.get("price"),
+                "fee": fill.get("fee"),
+                "filled_at": fill.get("filled_at"),
+            }
+        )
+    venue_metrics_payload = []
+    for child in child_orders:
+        child_fills = fills_by_child.get(child.get("child_order_id"), [])
+        filled_qty = sum(float(fill.get("quantity") or 0) for fill in child_fills)
+        notional = sum(float(fill.get("quantity") or 0) * float(fill.get("price") or 0) for fill in child_fills)
+        fees = sum(float(fill.get("fee") or 0) for fill in child_fills)
+        avg_price = (notional / filled_qty) if filled_qty else None
+        metric_id = f"{child.get('child_order_id')}:{logged_at}"
+        venue_metrics_payload.append(
+            {
+                "metric_id": metric_id,
+                "parent_order_id": child.get("parent_order_id") or order_id,
+                "child_order_id": child.get("child_order_id"),
+                "venue_id": child.get("venue_id"),
+                "symbol": child.get("symbol"),
+                "status": child.get("status"),
+                "routed_quantity": child.get("quantity"),
+                "filled_quantity": filled_qty,
+                "fill_rate": filled_qty / float(child.get("quantity") or 1),
+                "average_fill_price": avg_price,
+                "route_score": child.get("route_score"),
+                "fee": fees,
+                "latency_ms": child.get("metadata", {}).get("latency_ms"),
+                "fill_probability": child.get("metadata", {}).get("fill_probability"),
+                "edge_capture": metrics.get("edge_capture"),
+                "measured_at": logged_at,
+            }
+        )
+    return {
+        "order": order_payload,
+        "child_orders": children_payload,
+        "fills": fills_payload,
+        "venue_metrics": venue_metrics_payload,
+    }
+
+def _insert_execution_payload(payload: Dict[str, Any]) -> bool:
+    def action():
+        supabase.table("execution_orders").upsert(payload["order"]).execute()
+        if payload["child_orders"]:
+            supabase.table("execution_child_orders").upsert(payload["child_orders"]).execute()
+        if payload["fills"]:
+            supabase.table("execution_fills").upsert(payload["fills"]).execute()
+        if payload["venue_metrics"]:
+            supabase.table("venue_metrics").upsert(payload["venue_metrics"]).execute()
+        return True
+    return _safe_execute(action, False)
+
+def log_execution_report_to_db(report: Dict[str, Any]) -> bool:
+    payload = _execution_payload_from_report(report)
+    if not supabase:
+        RUNTIME_DB_STATS["execution_log_failure"] += 1
+        _queue_pending_execution_report(payload)
+        return False
+    success = _insert_execution_payload(payload)
+    if success:
+        RUNTIME_DB_STATS["execution_log_success"] += 1
+    else:
+        RUNTIME_DB_STATS["execution_log_failure"] += 1
+        _queue_pending_execution_report(payload)
+    return success
+
+def get_venue_metrics(limit: int = 500) -> List[Dict[str, Any]]:
+    def action():
+        return (
+            supabase.table("venue_metrics")
+            .select("*")
+            .order("measured_at", desc=True)
+            .limit(limit)
+            .execute()
+            .data
+        )
+    return _safe_execute(action, [])
+
+def get_table_count(table_name: str) -> int:
+    def action():
+        response = supabase.table(table_name).select("*", count="exact").limit(0).execute()
+        return int(response.count or 0)
+    return _safe_execute(action, 0)
+
+def get_latest_rows(table_name: str, order_column: str, limit: int = 5) -> List[Dict[str, Any]]:
+    def action():
+        return (
+            supabase.table(table_name)
+            .select("*")
+            .order(order_column, desc=True)
+            .limit(limit)
+            .execute()
+            .data
+        )
+    return _safe_execute(action, [])
+
+def log_bet_to_db(
+    matchup,
+    market,
+    selection,
+    odds,
+    edge_val,
+    units,
+    fair_price,
+    sport,
+    event_id,
+    bet_source: Optional[str] = None,
+    notes: Optional[str] = None,
+):
+    edge_pct = _parse_edge_pct(edge_val)
+    if edge_pct is not None and edge_pct <= 0:
+        print(f"Skipping non-positive edge bet log for {selection}: {edge_pct:.4f}%")
+        RUNTIME_DB_STATS["bet_log_failure"] += 1
+        return False
+    odds_decimal = _parse_decimal_odds(odds)
+    fair_price_decimal = _parse_decimal_odds(fair_price)
+    
+    payload = {
+        "date": get_local_date_str(),
+        "matchup": matchup.strip(),
+        "market": market.upper().strip(),
+        "selection": selection.strip(),
+        "odds": str(odds),
+        "edge": str(edge_val if isinstance(edge_val, str) else f"{float(edge_val) * 100:.2f}%"),
+        "units": str(units),
+        "fair_price": str(fair_price),
+        "sport": sport,
+        "event_id": str(event_id),
+        "closing_line_pinnacle": "",
+        "result": "",
+        "edge_pct": edge_pct,
+        "odds_decimal": odds_decimal,
+        "fair_price_decimal": fair_price_decimal,
+        "bet_source": bet_source or _infer_bet_source(market, sport),
+        "market_type": _infer_market_type(market),
+        "notes": notes,
+    }
+    if not supabase:
+        _queue_pending_bet_log(payload, alert=False)
+        RUNTIME_DB_STATS["bet_log_success"] += 1
+        return True
+    legacy_payload = {
+        key: payload[key]
+        for key in (
+            "date",
+            "matchup",
+            "market",
+            "selection",
+            "odds",
+            "edge",
+            "units",
+            "fair_price",
+            "sport",
+            "event_id",
+            "closing_line_pinnacle",
+            "result",
+        )
