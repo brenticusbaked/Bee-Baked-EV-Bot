@@ -9,7 +9,8 @@ websockets>=12.0
 discord.py>=2.4.1
 # Contextual Stat Enrichment Engine — free box-score sources (batch job only,
 # never imported by the live odds scan). Imported lazily in services/stat_ingest.py.
+# NBA/WNBA use ESPN's public JSON API directly (requests) — no library needed and
+# not IP-blocked from CI, unlike stats.nba.com/nba_api.
 MLB-StatsAPI
-nba_api
 nfl_data_py
 soccerdata

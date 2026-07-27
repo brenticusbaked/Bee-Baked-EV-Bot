@@ -132,6 +132,74 @@ class MlbBoxscoreParseTest(unittest.TestCase):
         self.assertEqual(by_name["Logan Gilbert"]["hits_allowed"], 4)
 
 
+class EspnBasketballParseTest(unittest.TestCase):
+    def _summary(self):
+        keys = [
+            "minutes",
+            "fieldGoalsMade-fieldGoalsAttempted",
+            "threePointFieldGoalsMade-threePointFieldGoalsAttempted",
+            "freeThrowsMade-freeThrowsAttempted",
+            "offensiveRebounds",
+            "defensiveRebounds",
+            "rebounds",
+            "assists",
+            "steals",
+            "blocks",
+            "turnovers",
+            "fouls",
+            "plusMinus",
+            "points",
+        ]
+        return {
+            "boxscore": {
+                "players": [
+                    {
+                        "team": {"abbreviation": "LV"},
+                        "statistics": [
+                            {
+                                "keys": keys,
+                                "athletes": [
+                                    {
+                                        "athlete": {"id": "1", "displayName": "A'ja Wilson"},
+                                        "stats": [
+                                            "34", "10-18", "1-2", "6-7",
+                                            "3", "7", "10", "4", "2", "3", "2", "1", "5", "27",
+                                        ],
+                                    },
+                                    {
+                                        "athlete": {"id": "2", "displayName": "Did Not Play"},
+                                        "didNotPlay": True,
+                                        "stats": [],
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+    def test_parse_maps_stat_keys(self):
+        rows = stat_ingest._parse_espn_basketball_summary(
+            self._summary(), stat_ingest.date(2026, 7, 25), "basketball_wnba"
+        )
+        by_name = {r["player_name"]: r for r in rows}
+        self.assertIn("A'ja Wilson", by_name)
+        self.assertNotIn("Did Not Play", by_name)  # DNP skipped
+        row = by_name["A'ja Wilson"]
+        self.assertEqual(row["points"], 27.0)
+        self.assertEqual(row["rebounds"], 10.0)
+        self.assertEqual(row["assists"], 4.0)
+        self.assertEqual(row["threes_made"], 1.0)  # from "1-2"
+        self.assertEqual(row["team"], "LV")
+        self.assertEqual(row["league"], "basketball_wnba")
+
+    def test_espn_made_parsing(self):
+        self.assertEqual(stat_ingest._espn_made("7-12"), 7.0)
+        self.assertEqual(stat_ingest._espn_made("0-0"), 0.0)
+        self.assertIsNone(stat_ingest._espn_made(None))
+
+
 class SoccerLeagueDefaultTest(unittest.TestCase):
     def test_blank_env_falls_back_to_default(self):
         import importlib
