@@ -200,6 +200,68 @@ class EspnBasketballParseTest(unittest.TestCase):
         self.assertIsNone(stat_ingest._espn_made(None))
 
 
+class EspnFootballParseTest(unittest.TestCase):
+    def _summary(self):
+        return {
+            "boxscore": {
+                "players": [
+                    {
+                        "team": {"abbreviation": "KC"},
+                        "statistics": [
+                            {
+                                "name": "passing",
+                                "keys": ["passingYards", "passingTouchdowns", "interceptions"],
+                                "athletes": [
+                                    {
+                                        "athlete": {"id": "10", "displayName": "Patrick Mahomes"},
+                                        "stats": ["320", "3", "1"],
+                                    }
+                                ],
+                            },
+                            {
+                                "name": "rushing",
+                                "keys": ["rushingYards", "rushingTouchdowns"],
+                                "athletes": [
+                                    {
+                                        "athlete": {"id": "10", "displayName": "Patrick Mahomes"},
+                                        "stats": ["25", "0"],
+                                    },
+                                    {
+                                        "athlete": {"id": "20", "displayName": "Isiah Pacheco"},
+                                        "stats": ["88", "1"],
+                                    },
+                                ],
+                            },
+                            {
+                                "name": "receiving",
+                                "keys": ["receptions", "receivingYards", "receivingTouchdowns"],
+                                "athletes": [
+                                    {
+                                        "athlete": {"id": "30", "displayName": "Travis Kelce"},
+                                        "stats": ["8", "104", "1"],
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ]
+            }
+        }
+
+    def test_merges_categories_per_player(self):
+        rows = stat_ingest._parse_espn_football_summary(
+            self._summary(), stat_ingest.date(2026, 9, 13)
+        )
+        by_name = {r["player_name"]: r for r in rows}
+        self.assertEqual(by_name["Patrick Mahomes"]["passing_yards"], 320.0)
+        self.assertEqual(by_name["Patrick Mahomes"]["passing_tds"], 3.0)
+        self.assertEqual(by_name["Patrick Mahomes"]["rushing_yards"], 25.0)
+        self.assertEqual(by_name["Isiah Pacheco"]["rushing_yards"], 88.0)
+        self.assertEqual(by_name["Travis Kelce"]["receptions"], 8.0)
+        self.assertEqual(by_name["Travis Kelce"]["receiving_yards"], 104.0)
+        self.assertEqual(by_name["Travis Kelce"]["league"], "americanfootball_nfl")
+
+
 class SoccerLeagueDefaultTest(unittest.TestCase):
     def test_blank_env_falls_back_to_default(self):
         import importlib

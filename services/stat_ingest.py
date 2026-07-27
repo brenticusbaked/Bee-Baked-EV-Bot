@@ -276,43 +276,108 @@ def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict
     return rows
 
 
-def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
-    """Yesterday's NFL player lines via nfl_data_py weekly data."""
-    try:
-        import nfl_data_py as nfl
-    except ImportError:
-        print("[stat_ingest] nfl_data_py not installed; skipping NFL")
-        return []
-    try:
-        frame = nfl.import_weekly_data([game_date.year])
-    except Exception as exc:  # pragma: no cover - network/provider dependent
-        print(f"[stat_ingest] NFL fetch failed: {exc}")
-        return []
-    if frame is None or getattr(frame, "empty", True):
-        return []
+def _parse_espn_football_summary(
+    summary: Dict[str, Any], game_date: date
+) -> List[Dict[str, Any]]:
+    """Parse an ESPN NFL game-summary boxscore into per-player log rows.
+
+    NFL boxscores split each player's line across several stat categories
+    (passing/rushing/receiving), so we merge every category's keyed stats per
+    athlete before mapping to prop columns. ``displayName`` is "First Last".
+    """
+    # athlete_id -> {"name", "team", "keyed": {stat_key: value}}
+    merged: Dict[str, Dict[str, Any]] = {}
+    boxscore = summary.get("boxscore") or {}
+    for team_block in boxscore.get("players") or []:
+        team = team_block.get("team") or {}
+        team_abbr = str(team.get("abbreviation") or "")
+        for stat_group in team_block.get("statistics") or []:
+            keys = stat_group.get("keys") or stat_group.get("names") or []
+            for athlete_entry in stat_group.get("athletes") or []:
+                values = athlete_entry.get("stats") or []
+                if not values:
+                    continue
+                athlete = athlete_entry.get("athlete") or {}
+                athlete_id = str(athlete.get("id") or "")
+                if not athlete_id:
+                    continue
+                record = merged.setdefault(
+                    athlete_id,
+                    {
+                        "name": str(athlete.get("displayName") or ""),
+                        "team": team_abbr,
+                        "keyed": {},
+                    },
+                )
+                record["keyed"].update(dict(zip(keys, values)))
 
     rows: List[Dict[str, Any]] = []
-    for _, row in frame.iterrows():
+    for athlete_id, record in merged.items():
+        keyed = record["keyed"]
+        passing_yards = _num(keyed.get("passingYards"))
+        rushing_yards = _num(keyed.get("rushingYards"))
+        receiving_yards = _num(keyed.get("receivingYards"))
+        receptions = _num(keyed.get("receptions"))
         rows.append({
             "game_date": game_date.isoformat(),
             "league": "americanfootball_nfl",
-            "player_id": str(row.get("player_id") or ""),
-            "player_name": str(row.get("player_display_name") or row.get("player_name") or ""),
-            "team": str(row.get("recent_team") or ""),
-            "passing_yards": _num(row.get("passing_yards")),
-            "passing_tds": _num(row.get("passing_tds")),
-            "rushing_yards": _num(row.get("rushing_yards")),
-            "rushing_tds": _num(row.get("rushing_tds")),
-            "receiving_yards": _num(row.get("receiving_yards")),
-            "receptions": _num(row.get("receptions")),
-            "receiving_tds": _num(row.get("receiving_tds")),
+            "player_id": athlete_id,
+            "player_name": record["name"],
+            "team": record["team"],
+            "passing_yards": passing_yards,
+            "passing_tds": _num(keyed.get("passingTouchdowns")),
+            "rushing_yards": rushing_yards,
+            "rushing_tds": _num(keyed.get("rushingTouchdowns")),
+            "receiving_yards": receiving_yards,
+            "receptions": receptions,
+            "receiving_tds": _num(keyed.get("receivingTouchdowns")),
             "stats": {
-                "passing_yards": _num(row.get("passing_yards")),
-                "rushing_yards": _num(row.get("rushing_yards")),
-                "receiving_yards": _num(row.get("receiving_yards")),
-                "receptions": _num(row.get("receptions")),
+                "passing_yards": passing_yards,
+                "rushing_yards": rushing_yards,
+                "receiving_yards": receiving_yards,
+                "receptions": receptions,
             },
         })
+    return rows
+
+
+def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
+    """Yesterday's NFL player box scores via ESPN's free public API.
+
+    Same pattern as basketball: the day's scoreboard for game ids, then each
+    game's summary boxscore. No API key, no proxy, not IP-blocked from CI.
+    """
+    from services.http_client import get_json
+
+    day = game_date.strftime("%Y%m%d")
+    scoreboard_url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={day}"
+    )
+    try:
+        scoreboard = get_json(scoreboard_url)
+    except Exception as exc:  # pragma: no cover - network/provider dependent
+        print(f"[stat_ingest] NFL scoreboard fetch failed: {exc}")
+        return []
+
+    event_ids = [
+        str(event.get("id"))
+        for event in (scoreboard.get("events") or [])
+        if event.get("id")
+    ]
+    if not event_ids:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    for event_id in event_ids:
+        summary_url = (
+            f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={event_id}"
+        )
+        try:
+            summary = get_json(summary_url)
+        except Exception as exc:  # pragma: no cover - network/provider dependent
+            print(f"[stat_ingest] NFL summary {event_id} fetch failed: {exc}")
+            continue
+        rows.extend(_parse_espn_football_summary(summary, game_date))
     return rows
 
 
