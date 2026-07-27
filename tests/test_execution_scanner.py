@@ -1,3 +1,4 @@
+import math
 import unittest
 from unittest import mock
 
@@ -9,6 +10,7 @@ from execution_scanner import (
     _selection_text,
     _send_execution_desk_alerts,
     _synthetic_calibration_report,
+    _uncapped_env_float,
 )
 
 
@@ -103,6 +105,42 @@ class ExecutionScannerTests(unittest.TestCase):
             sent = _send_execution_desk_alerts([_candidate()])
         self.assertEqual(sent, 0)
         send.assert_not_called()
+
+
+class UncappedEnvFloatTests(unittest.TestCase):
+    def test_zero_and_sentinels_mean_unlimited(self):
+        for token in ("0", "", "none", "unlimited", "-1", "inf"):
+            with mock.patch.dict("os.environ", {"CAP": token}, clear=False):
+                self.assertEqual(_uncapped_env_float("CAP", 5.0), math.inf)
+
+    def test_positive_value_is_used(self):
+        with mock.patch.dict("os.environ", {"CAP": "12.5"}, clear=False):
+            self.assertEqual(_uncapped_env_float("CAP", 5.0), 12.5)
+
+    def test_unset_uses_default(self):
+        with mock.patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("CAP", None)
+            self.assertEqual(_uncapped_env_float("CAP", 5.0), 5.0)
+
+
+class RiskManagerUncappedTests(unittest.TestCase):
+    def test_large_order_accepted_with_infinite_limits(self):
+        from execution.models import ParentOrder, Side
+        from execution.risk import RiskLimits, RiskManager
+
+        risk = RiskManager(RiskLimits(math.inf, math.inf, 0.0, math.inf))
+        order = ParentOrder(
+            symbol="WNBA | player_points | Aces",
+            side=Side.BUY,
+            quantity=25.0,
+            limit_price=2.0,
+            fair_price=1.9,
+            strategy="SMART",
+            source_signal="test",
+            metadata={"edge": 0.2},
+        )
+        self.assertTrue(risk.check(order).accepted)
 
 
 if __name__ == "__main__":

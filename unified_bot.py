@@ -26,7 +26,6 @@ from utils.odds import (
     decimal_implied_probability,
     decimal_to_american,
     fair_probabilities_from_prices,
-    multiplicative_unvig,
 )
 from utils.prop_pricing import consensus_probabilities, prop_kelly_units
 from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
@@ -578,6 +577,7 @@ def evaluate_player_props(
             alerts.append(
                 {
                     "sport": sport,
+                    "edge": offer["edge"],
                     "description": (
                         f"**+EV PLAYER PROP ALERT**\n\n"
                         f"**Match:** {matchup}\n"
@@ -880,6 +880,7 @@ def scan_markets(
                     alerts.append(
                         {
                             "sport": sport,
+                            "edge": edge,
                             "description": (
                                 f"**+EV {market_type.upper()} ALERT**\n\n"
                                 f"**Match:** {matchup}\n"
@@ -900,6 +901,8 @@ def scan_markets(
                     evaluate_player_props(event, sport, soft_books, book_weights)
                 )
 
+    # Send highest-EV plays first so the best edges lead the Discord feed.
+    alerts.sort(key=lambda item: item.get("edge", 0.0), reverse=True)
     for index, alert in enumerate(alerts):
         description = f"{alert_prefix}{alert['description']}" if alert_prefix else alert["description"]
         send_discord_alert(

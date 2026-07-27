@@ -1,4 +1,6 @@
-pandas
+# pandas>=2 keeps pip on prebuilt cp312 wheels (pandas 1.x is sdist-only on 3.12
+# and its build breaks on setuptools>=81). Compatible with soccerdata (>=2.0).
+pandas>=2.0,<3
 playwright>=1.45.0
 requests
 supabase
@@ -9,7 +11,8 @@ websockets>=12.0
 discord.py>=2.4.1
 # Contextual Stat Enrichment Engine — free box-score sources (batch job only,
 # never imported by the live odds scan). Imported lazily in services/stat_ingest.py.
+# NBA/WNBA/NFL use ESPN's public JSON API directly (requests) — no library needed,
+# not IP-blocked from CI. nfl_data_py was dropped: it pins pandas<2 (sdist-only,
+# unbuildable on py312) which conflicts with soccerdata's pandas>=2.
 MLB-StatsAPI
-nba_api
-nfl_data_py
 soccerdata

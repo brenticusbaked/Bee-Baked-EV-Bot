@@ -2,13 +2,20 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # 14:00/20:00 UTC = 9 AM/3 PM Central during daylight time.
-    # Two runs/day keeps all 3 Odds API keys within the 500 credit/month free tier.
-    - cron: '0 14,20 * * *'
-    # 03:30 UTC = 10:30 PM Central (daylight). Late-night opener run: with the
-    # 48h enrichment horizon (ODDS_UPCOMING_HORIZON_HOURS) it fetches tomorrow's
-    # opening lines. Does not change the 9 AM / 3 PM runs above.
-    - cron: '30 3 * * *'
+    # Proximity-weighted full-pipeline runs (all UTC; Central = UTC-5 during DST).
+    # Each run force-refreshes the Supabase odds cache before scanning, so the
+    # cadence is densest during the evening MLB game window (when lines move most
+    # and are most likely to be stale) and sparse in the morning. Continuous cache
+    # freshness between these runs is handled for free by the Supabase Edge
+    # Function's pg_cron ingest (no GitHub Actions minutes). Kept ~15 runs/day to
+    # stay inside the free Actions tier.
+    - cron: '0 12 * * *'            # 7:00 AM CT  - first refresh after overnight gap
+    - cron: '0 15,17 * * *'         # 10 AM, 12 PM CT - light midday
+    - cron: '0 19,20,21 * * *'      # 2:00-4:00 PM CT - hourly as games approach
+    - cron: '0,30 22,23 * * *'      # 5:00-6:30 PM CT - every 30 min (game window)
+    - cron: '0,30 0,1 * * *'        # 7:00-8:30 PM CT - every 30 min (game window)
+    - cron: '30 2 * * *'            # 9:30 PM CT
+    - cron: '30 3 * * *'            # 10:30 PM CT - late-night opener (48h horizon)
   workflow_dispatch:
 
 concurrency:
@@ -107,8 +114,13 @@ jobs:
           EXECUTION_VENUE_SCORE_LOOKBACK: "500"
           EXECUTION_VENUE_SCORE_MIN_SAMPLE: "3"
           EXECUTION_MAX_ORDERS: "10"
-          EXECUTION_MAX_ORDER_UNITS: "5"
-          EXECUTION_MAX_NOTIONAL: "1000"
+          # No unit limit: 0 = unlimited. The raw Quarter-Kelly recommendation
+          # reaches Discord unclipped (no per-order unit, notional, or symbol
+          # exposure ceiling). The Kelly fraction (1/4) and EV/de-vig math are
+          # unchanged — only the sizing ceilings are removed.
+          EXECUTION_MAX_ORDER_UNITS: "0"
+          EXECUTION_MAX_NOTIONAL: "0"
+          EXECUTION_MAX_SYMBOL_EXPOSURE: "0"
           
           # --- PROXY AUTHENTICATION ---
           # Residential proxy pool for the selective statsapi.mlb.com fallback

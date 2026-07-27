@@ -160,103 +160,224 @@ def fetch_mlb_logs(game_date: date) -> List[Dict[str, Any]]:
     return rows
 
 
+# ESPN site-API sport paths for basketball. ESPN's public JSON API needs no key
+# and is NOT IP-blocked from CI (unlike stats.nba.com), so it is the ingestion
+# source for both leagues. WNBA has no dependency on nba.com.
+_ESPN_BASKETBALL_PATHS = {
+    "basketball_nba": "basketball/nba",
+    "basketball_wnba": "basketball/wnba",
+}
+
+
+def _espn_made(value: Any) -> Any:
+    """ESPN 'made-attempted' stat (e.g. '7-12') -> the 'made' count."""
+    if value is None:
+        return None
+    text = str(value)
+    if "-" in text:
+        text = text.split("-", 1)[0]
+    return _num(text)
+
+
+def _parse_espn_basketball_summary(
+    summary: Dict[str, Any], game_date: date, league: str
+) -> List[Dict[str, Any]]:
+    """Parse an ESPN game-summary boxscore into per-player log rows.
+
+    ESPN aligns each athlete's ``stats`` list to the group's ``keys`` list, so we
+    zip them into a dict and read the prop metrics by key. ``displayName`` is
+    "First Last", matching the odds feed.
+    """
+    rows: List[Dict[str, Any]] = []
+    boxscore = summary.get("boxscore") or {}
+    for team_block in boxscore.get("players") or []:
+        team = team_block.get("team") or {}
+        team_abbr = str(team.get("abbreviation") or "")
+        for stat_group in team_block.get("statistics") or []:
+            keys = stat_group.get("keys") or stat_group.get("names") or []
+            for athlete_entry in stat_group.get("athletes") or []:
+                if athlete_entry.get("didNotPlay"):
+                    continue
+                values = athlete_entry.get("stats") or []
+                if not values:
+                    continue
+                keyed = dict(zip(keys, values))
+                athlete = athlete_entry.get("athlete") or {}
+                points = _num(keyed.get("points"))
+                rebounds = _num(keyed.get("rebounds"))
+                assists = _num(keyed.get("assists"))
+                threes = _espn_made(
+                    keyed.get("threePointFieldGoalsMade-threePointFieldGoalsAttempted")
+                )
+                rows.append({
+                    "game_date": game_date.isoformat(),
+                    "league": league,
+                    "player_id": str(athlete.get("id") or ""),
+                    "player_name": str(athlete.get("displayName") or ""),
+                    "team": team_abbr,
+                    "points": points,
+                    "rebounds": rebounds,
+                    "assists": assists,
+                    "threes_made": threes,
+                    "steals": _num(keyed.get("steals")),
+                    "blocks": _num(keyed.get("blocks")),
+                    "turnovers": _num(keyed.get("turnovers")),
+                    "minutes": _num(keyed.get("minutes")),
+                    "stats": {
+                        "points": points, "rebounds": rebounds, "assists": assists,
+                        "threes_made": threes,
+                    },
+                })
+    return rows
+
+
 def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict[str, Any]]:
-    """Yesterday's NBA/WNBA player lines via nba_api league game logs."""
-    try:
-        from nba_api.stats.endpoints import playergamelogs
-    except ImportError:
-        print(f"[stat_ingest] nba_api not installed; skipping {league}")
+    """Yesterday's NBA/WNBA player box scores via ESPN's free public API.
+
+    Pulls the day's scoreboard for game ids, then each game's summary boxscore.
+    No API key and no residential proxy needed — ESPN serves CI IPs directly.
+    """
+    sport_path = _ESPN_BASKETBALL_PATHS.get(league)
+    if not sport_path:
+        print(f"[stat_ingest] no ESPN path for {league}; skipping")
         return []
 
-    # stats.nba.com blocks datacenter IPs (GitHub Actions), causing read
-    # timeouts. Route through the shared residential proxy pool when configured
-    # and give the endpoint a longer timeout.
-    from services.http_client import _residential_proxies
+    from services.http_client import get_json
 
-    proxies = _residential_proxies()
-    proxy = proxies["https"] if proxies else ""
-
-    season_type = "Regular Season"
+    day = game_date.strftime("%Y%m%d")
+    scoreboard_url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/{sport_path}/scoreboard?dates={day}"
+    )
     try:
-        logs = playergamelogs.PlayerGameLogs(
-            date_from_nullable=game_date.strftime("%m/%d/%Y"),
-            date_to_nullable=game_date.strftime("%m/%d/%Y"),
-            league_id_nullable="10" if league == "basketball_wnba" else "00",
-            season_type_nullable=season_type,
-            proxy=proxy or None,
-            timeout=60,
-        )
-        frame = logs.get_data_frames()[0]
+        scoreboard = get_json(scoreboard_url)
     except Exception as exc:  # pragma: no cover - network/provider dependent
-        print(f"[stat_ingest] {league} fetch failed: {exc}")
+        print(f"[stat_ingest] {league} scoreboard fetch failed: {exc}")
         return []
-    if frame is None or getattr(frame, "empty", True):
+
+    event_ids = [
+        str(event.get("id"))
+        for event in (scoreboard.get("events") or [])
+        if event.get("id")
+    ]
+    if not event_ids:
         return []
 
     rows: List[Dict[str, Any]] = []
-    for _, row in frame.iterrows():
-        points = _num(row.get("PTS"))
-        rebounds = _num(row.get("REB"))
-        assists = _num(row.get("AST"))
+    for event_id in event_ids:
+        summary_url = (
+            f"https://site.api.espn.com/apis/site/v2/sports/{sport_path}/summary?event={event_id}"
+        )
+        try:
+            summary = get_json(summary_url)
+        except Exception as exc:  # pragma: no cover - network/provider dependent
+            print(f"[stat_ingest] {league} summary {event_id} fetch failed: {exc}")
+            continue
+        rows.extend(_parse_espn_basketball_summary(summary, game_date, league))
+    return rows
+
+
+def _parse_espn_football_summary(
+    summary: Dict[str, Any], game_date: date
+) -> List[Dict[str, Any]]:
+    """Parse an ESPN NFL game-summary boxscore into per-player log rows.
+
+    NFL boxscores split each player's line across several stat categories
+    (passing/rushing/receiving), so we merge every category's keyed stats per
+    athlete before mapping to prop columns. ``displayName`` is "First Last".
+    """
+    # athlete_id -> {"name", "team", "keyed": {stat_key: value}}
+    merged: Dict[str, Dict[str, Any]] = {}
+    boxscore = summary.get("boxscore") or {}
+    for team_block in boxscore.get("players") or []:
+        team = team_block.get("team") or {}
+        team_abbr = str(team.get("abbreviation") or "")
+        for stat_group in team_block.get("statistics") or []:
+            keys = stat_group.get("keys") or stat_group.get("names") or []
+            for athlete_entry in stat_group.get("athletes") or []:
+                values = athlete_entry.get("stats") or []
+                if not values:
+                    continue
+                athlete = athlete_entry.get("athlete") or {}
+                athlete_id = str(athlete.get("id") or "")
+                if not athlete_id:
+                    continue
+                record = merged.setdefault(
+                    athlete_id,
+                    {
+                        "name": str(athlete.get("displayName") or ""),
+                        "team": team_abbr,
+                        "keyed": {},
+                    },
+                )
+                record["keyed"].update(dict(zip(keys, values)))
+
+    rows: List[Dict[str, Any]] = []
+    for athlete_id, record in merged.items():
+        keyed = record["keyed"]
+        passing_yards = _num(keyed.get("passingYards"))
+        rushing_yards = _num(keyed.get("rushingYards"))
+        receiving_yards = _num(keyed.get("receivingYards"))
+        receptions = _num(keyed.get("receptions"))
         rows.append({
             "game_date": game_date.isoformat(),
-            "league": league,
-            "player_id": str(row.get("PLAYER_ID") or ""),
-            "player_name": str(row.get("PLAYER_NAME") or ""),
-            "team": str(row.get("TEAM_ABBREVIATION") or ""),
-            "points": points,
-            "rebounds": rebounds,
-            "assists": assists,
-            "threes_made": _num(row.get("FG3M")),
-            "steals": _num(row.get("STL")),
-            "blocks": _num(row.get("BLK")),
-            "turnovers": _num(row.get("TOV")),
-            "minutes": _num(row.get("MIN")),
+            "league": "americanfootball_nfl",
+            "player_id": athlete_id,
+            "player_name": record["name"],
+            "team": record["team"],
+            "passing_yards": passing_yards,
+            "passing_tds": _num(keyed.get("passingTouchdowns")),
+            "rushing_yards": rushing_yards,
+            "rushing_tds": _num(keyed.get("rushingTouchdowns")),
+            "receiving_yards": receiving_yards,
+            "receptions": receptions,
+            "receiving_tds": _num(keyed.get("receivingTouchdowns")),
             "stats": {
-                "points": points, "rebounds": rebounds, "assists": assists,
-                "threes_made": _num(row.get("FG3M")),
+                "passing_yards": passing_yards,
+                "rushing_yards": rushing_yards,
+                "receiving_yards": receiving_yards,
+                "receptions": receptions,
             },
         })
     return rows
 
 
 def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
-    """Yesterday's NFL player lines via nfl_data_py weekly data."""
+    """Yesterday's NFL player box scores via ESPN's free public API.
+
+    Same pattern as basketball: the day's scoreboard for game ids, then each
+    game's summary boxscore. No API key, no proxy, not IP-blocked from CI.
+    """
+    from services.http_client import get_json
+
+    day = game_date.strftime("%Y%m%d")
+    scoreboard_url = (
+        f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={day}"
+    )
     try:
-        import nfl_data_py as nfl
-    except ImportError:
-        print("[stat_ingest] nfl_data_py not installed; skipping NFL")
-        return []
-    try:
-        frame = nfl.import_weekly_data([game_date.year])
+        scoreboard = get_json(scoreboard_url)
     except Exception as exc:  # pragma: no cover - network/provider dependent
-        print(f"[stat_ingest] NFL fetch failed: {exc}")
+        print(f"[stat_ingest] NFL scoreboard fetch failed: {exc}")
         return []
-    if frame is None or getattr(frame, "empty", True):
+
+    event_ids = [
+        str(event.get("id"))
+        for event in (scoreboard.get("events") or [])
+        if event.get("id")
+    ]
+    if not event_ids:
         return []
 
     rows: List[Dict[str, Any]] = []
-    for _, row in frame.iterrows():
-        rows.append({
-            "game_date": game_date.isoformat(),
-            "league": "americanfootball_nfl",
-            "player_id": str(row.get("player_id") or ""),
-            "player_name": str(row.get("player_display_name") or row.get("player_name") or ""),
-            "team": str(row.get("recent_team") or ""),
-            "passing_yards": _num(row.get("passing_yards")),
-            "passing_tds": _num(row.get("passing_tds")),
-            "rushing_yards": _num(row.get("rushing_yards")),
-            "rushing_tds": _num(row.get("rushing_tds")),
-            "receiving_yards": _num(row.get("receiving_yards")),
-            "receptions": _num(row.get("receptions")),
-            "receiving_tds": _num(row.get("receiving_tds")),
-            "stats": {
-                "passing_yards": _num(row.get("passing_yards")),
-                "rushing_yards": _num(row.get("rushing_yards")),
-                "receiving_yards": _num(row.get("receiving_yards")),
-                "receptions": _num(row.get("receptions")),
-            },
-        })
+    for event_id in event_ids:
+        summary_url = (
+            f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={event_id}"
+        )
+        try:
+            summary = get_json(summary_url)
+        except Exception as exc:  # pragma: no cover - network/provider dependent
+            print(f"[stat_ingest] NFL summary {event_id} fetch failed: {exc}")
+            continue
+        rows.extend(_parse_espn_football_summary(summary, game_date))
     return rows
 
 

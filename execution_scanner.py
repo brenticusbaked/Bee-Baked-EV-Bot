@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,8 +30,36 @@ from utils.thresholds import env_float, env_int
 EXECUTION_EV_THRESHOLD = env_float("EXECUTION_EV_THRESHOLD", 0.025)
 EXECUTION_MAX_ORDERS = max(1, env_int("EXECUTION_MAX_ORDERS", 10))
 EXECUTION_CALIBRATION_ORDERS = max(0, env_int("EXECUTION_CALIBRATION_ORDERS", 0))
-EXECUTION_MAX_ORDER_UNITS = env_float("EXECUTION_MAX_ORDER_UNITS", 5.0)
-EXECUTION_MAX_NOTIONAL = env_float("EXECUTION_MAX_NOTIONAL", 1000.0)
+def _uncapped_env_float(name: str, default: float) -> float:
+    """Read a ceiling env var where 0 / blank / 'none' / 'unlimited' means no cap.
+
+    Returns math.inf when the limit is disabled so downstream min()/comparison
+    clipping becomes a no-op, letting the raw Quarter-Kelly size pass through.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        value = default
+    else:
+        token = raw.strip().lower()
+        if token in {"", "0", "none", "unlimited", "inf", "infinity", "-1"}:
+            return math.inf
+        try:
+            value = float(token)
+        except ValueError:
+            value = default
+    return math.inf if value <= 0 else value
+
+
+# Sizing ceilings for the execution desk. Set any of these to 0 (or "unlimited")
+# to disable the cap entirely — the raw Quarter-Kelly recommendation then reaches
+# Discord unclipped. The Kelly fraction (1/4) and EV/de-vig math are unchanged.
+EXECUTION_MAX_ORDER_UNITS = _uncapped_env_float("EXECUTION_MAX_ORDER_UNITS", 5.0)
+EXECUTION_MAX_NOTIONAL = _uncapped_env_float("EXECUTION_MAX_NOTIONAL", 1000.0)
+# Per-symbol exposure ceiling for the RiskManager. Defaults to the per-order unit
+# cap so a single max-size order is never rejected by symbol exposure.
+EXECUTION_MAX_SYMBOL_EXPOSURE = _uncapped_env_float(
+    "EXECUTION_MAX_SYMBOL_EXPOSURE", EXECUTION_MAX_ORDER_UNITS
+)
 EXECUTION_LEDGER_PATH = os.getenv("EXECUTION_LEDGER_PATH", "execution_ledger.json")
 ENABLE_ADAPTIVE_VENUE_SCORING = os.getenv("ENABLE_ADAPTIVE_VENUE_SCORING", "true").strip().lower() in {"1", "true", "yes", "on"}
 DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
@@ -117,7 +146,14 @@ def _synthetic_calibration_report() -> dict:
             fill_probability=1.0,
         )
     ]
-    risk = RiskManager(RiskLimits(EXECUTION_MAX_ORDER_UNITS, EXECUTION_MAX_NOTIONAL, 0.0))
+    risk = RiskManager(
+        RiskLimits(
+            EXECUTION_MAX_ORDER_UNITS,
+            EXECUTION_MAX_NOTIONAL,
+            0.0,
+            EXECUTION_MAX_SYMBOL_EXPOSURE,
+        )
+    )
     return report_to_dict(ExecutionDesk.paper(quotes, risk=risk).execute(order))
 
 
@@ -241,7 +277,14 @@ def run_execution_scan() -> dict:
             for venue in candidate["venues"]
         ]
         min_edge = min(EXECUTION_EV_THRESHOLD, candidate["edge"]) if candidate.get("calibration") else EXECUTION_EV_THRESHOLD
-        risk = RiskManager(RiskLimits(EXECUTION_MAX_ORDER_UNITS, EXECUTION_MAX_NOTIONAL, min_edge))
+        risk = RiskManager(
+            RiskLimits(
+                EXECUTION_MAX_ORDER_UNITS,
+                EXECUTION_MAX_NOTIONAL,
+                min_edge,
+                EXECUTION_MAX_SYMBOL_EXPOSURE,
+            )
+        )
         router = SmartOrderRouter(venue_scores=venue_scores)
         report = report_to_dict(ExecutionDesk.paper(quotes, risk=risk, router=router).execute(order))
         log_execution_report_to_db(report)
