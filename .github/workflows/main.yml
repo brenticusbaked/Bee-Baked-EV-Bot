@@ -118,6 +118,8 @@ jobs:
           EXECUTION_MAX_ORDER_UNITS: "0"
           EXECUTION_MAX_NOTIONAL: "0"
           EXECUTION_MAX_SYMBOL_EXPOSURE: "0"
+          # Expand sharp books to catch MLB hits when Pinnacle passes
+          PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,betonline,fanduel,draftkings"
           
           # --- PROXY AUTHENTICATION ---
           # Residential proxy pool for the selective statsapi.mlb.com fallback
