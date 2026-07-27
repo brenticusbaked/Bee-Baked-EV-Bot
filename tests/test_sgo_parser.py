@@ -166,7 +166,9 @@ class LeagueFetchToleranceTests(unittest.TestCase):
         picks, _near, stats = self._run(["WNBA", "MLB"], responder)
         self.assertGreater(stats["parsed_props"], 0)
         self.assertGreater(stats["events"], 0)
-        self.assertIn("WNBA:400", stats["errored_leagues"])
+        
+        # Verify the unsupported league was gracefully skipped and NOT added to errored_leagues
+        self.assertNotIn("WNBA:400", stats.get("errored_leagues", []))
         self.assertNotIn("reason", stats)
 
 

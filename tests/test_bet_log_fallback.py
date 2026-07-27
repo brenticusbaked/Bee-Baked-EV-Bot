@@ -16,7 +16,7 @@ class _FakeInsert:
     def execute(self):
         self.table.payloads.append(self.payload)
         if len(self.table.payloads) == 1:
-            raise Exception("column edge_pct does not exist")
+            raise Exception("simulated insert failure")
         return _FakeExecute()
 
 
@@ -55,8 +55,10 @@ class BetLogFallbackTests(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(len(fake.bets_log.payloads), 2)
-        self.assertIn("edge_pct", fake.bets_log.payloads[0])
-        self.assertNotIn("edge_pct", fake.bets_log.payloads[1])
+        
+        # Verify the primary payload includes new columns, and the legacy fallback strips them
+        self.assertIn("odds_decimal", fake.bets_log.payloads[0])
+        self.assertNotIn("odds_decimal", fake.bets_log.payloads[1])
 
 
 if __name__ == "__main__":
