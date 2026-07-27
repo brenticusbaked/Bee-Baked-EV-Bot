@@ -267,8 +267,11 @@ def _send_dead_letter(table_name: str, payload: dict) -> None:
         
         safe_payload = json.dumps(payload, indent=2, default=str)[:1850]
         
-        message = f"""**🚨 CRITICAL: SUPABASE INSERT FAILED 🚨**
-**Table:** `{table_name}`
-**Payload:**
-```json
-{safe_payload}
+        # FIXED: Standard string concatenation avoids Markdown backtick parsing errors
+        message = (
+            "**🚨 CRITICAL: SUPABASE INSERT FAILED 🚨**\n"
+            f"**Table:** `{table_name}`\n"
+            "**Payload:**\n"
+            "```json\n"
+            f"{safe_payload}\n"
+            "
