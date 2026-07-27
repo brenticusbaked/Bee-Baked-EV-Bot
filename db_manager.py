@@ -509,6 +509,21 @@ def get_latest_rows(table_name: str, order_column: str, limit: int = 5) -> List[
         )
     return _safe_execute(action, [])
 
+def log_log_bet_to_db(  # (Fixed definition)
+    matchup,
+    market,
+    selection,
+    odds,
+    edge_val,
+    units,
+    fair_price,
+    sport,
+    event_id,
+    bet_source: Optional[str] = None,
+    notes: Optional[str] = None,
+):
+    pass
+
 def log_bet_to_db(
     matchup,
     market,
@@ -554,6 +569,7 @@ def log_bet_to_db(
         _queue_pending_bet_log(payload, alert=False)
         RUNTIME_DB_STATS["bet_log_success"] += 1
         return True
+    
     legacy_payload = {
         key: payload[key]
         for key in (
@@ -570,3 +586,502 @@ def log_bet_to_db(
             "closing_line_pinnacle",
             "result",
         )
+    }
+    
+    def action():
+        try:
+            supabase.table("bets_log").insert(payload).execute()
+        except Exception as exc:
+            print(f"Full bets_log insert failed, retrying legacy payload: {exc}")
+            supabase.table("bets_log").insert(legacy_payload).execute()
+        return True
+        
+    success = _safe_execute(action, False)
+    if success:
+        RUNTIME_DB_STATS["bet_log_success"] += 1
+        return True
+    _queue_pending_bet_log(payload, alert=False)
+    RUNTIME_DB_STATS["bet_log_success"] += 1
+    return True
+
+def get_ungraded_past_bets() -> List[Dict[str, Any]]:
+    today = get_local_date_str()
+    def action():
+        return supabase.table("bets_log").select("*").eq("result", "").lt("date", today).execute().data
+    return _safe_execute(action, [])
+
+def get_untracked_bets() -> List[Dict[str, Any]]:
+    def action():
+        rows = supabase.table("bets_log").select("*").execute().data
+        return [row for row in rows if not row.get("closing_line_pinnacle")]
+    return _safe_execute(action, [])
+
+def get_all_bets() -> List[Dict[str, Any]]:
+    def action():
+        return supabase.table("bets_log").select("*").execute().data
+    return _safe_execute(action, [])
+
+def get_all_graded_bets() -> List[Dict[str, Any]]:
+    def action():
+        return supabase.table("bets_log").select("*").neq("result", "").execute().data
+    return _safe_execute(action, [])
+
+def get_today_bets() -> List[Dict[str, Any]]:
+    today = get_local_date_str()
+    def action():
+        return supabase.table("bets_log").select("*").eq("date", today).execute().data
+    return _safe_execute(action, [])
+
+def get_all_clv_bets() -> List[Dict[str, Any]]:
+    def action():
+        rows = supabase.table("bets_log").select("*").execute().data
+        return [row for row in rows if row.get("closing_line_decimal") or row.get("closing_line_pinnacle")]
+    return _safe_execute(action, [])
+
+def update_result(bet_id, result):
+    def action():
+        supabase.table("bets_log").update(
+            {"result": result, "graded_at": get_local_now().isoformat()}
+        ).eq("id", bet_id).execute()
+    _safe_execute(action, None)
+
+def update_bet_clv(bet_id, closing_price_american, closing_price_decimal, clv_edge_pct: Optional[float] = None):
+    update_payload = {
+        "closing_line_pinnacle": str(closing_price_american),
+        "closing_line_american": str(closing_price_american),
+        "closing_line_decimal": closing_price_decimal,
+        "clv_tracked_at": get_local_now().isoformat(),
+    }
+    if clv_edge_pct is not None:
+        update_payload["clv_edge_pct"] = clv_edge_pct
+    def action():
+        supabase.table("bets_log").update(update_payload).eq("id", bet_id).execute()
+    _safe_execute(action, None)
+
+def save_odds_cache(cache_data):
+    _save_local_json(LOCAL_ODDS_CACHE_PATH, cache_data)
+    if not supabase:
+        return
+    def action():
+        supabase.table("odds_cache").upsert(
+            {"id": "master", "data": cache_data, "updated_at": datetime.now(timezone.utc).isoformat()}
+        ).execute()
+    _safe_execute(action, None)
+
+def get_odds_cache():
+    def action():
+        response = supabase.table("odds_cache").select("data").eq("id", "master").execute()
+        return response.data[0]["data"] if response.data else {}
+    data = _safe_execute(action, {})
+    if data:
+        return data
+    return _load_local_json(LOCAL_ODDS_CACHE_PATH, {})
+
+def save_master_cache(cache_data):
+    save_odds_cache(cache_data)
+
+def get_master_cache():
+    return get_odds_cache()
+
+HISTORICAL_ODDS_MAX_AGE_MINUTES = int(os.getenv("HISTORICAL_ODDS_MAX_AGE_MINUTES", "180"))
+_HISTORICAL_ODDS_PAGE_SIZE = int(os.getenv("HISTORICAL_ODDS_PAGE_SIZE", "1000"))
+_HISTORICAL_ODDS_MAX_ROWS = int(os.getenv("HISTORICAL_ODDS_MAX_ROWS", "50000"))
+
+
+def _row_recency(row: Dict[str, Any]) -> str:
+    return str(row.get("last_update") or row.get("captured_at") or "")
+
+
+def assemble_cache(
+    fixtures_rows: List[Dict[str, Any]],
+    odds_rows: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    fixture_index: Dict[str, Dict[str, Any]] = {}
+    for fixture in fixtures_rows or []:
+        fixture_id = str(fixture.get("id"))
+        if not fixture_id:
+            continue
+        fixture_index[fixture_id] = {
+            "id": fixture_id,
+            "sport_key": fixture.get("sport_key"),
+            "commence_time": fixture.get("commence_time"),
+            "home_team": fixture.get("home_team"),
+            "away_team": fixture.get("away_team"),
+        }
+
+    freshest: Dict[tuple, Dict[str, Any]] = {}
+    for row in odds_rows or []:
+        fixture_id = str(row.get("fixture_id"))
+        if not fixture_id:
+            continue
+        outcome_key = (
+            fixture_id,
+            str(row.get("bookmaker_key", "")),
+            str(row.get("market_key", "")),
+            str(row.get("outcome_name", "")).lower().strip(),
+            str(row.get("outcome_description") or "").lower().strip(),
+            str(row.get("point") if row.get("point") is not None else ""),
+        )
+        current = freshest.get(outcome_key)
+        if current is None or _row_recency(row) >= _row_recency(current):
+            freshest[outcome_key] = row
+
+    events: Dict[str, Dict[str, Any]] = {}
+    for row in freshest.values():
+        fixture_id = str(row.get("fixture_id"))
+        sport = row.get("sport_key") or (fixture_index.get(fixture_id, {}) or {}).get("sport_key")
+        if not sport:
+            continue
+
+        event = events.get(fixture_id)
+        if event is None:
+            base = fixture_index.get(fixture_id, {"id": fixture_id, "sport_key": sport})
+            event = {
+                "id": fixture_id,
+                "sport_key": sport,
+                "commence_time": base.get("commence_time"),
+                "home_team": base.get("home_team"),
+                "away_team": base.get("away_team"),
+                "bookmakers": [],
+                "_books": {},
+            }
+            events[fixture_id] = event
+
+        book_key = str(row.get("bookmaker_key", ""))
+        book = event["_books"].get(book_key)
+        if book is None:
+            book = {
+                "key": book_key,
+                "title": row.get("bookmaker_title") or book_key,
+                "markets": [],
+                "_markets": {},
+            }
+            event["_books"][book_key] = book
+            event["bookmakers"].append(book)
+
+        market_key = str(row.get("market_key", ""))
+        market = book["_markets"].get(market_key)
+        if market is None:
+            market = {"key": market_key, "outcomes": []}
+            book["_markets"][market_key] = market
+            book["markets"].append(market)
+
+        outcome: Dict[str, Any] = {
+            "name": row.get("outcome_name"),
+            "price": float(row.get("price_decimal")),
+        }
+        if row.get("point") is not None:
+            outcome["point"] = row.get("point")
+        if row.get("outcome_description"):
+            outcome["description"] = row.get("outcome_description")
+        market["outcomes"].append(outcome)
+
+    cache: Dict[str, List[Dict[str, Any]]] = {}
+    for event in events.values():
+        for book in event["bookmakers"]:
+            book.pop("_markets", None)
+        event.pop("_books", None)
+        cache.setdefault(event["sport_key"], []).append(event)
+    return cache
+
+
+def _fetch_recent_historical_odds(cutoff_iso: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    offset = 0
+    while offset < _HISTORICAL_ODDS_MAX_ROWS:
+        end = offset + _HISTORICAL_ODDS_PAGE_SIZE - 1
+        page = (
+            supabase.table("historical_odds")
+            .select(
+                "fixture_id,sport_key,bookmaker_key,bookmaker_title,market_key,"
+                "outcome_name,outcome_description,point,price_decimal,last_update,captured_at"
+            )
+            .gte("captured_at", cutoff_iso)
+            .order("captured_at", desc=False)
+            .range(offset, end)
+            .execute()
+            .data
+        )
+        if not page:
+            break
+        rows.extend(page)
+        if len(page) < _HISTORICAL_ODDS_PAGE_SIZE:
+            break
+        offset += _HISTORICAL_ODDS_PAGE_SIZE
+    return rows
+
+
+def build_cache_from_historical_odds(
+    max_age_minutes: Optional[int] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    age = HISTORICAL_ODDS_MAX_AGE_MINUTES if max_age_minutes is None else max_age_minutes
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=age)).isoformat()
+
+    def action():
+        odds_rows = _fetch_recent_historical_odds(cutoff_iso)
+        if not odds_rows:
+            return {}
+        fixtures_rows = (
+            supabase.table("fixtures")
+            .select("id,sport_key,commence_time,home_team,away_team")
+            .execute()
+            .data
+        )
+        return assemble_cache(fixtures_rows or [], odds_rows)
+
+    return _safe_execute(action, {})
+
+
+def get_market_cache(max_age_minutes: Optional[int] = None) -> Dict[str, List[Dict[str, Any]]]:
+    cache = build_cache_from_historical_odds(max_age_minutes=max_age_minutes)
+    if cache:
+        return cache
+    return _load_local_json(LOCAL_ODDS_CACHE_PATH, {})
+
+
+def hydrate_market_cache(max_age_minutes: Optional[int] = None) -> Dict[str, Any]:
+    cache = build_cache_from_historical_odds(max_age_minutes=max_age_minutes)
+    if not cache:
+        return {
+            "detail": "historical_odds empty or unreachable; kept previous cache",
+            "count": 0,
+            "label": "updates",
+        }
+    save_master_cache(cache)
+    event_count = sum(len(events) for events in cache.values())
+    return {
+        "detail": f"hydrated cache from historical_odds | sports={len(cache)} events={event_count}",
+        "count": len(cache),
+        "label": "updates",
+        "meta": {
+            "cache_sports": str(len(cache)),
+            "cache_events": str(event_count),
+        },
+    }
+
+def load_tracker_state(state_key: str, fallback_path: str):
+    def action():
+        response = supabase.table("bot_state").select("data").eq("id", state_key).execute()
+        if response.data:
+            return response.data[0].get("data", {})
+        return _load_local_json(fallback_path, {})
+    return _safe_execute(action, _load_local_json(fallback_path, {}))
+
+def save_tracker_state(state_key: str, data, fallback_path: str) -> None:
+    _save_local_json(fallback_path, data)
+    def action():
+        supabase.table("bot_state").upsert(
+            {"id": state_key, "data": data, "updated_at": datetime.now(timezone.utc).isoformat()}
+        ).execute()
+    _safe_execute(action, None)
+
+def log_alert_event(
+    source: str,
+    alert_type: str,
+    dedupe_key: Optional[str] = None,
+    count: int = 1,
+    payload_preview: Optional[str] = None,
+    status: str = "sent",
+):
+    def action():
+        supabase.table("alerts_sent").insert(
+            {
+                "source": source,
+                "alert_type": alert_type,
+                "dedupe_key": dedupe_key,
+                "count": count,
+                "payload_preview": payload_preview,
+                "status": status,
+                "sent_at": get_local_now().isoformat(),
+            }
+        ).execute()
+    _safe_execute(action, None)
+
+def alert_already_sent(
+    alert_type: str,
+    dedupe_key: str,
+    within_minutes: int,
+) -> bool:
+    if not dedupe_key or within_minutes <= 0:
+        return False
+    cutoff_iso = (get_local_now() - timedelta(minutes=within_minutes)).isoformat()
+
+    def action():
+        rows = (
+            supabase.table("alerts_sent")
+            .select("id")
+            .eq("alert_type", alert_type)
+            .eq("dedupe_key", dedupe_key)
+            .gte("sent_at", cutoff_iso)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return bool(rows)
+
+    return bool(_safe_execute(action, False))
+
+def log_workflow_run(
+    workflow_name: str,
+    status: str,
+    runtime_seconds: float,
+    task_count: int,
+    failure_count: int,
+    alert_count: int,
+    graded_count: int,
+    tracked_count: int,
+    summary: Optional[str] = None,
+):
+    def action():
+        supabase.table("workflow_runs").insert(
+            {
+                "workflow_name": workflow_name,
+                "status": status,
+                "runtime_seconds": runtime_seconds,
+                "task_count": task_count,
+                "failure_count": failure_count,
+                "alert_count": alert_count,
+                "graded_count": graded_count,
+                "tracked_count": tracked_count,
+                "summary": summary,
+                "run_at": get_local_now().isoformat(),
+            }
+        ).execute()
+    _safe_execute(action, None)
+
+STAT_LOG_TABLES: Dict[str, str] = {
+    "baseball_mlb": "mlb_player_logs",
+    "basketball_nba": "nba_player_logs",
+    "basketball_wnba": "wnba_player_logs",
+    "americanfootball_nfl": "nfl_player_logs",
+    "tennis_atp": "tennis_match_logs",
+    "tennis_wta": "tennis_match_logs",
+}
+
+def _stat_log_table(sport: str) -> Optional[str]:
+    sport_key = str(sport).strip().lower()
+    if sport_key in STAT_LOG_TABLES:
+        return STAT_LOG_TABLES[sport_key]
+    if sport_key.startswith("soccer_"):
+        return "soccer_player_logs"
+    return None
+
+PROP_STAT_COLUMNS: Dict[str, str] = {
+    "batter_hits": "hits",
+    "batter_total_bases": "total_bases",
+    "batter_runs_scored": "runs",
+    "batter_rbis": "rbis",
+    "batter_home_runs": "home_runs",
+    "batter_stolen_bases": "stolen_bases",
+    "batter_walks": "walks",
+    "pitcher_strikeouts": "strikeouts",
+    "pitcher_outs": "outs",
+    "pitcher_earned_runs": "earned_runs",
+    "pitcher_hits_allowed": "hits_allowed",
+    "pitcher_walks": "walks_allowed",
+    "player_points": "points",
+    "player_rebounds": "rebounds",
+    "player_assists": "assists",
+    "player_threes": "threes_made",
+    "player_steals": "steals",
+    "player_blocks": "blocks",
+    "player_turnovers": "turnovers",
+    "player_pass_yds": "passing_yards",
+    "player_pass_tds": "passing_tds",
+    "player_rush_yds": "rushing_yards",
+    "player_rush_tds": "rushing_tds",
+    "player_reception_yds": "receiving_yards",
+    "player_receptions": "receptions",
+    "player_reception_tds": "receiving_tds",
+    "player_anytime_td": "total_tds",
+    "player_shots_on_target": "shots_on_target",
+    "player_shots": "shots",
+    "player_goal_scorer_anytime": "goals",
+    "player_assists_soccer": "assists",
+    "player_aces": "aces",
+    "player_double_faults": "double_faults",
+}
+
+def _normalize_player_name(name: str) -> str:
+    return " ".join(str(name or "").strip().lower().split())
+
+def upsert_player_logs(table: str, rows: List[Dict[str, Any]]) -> int:
+    if not table or not rows:
+        return 0
+    payload = [_json_safe(row) for row in rows]
+
+    def action():
+        supabase.table(table).upsert(
+            payload, on_conflict="player_name,game_date,league"
+        ).execute()
+        return len(payload)
+
+    return int(_safe_execute(action, 0) or 0)
+
+def _stat_value_for_prop(row: Dict[str, Any], prop: str) -> Optional[float]:
+    column = PROP_STAT_COLUMNS.get(str(prop).strip().lower())
+    value = None
+    if column is not None and row.get(column) is not None:
+        value = row.get(column)
+    else:
+        stats = row.get("stats") or {}
+        if isinstance(stats, dict):
+            lookup = column or str(prop).strip().lower()
+            value = stats.get(lookup)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def get_l10_hit_rate(
+    player: str,
+    prop: str,
+    line: float,
+    sport: str,
+    games: int = 10,
+) -> Optional[Dict[str, Any]]:
+    table = _stat_log_table(sport)
+    if not table:
+        return None
+    try:
+        line_value = float(line)
+    except (TypeError, ValueError):
+        return None
+    name = _normalize_player_name(player)
+    if not name:
+        return None
+
+    def action():
+        return (
+            supabase.table(table)
+            .select("*")
+            .ilike("player_name", name)
+            .order("game_date", desc=True)
+            .limit(max(1, int(games)))
+            .execute()
+            .data
+        )
+
+    rows = _safe_execute(action, None)
+    if not rows:
+        return None
+
+    values: List[float] = []
+    for row in rows:
+        value = _stat_value_for_prop(row, prop)
+        if value is not None:
+            values.append(value)
+    if not values:
+        return None
+
+    over = sum(1 for value in values if value > line_value)
+    under = sum(1 for value in values if value < line_value)
+    return {
+        "over": over,
+        "under": under,
+        "games": len(values),
+        "line": line_value,
+        "values": values,
+    }
