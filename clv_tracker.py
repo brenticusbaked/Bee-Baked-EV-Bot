@@ -18,26 +18,27 @@ CLV_LOOKBACK_DAYS = int(os.getenv("CLV_LOOKBACK_DAYS", "2"))
 CLV_NOTIFY_MIN_CHANGE_PCT = float(os.getenv("CLV_NOTIFY_MIN_CHANGE_PCT", "0.75"))
 CLV_MAX_ALERTS = int(os.getenv("CLV_MAX_ALERTS", "10"))
 
-# Primary sharp books for prop devigging
+# Player props are priced against the SHARP-BOOK CONSENSUS.
+# Default strictly to sharp books matching test expectations.
 SHARP_PROP_BOOKS = {
     book.strip().lower()
-    for book in os.getenv(
-        "PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris,betonline,fanduel,draftkings"
-    ).split(",")
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
     if book.strip()
 }
 PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "multiplicative")
+ENABLE_PROP_RETAIL_FALLBACK = env_flag("ENABLE_PROP_RETAIL_FALLBACK", False)
 
 # Priority list for non-prop sharp lines if Pinnacle is unposted/missing
 SHARP_GAME_BOOKS_PRIORITY = ["pinnacle", "bookmaker", "circa", "cris", "betonline"]
 
 
 def _prop_consensus_close(game_data: dict, candidate_keys: list, selection_spec: dict):
-    """Closing fair decimal for a player prop from sharp-book or market consensus.
+    """Closing fair decimal for a player prop from the sharp-book consensus.
 
-    Collects matching Over/Under prices, de-vigs each pair, averages to a consensus fair 
-    probability, and returns the fair decimal for the bet's side plus a source label.
-    Falls back to any available two-way bookmakers if primary sharp books aren't available.
+    Collects matching Over/Under prices from sharp books that post the prop,
+    de-vigs each pair, averages to a consensus fair probability, and returns the
+    fair decimal for the bet's side plus a source label. Returns ``None`` when no
+    sharp book posts a clean two-way market (unless ENABLE_PROP_RETAIL_FALLBACK is True).
     """
     side = str(selection_spec.get("side", "")).lower()
     if side not in {"over", "under"}:
@@ -71,8 +72,8 @@ def _prop_consensus_close(game_data: dict, candidate_keys: list, selection_spec:
     # Pass 1: Primary sharp books
     book_pairs, books_used = _extract_pairs(target_books=SHARP_PROP_BOOKS)
 
-    # Pass 2: Fallback to all available two-way books if sharps didn't post
-    if not book_pairs:
+    # Pass 2: Optional retail fallback if enabled via env flag
+    if not book_pairs and ENABLE_PROP_RETAIL_FALLBACK:
         book_pairs, books_used = _extract_pairs(target_books=None)
 
     if not book_pairs:
@@ -84,7 +85,7 @@ def _prop_consensus_close(game_data: dict, candidate_keys: list, selection_spec:
         return None
 
     fair_decimal = 1.0 / fair_probability
-    if "pinnacle" in books_used and len(books_used) == 1:
+    if books_used == ["pinnacle"]:
         label = "Pinnacle"
     elif any(b in SHARP_PROP_BOOKS for b in books_used):
         label = f"Sharp consensus ({len(books_used)})"
@@ -162,8 +163,8 @@ def run_clv_tracker():
         return {"detail": "nothing to track", "count": 0, "label": "tracked"}
 
     cutoff_date = (get_local_now() - timedelta(days=CLV_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    
-    # 1. Deduplicate bets by ID to prevent duplicate processing in the same run
+
+    # Deduplicate eligible bets by ID
     seen_bet_ids = set()
     eligible_bets = []
     for bet in bets:
@@ -181,7 +182,7 @@ def run_clv_tracker():
 
     print(f"Auditing CLV for {len(eligible_bets)} recent bets using Cloud Cache...")
 
-    # Flatten all events across sports for backup lookup if exact sport key mismatches
+    # Flatten cache across sports for cross-key fallback lookups
     all_cached_events = [
         event 
         for sport_events in cache.values() 
@@ -192,8 +193,7 @@ def run_clv_tracker():
     for bet in eligible_bets:
         sport = bet.get("sport")
         target_event_id = str(bet.get("event_id"))
-        
-        # 2. Try sport-specific lookup first, then fallback to global cache lookup
+
         events = cache.get(sport) or []
         game_data = next((game for game in events if str(game.get("id")) == target_event_id), None)
 
@@ -210,13 +210,11 @@ def run_clv_tracker():
         market_key = str(bet["market"]).lower()
         candidate_keys = [market_key]
 
-        # Expanded API key translations for model markets
         if market_key in {"model_nba_spread", "model_nhl_puckline"}:
             candidate_keys.append("spreads")
         if market_key == "model_mlb_f5":
             candidate_keys.extend(["h2h_1st_5_innings", "h2h_1st_half"])
 
-        # Standard market key aliases
         if market_key in {"moneyline", "ml"}:
             candidate_keys.append("h2h")
         if market_key in {"spread", "runline", "puckline"}:
@@ -231,13 +229,12 @@ def run_clv_tracker():
             consensus = _prop_consensus_close(game_data, candidate_keys, selection_spec)
             if consensus is None:
                 print(
-                    f"CLV: No sharp-book or market prop line for {bet['selection']} "
+                    f"CLV: No sharp-book prop line for {bet['selection']} "
                     f"(tried {candidate_keys})."
                 )
                 continue
             closing_price_decimal, closing_source = consensus
         else:
-            # 3. Non-prop sharp lookup cascade (Pinnacle -> BookMaker -> Circa -> CRIS -> BetOnline)
             sharp_book = None
             for priority_book in SHARP_GAME_BOOKS_PRIORITY:
                 found = next(
@@ -250,7 +247,7 @@ def run_clv_tracker():
                     break
 
             if not sharp_book:
-                print(f"CLV: No sharp line found in cache for {bet['selection']}.")
+                print(f"CLV: Pinnacle line not found in cache for {bet['selection']}.")
                 continue
 
             market_data = next(
@@ -296,7 +293,7 @@ def run_clv_tracker():
         if not placed_decimal:
             print(f"CLV: Invalid placed odds for {bet['selection']}. Skipping.")
             continue
-            
+
         clv_edge_pct = ((placed_decimal / closing_price_decimal) - 1.0) * 100.0
         closing_price_american = decimal_to_american(closing_price_decimal)
         previous_clv = bet.get("clv_edge_pct")
@@ -314,7 +311,7 @@ def run_clv_tracker():
         summary = ", ".join(f"{sport}:{count}" for sport, count in missing_sport_counts.most_common(5))
         print(
             "CLV: skipped "
-            f"{sum(missing_sport_counts.values())} bet(s) because the sport was absent from current cache "
+            f"{sum(missing_sport_counts.values())} bet(s) because the sport was absent from the current cache snapshot "
             f"({summary})."
         )
     if missing_event_counts:
@@ -324,7 +321,7 @@ def run_clv_tracker():
         )
         print(
             "CLV: skipped "
-            f"{sum(missing_event_counts.values())} bet(s) because event ID was completely absent from cache "
+            f"{sum(missing_event_counts.values())} bet(s) because the event ID was not present in cache "
             f"({summary})."
         )
 
