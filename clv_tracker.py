@@ -1,8 +1,9 @@
 import os
 from collections import Counter
 from datetime import timedelta
+from typing import Optional
 
-from db_manager import get_all_bets, get_market_cache, update_bet_clv
+from db_manager import get_all_bets, get_market_cache, update_bet_clv, supabase, _safe_execute
 from services.alerts import send_discord_alert
 from services.bet_logic import outcome_matches, parse_selection
 from services.book_weights import _extract_book
@@ -30,6 +31,99 @@ ENABLE_PROP_RETAIL_FALLBACK = env_flag("ENABLE_PROP_RETAIL_FALLBACK", False)
 
 # Priority list for non-prop sharp lines if Pinnacle is unposted/missing
 SHARP_GAME_BOOKS_PRIORITY = ["pinnacle", "bookmaker", "circa", "cris", "betonline"]
+
+
+def _fetch_historical_game_data(event_id: str) -> Optional[dict]:
+    """Fallback: Query Supabase historical_odds for events/lines missing from live cache."""
+    if not supabase or not event_id:
+        return None
+
+    def action():
+        fix_resp = (
+            supabase.table("fixtures")
+            .select("id,sport_key,commence_time,home_team,away_team")
+            .eq("id", event_id)
+            .limit(1)
+            .execute()
+        )
+        fixture = fix_resp.data[0] if (fix_resp and fix_resp.data) else {}
+
+        odds_resp = (
+            supabase.table("historical_odds")
+            .select("*")
+            .eq("fixture_id", event_id)
+            .order("captured_at", desc=True)
+            .limit(2000)
+            .execute()
+        )
+        odds_rows = odds_resp.data if (odds_resp and odds_resp.data) else []
+        if not odds_rows:
+            return None
+
+        freshest: dict = {}
+        for row in odds_rows:
+            outcome_key = (
+                str(row.get("bookmaker_key", "")),
+                str(row.get("market_key", "")),
+                str(row.get("outcome_name", "")).lower().strip(),
+                str(row.get("outcome_description") or "").lower().strip(),
+                str(row.get("point") if row.get("point") is not None else ""),
+            )
+            if outcome_key not in freshest:
+                freshest[outcome_key] = row
+
+        books_dict: dict = {}
+        for row in freshest.values():
+            book_key = str(row.get("bookmaker_key", "")).lower()
+            if not book_key:
+                continue
+            if book_key not in books_dict:
+                books_dict[book_key] = {
+                    "key": book_key,
+                    "title": row.get("bookmaker_title") or book_key.title(),
+                    "markets": [],
+                    "_markets": {},
+                }
+            book = books_dict[book_key]
+
+            market_key = str(row.get("market_key", "")).lower()
+            if market_key not in book["_markets"]:
+                m_dict = {"key": market_key, "outcomes": []}
+                book["_markets"][market_key] = m_dict
+                book["markets"].append(m_dict)
+            else:
+                m_dict = book["_markets"][market_key]
+
+            price_dec = parse_float(row.get("price_decimal"))
+            if price_dec is None and row.get("price") is not None:
+                price_dec = parse_float(row.get("price"))
+
+            if price_dec:
+                outcome = {
+                    "name": row.get("outcome_name"),
+                    "price": price_dec,
+                }
+                if row.get("point") is not None:
+                    outcome["point"] = row.get("point")
+                if row.get("outcome_description"):
+                    outcome["description"] = row.get("outcome_description")
+                m_dict["outcomes"].append(outcome)
+
+        bookmakers = []
+        for b in books_dict.values():
+            b.pop("_markets", None)
+            bookmakers.append(b)
+
+        return {
+            "id": event_id,
+            "sport_key": fixture.get("sport_key") or "unknown",
+            "commence_time": fixture.get("commence_time"),
+            "home_team": fixture.get("home_team", ""),
+            "away_team": fixture.get("away_team", ""),
+            "bookmakers": bookmakers,
+        }
+
+    return _safe_execute(action, None)
 
 
 def _prop_consensus_close(game_data: dict, candidate_keys: list, selection_spec: dict):
@@ -158,8 +252,8 @@ def run_clv_tracker():
     missing_sport_counts: Counter[str] = Counter()
     missing_event_counts: Counter[tuple[str, str]] = Counter()
 
-    if not bets or not cache:
-        print("CLV Audit: Nothing to track or cache empty.")
+    if not bets:
+        print("CLV Audit: Nothing to track.")
         return {"detail": "nothing to track", "count": 0, "label": "tracked"}
 
     cutoff_date = (get_local_now() - timedelta(days=CLV_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
@@ -180,12 +274,12 @@ def run_clv_tracker():
         print("CLV Audit: No recent bets eligible for tracking.")
         return {"detail": "no recent bets to track", "count": 0, "label": "tracked"}
 
-    print(f"Auditing CLV for {len(eligible_bets)} recent bets using Cloud Cache...")
+    print(f"Auditing CLV for {len(eligible_bets)} recent bets using Cloud Cache & Historical Database...")
 
     # Flatten cache across sports for cross-key fallback lookups
     all_cached_events = [
         event 
-        for sport_events in cache.values() 
+        for sport_events in (cache or {}).values() 
         if isinstance(sport_events, list) 
         for event in sport_events
     ]
@@ -194,11 +288,16 @@ def run_clv_tracker():
         sport = bet.get("sport")
         target_event_id = str(bet.get("event_id"))
 
-        events = cache.get(sport) or []
+        events = (cache or {}).get(sport) or []
         game_data = next((game for game in events if str(game.get("id")) == target_event_id), None)
 
         if not game_data:
             game_data = next((game for game in all_cached_events if str(game.get("id")) == target_event_id), None)
+
+        is_historical = False
+        if not game_data:
+            game_data = _fetch_historical_game_data(target_event_id)
+            is_historical = True
 
         if not game_data:
             if not events:
@@ -227,6 +326,10 @@ def run_clv_tracker():
 
         if selection_spec.get("type") == "player_prop":
             consensus = _prop_consensus_close(game_data, candidate_keys, selection_spec)
+            if consensus is None and not is_historical:
+                hist_data = _fetch_historical_game_data(target_event_id)
+                if hist_data:
+                    consensus = _prop_consensus_close(hist_data, candidate_keys, selection_spec)
             if consensus is None:
                 print(
                     f"CLV: No sharp-book prop line for {bet['selection']} "
@@ -235,55 +338,37 @@ def run_clv_tracker():
                 continue
             closing_price_decimal, closing_source = consensus
         else:
-            sharp_book = None
-            for priority_book in SHARP_GAME_BOOKS_PRIORITY:
-                found = next(
-                    (b for b in game_data.get("bookmakers", []) if str(b.get("key")).lower() == priority_book),
-                    None,
-                )
-                if found:
-                    sharp_book = found
-                    closing_source = priority_book.title()
-                    break
+            def _find_sharp_closing_price(g_data):
+                for priority_book in SHARP_GAME_BOOKS_PRIORITY:
+                    found = next(
+                        (b for b in g_data.get("bookmakers", []) if str(b.get("key")).lower() == priority_book),
+                        None,
+                    )
+                    if not found:
+                        continue
+                    m_data = next(
+                        (m for m in found.get("markets", []) if str(m.get("key", "")).lower() in candidate_keys),
+                        None,
+                    )
+                    if not m_data:
+                        continue
+                    out = next(
+                        (item for item in m_data.get("outcomes", []) if outcome_matches(selection_spec, item)),
+                        None,
+                    )
+                    if out and parse_float(out.get("price")):
+                        return float(out["price"]), priority_book.title()
+                return None, None
 
-            if not sharp_book:
-                print(f"CLV: Pinnacle line not found in cache for {bet['selection']}.")
+            closing_price_decimal, closing_source = _find_sharp_closing_price(game_data)
+            if closing_price_decimal is None and not is_historical:
+                hist_data = _fetch_historical_game_data(target_event_id)
+                if hist_data:
+                    closing_price_decimal, closing_source = _find_sharp_closing_price(hist_data)
+
+            if not closing_price_decimal:
+                print(f"CLV: Line or market not found for {bet['selection']} (tried {candidate_keys}).")
                 continue
-
-            market_data = next(
-                (
-                    m for m in sharp_book.get("markets", [])
-                    if str(m.get("key", "")).lower() in candidate_keys
-                ),
-                None,
-            )
-            if not market_data:
-                if market_key == "model_mlb_f5":
-                    continue
-
-                available_keys = [m.get("key") for m in sharp_book.get("markets", [])]
-                print(
-                    f"CLV: Market not found for {bet['selection']} "
-                    f"(tried {candidate_keys}, available: {available_keys})."
-                )
-                continue
-
-            outcome = next(
-                (item for item in market_data.get("outcomes", []) if outcome_matches(selection_spec, item)),
-                None,
-            )
-            if not outcome:
-                available_outcomes = [
-                    {"name": o.get("name"), "point": o.get("point")}
-                    for o in market_data.get("outcomes", [])
-                ]
-                print(
-                    f"CLV: Outcome not found for '{bet['selection']}' "
-                    f"(spec={selection_spec}, available={available_outcomes})."
-                )
-                continue
-
-            closing_price_decimal = float(outcome["price"])
 
         if closing_price_decimal <= 1.0:
             print(f"CLV: Invalid price {closing_price_decimal} for {bet['selection']}. Skipping.")
@@ -321,7 +406,7 @@ def run_clv_tracker():
         )
         print(
             "CLV: skipped "
-            f"{sum(missing_event_counts.values())} bet(s) because the event ID was not present in cache "
+            f"{sum(missing_event_counts.values())} bet(s) because the event ID was not present in cache or database "
             f"({summary})."
         )
 
