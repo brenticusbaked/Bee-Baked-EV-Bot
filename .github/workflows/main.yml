@@ -101,6 +101,8 @@ jobs:
           UNIFIED_ALT_MARKET_EV_THRESHOLD: "0.015"
           UNIFIED_PARTIAL_MARKET_EV_THRESHOLD: "0.015"
           UNIFIED_MAX_ALERTS_PER_EVENT_MARKET: "5"
+          UNIFIED_PROP_KELLY_FRACTION: "0.25"
+          STAT_INGEST_LOOKBACK_DAYS: "45"
           EXECUTION_EV_THRESHOLD: "0.015"
           EXECUTION_CALIBRATION_ORDERS: "0"
           ENABLE_ODDSHARVESTER: "true"
@@ -111,23 +113,12 @@ jobs:
           EXECUTION_VENUE_SCORE_LOOKBACK: "500"
           EXECUTION_VENUE_SCORE_MIN_SAMPLE: "3"
           EXECUTION_MAX_ORDERS: "10"
-          # No unit limit: 0 = unlimited. The raw Quarter-Kelly recommendation
-          # reaches Discord unclipped (no per-order unit, notional, or symbol
-          # exposure ceiling). The Kelly fraction (1/4) and EV/de-vig math are
-          # unchanged — only the sizing ceilings are removed.
           EXECUTION_MAX_ORDER_UNITS: "0"
           EXECUTION_MAX_NOTIONAL: "0"
           EXECUTION_MAX_SYMBOL_EXPOSURE: "0"
-          # Expand sharp books to catch MLB hits when Pinnacle passes
           PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,betonline,fanduel,draftkings"
           
           # --- PROXY AUTHENTICATION ---
-          # Residential proxy pool for the selective statsapi.mlb.com fallback
-          # (services/http_client.py). We intentionally do NOT set a global
-          # HTTP_PROXY/HTTPS_PROXY: that forced ALL egress (Odds API, Supabase,
-          # Discord, statsapi) through the webshare gateway, so any proxy-auth
-          # failure (407) broke the entire pipeline. statsapi now goes direct
-          # first and only uses these creds if the runner IP is blocked.
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}

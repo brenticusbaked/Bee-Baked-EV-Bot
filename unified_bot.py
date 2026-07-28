@@ -84,7 +84,8 @@ UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.015)
 ENABLE_HISTORY_EV_FLOOR_RAISE = os.getenv("ENABLE_HISTORY_EV_FLOOR_RAISE", "false").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_HISTORY_PROP_TYPE_OVERLAY = os.getenv("ENABLE_HISTORY_PROP_TYPE_OVERLAY", "true").strip().lower() in {"1", "true", "yes", "on"}
 PROP_DEVIG_METHOD = "multiplicative"
-PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.125)
+# Default to Quarter-Kelly (0.25) sizing for player props
+PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.25)
 PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
 UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(1, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 1))
 SHARP_PROP_BOOKS = {

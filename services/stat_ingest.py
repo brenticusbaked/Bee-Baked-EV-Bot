@@ -1,12 +1,8 @@
-"""Contextual Stat Enrichment Engine — daily box-score ingestion.
+"""Contextual Stat Enrichment Engine — daily box-score ingestion & historical backfill.
 
-Runs once daily (see .github/workflows/daily_stat_ingest.yml), fetches the
-previous day's player box scores from free stat libraries, and upserts them into
-the Supabase ``*_player_logs`` / ``tennis_match_logs`` tables via ``db_manager``.
-
-This module is NEVER called during the live odds scan — it is a batch job. Each
-sport fetcher imports its library lazily and fails soft: a missing library or a
-provider hiccup skips that sport without aborting the others.
+Fetches player box scores from free stat libraries (MLB StatsAPI, ESPN for NBA/WNBA/NFL,
+soccerdata, Sackmann tennis) and upserts them into Supabase *_player_logs via db_manager.
+Supports multi-day backfilling via STAT_INGEST_LOOKBACK_DAYS.
 """
 
 from __future__ import annotations
@@ -25,9 +21,9 @@ ENABLE_NFL_STAT_INGEST = os.getenv("ENABLE_NFL_STAT_INGEST", "true").strip().low
 ENABLE_SOCCER_STAT_INGEST = os.getenv("ENABLE_SOCCER_STAT_INGEST", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_TENNIS_STAT_INGEST = os.getenv("ENABLE_TENNIS_STAT_INGEST", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-# Soccer leagues (soccerdata FBref names) to ingest. Kept small to bound cost.
-# A blank env value falls back to the default (the daily workflow passes the repo
-# variable through, which is empty when unset — that must NOT wipe the list).
+# Number of days to look back and ingest (default: 1 day; set to 14 or 30 for historical backfill)
+STAT_INGEST_LOOKBACK_DAYS = int(os.getenv("STAT_INGEST_LOOKBACK_DAYS", "1"))
+
 _DEFAULT_SOCCER_LEAGUES = "ENG-Premier League,USA-Major League Soccer"
 SOCCER_STAT_LEAGUES = [
     league.strip()
@@ -37,7 +33,7 @@ SOCCER_STAT_LEAGUES = [
 
 
 def _yesterday() -> date:
-    return (datetime.utcnow() - timedelta(days=1)).date()
+    return (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
 
 def _num(value: Any) -> Any:
@@ -61,12 +57,7 @@ def _ip_to_outs(innings_pitched: Any) -> Any:
 
 
 def _parse_mlb_boxscore(box: Dict[str, Any], day: str) -> List[Dict[str, Any]]:
-    """Parse a statsapi boxscore_data dict into per-player log rows.
-
-    Uses official full names ("First Last") so they match the odds feed, and
-    captures both batting (hits/total bases/HR) and pitching (strikeouts/outs/
-    hits allowed) — the marquee prop metrics.
-    """
+    """Parse a statsapi boxscore_data dict into per-player log rows."""
     rows: List[Dict[str, Any]] = []
     for side in ("home", "away"):
         team_block = box.get(side) or {}
@@ -86,7 +77,6 @@ def _parse_mlb_boxscore(box: Dict[str, Any], day: str) -> List[Dict[str, Any]]:
             hrs = _num(batting.get("homeRuns"))
             total_bases = None
             if hits is not None:
-                # TB = hits + doubles + 2*triples + 3*HR (each hit already counts 1).
                 total_bases = hits + doubles + 2 * triples + 3 * (hrs or 0)
 
             k_pitch = _num(pitching.get("strikeOuts"))
@@ -128,11 +118,7 @@ def _parse_mlb_boxscore(box: Dict[str, Any], day: str) -> List[Dict[str, Any]]:
 
 
 def fetch_mlb_logs(game_date: date) -> List[Dict[str, Any]]:
-    """Yesterday's MLB batter+pitcher box scores via MLB-StatsAPI (statsapi).
-
-    statsapi returns official "First Last" names (matching the odds feed) plus
-    both batting and pitching lines, so pitcher strikeouts/outs props resolve.
-    """
+    """MLB batter+pitcher box scores via MLB-StatsAPI (statsapi)."""
     try:
         import statsapi
     except ImportError:
@@ -141,7 +127,7 @@ def fetch_mlb_logs(game_date: date) -> List[Dict[str, Any]]:
 
     try:
         schedule = statsapi.schedule(date=game_date.strftime("%m/%d/%Y"))
-    except Exception as exc:  # pragma: no cover - network/provider dependent
+    except Exception as exc:
         print(f"[stat_ingest] MLB schedule fetch failed: {exc}")
         return []
 
@@ -153,16 +139,13 @@ def fetch_mlb_logs(game_date: date) -> List[Dict[str, Any]]:
             continue
         try:
             box = statsapi.boxscore_data(game_id)
-        except Exception as exc:  # pragma: no cover - network/provider dependent
+        except Exception as exc:
             print(f"[stat_ingest] MLB boxscore {game_id} failed: {exc}")
             continue
         rows.extend(_parse_mlb_boxscore(box, day))
     return rows
 
 
-# ESPN site-API sport paths for basketball. ESPN's public JSON API needs no key
-# and is NOT IP-blocked from CI (unlike stats.nba.com), so it is the ingestion
-# source for both leagues. WNBA has no dependency on nba.com.
 _ESPN_BASKETBALL_PATHS = {
     "basketball_nba": "basketball/nba",
     "basketball_wnba": "basketball/wnba",
@@ -182,12 +165,7 @@ def _espn_made(value: Any) -> Any:
 def _parse_espn_basketball_summary(
     summary: Dict[str, Any], game_date: date, league: str
 ) -> List[Dict[str, Any]]:
-    """Parse an ESPN game-summary boxscore into per-player log rows.
-
-    ESPN aligns each athlete's ``stats`` list to the group's ``keys`` list, so we
-    zip them into a dict and read the prop metrics by key. ``displayName`` is
-    "First Last", matching the odds feed.
-    """
+    """Parse an ESPN game-summary boxscore into per-player log rows."""
     rows: List[Dict[str, Any]] = []
     boxscore = summary.get("boxscore") or {}
     for team_block in boxscore.get("players") or []:
@@ -232,11 +210,7 @@ def _parse_espn_basketball_summary(
 
 
 def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict[str, Any]]:
-    """Yesterday's NBA/WNBA player box scores via ESPN's free public API.
-
-    Pulls the day's scoreboard for game ids, then each game's summary boxscore.
-    No API key and no residential proxy needed — ESPN serves CI IPs directly.
-    """
+    """NBA/WNBA player box scores via ESPN's free public API."""
     sport_path = _ESPN_BASKETBALL_PATHS.get(league)
     if not sport_path:
         print(f"[stat_ingest] no ESPN path for {league}; skipping")
@@ -250,7 +224,7 @@ def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict
     )
     try:
         scoreboard = get_json(scoreboard_url)
-    except Exception as exc:  # pragma: no cover - network/provider dependent
+    except Exception as exc:
         print(f"[stat_ingest] {league} scoreboard fetch failed: {exc}")
         return []
 
@@ -269,7 +243,7 @@ def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict
         )
         try:
             summary = get_json(summary_url)
-        except Exception as exc:  # pragma: no cover - network/provider dependent
+        except Exception as exc:
             print(f"[stat_ingest] {league} summary {event_id} fetch failed: {exc}")
             continue
         rows.extend(_parse_espn_basketball_summary(summary, game_date, league))
@@ -279,13 +253,7 @@ def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict
 def _parse_espn_football_summary(
     summary: Dict[str, Any], game_date: date
 ) -> List[Dict[str, Any]]:
-    """Parse an ESPN NFL game-summary boxscore into per-player log rows.
-
-    NFL boxscores split each player's line across several stat categories
-    (passing/rushing/receiving), so we merge every category's keyed stats per
-    athlete before mapping to prop columns. ``displayName`` is "First Last".
-    """
-    # athlete_id -> {"name", "team", "keyed": {stat_key: value}}
+    """Parse an ESPN NFL game-summary boxscore into per-player log rows."""
     merged: Dict[str, Dict[str, Any]] = {}
     boxscore = summary.get("boxscore") or {}
     for team_block in boxscore.get("players") or []:
@@ -342,11 +310,7 @@ def _parse_espn_football_summary(
 
 
 def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
-    """Yesterday's NFL player box scores via ESPN's free public API.
-
-    Same pattern as basketball: the day's scoreboard for game ids, then each
-    game's summary boxscore. No API key, no proxy, not IP-blocked from CI.
-    """
+    """NFL player box scores via ESPN's free public API."""
     from services.http_client import get_json
 
     day = game_date.strftime("%Y%m%d")
@@ -355,7 +319,7 @@ def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
     )
     try:
         scoreboard = get_json(scoreboard_url)
-    except Exception as exc:  # pragma: no cover - network/provider dependent
+    except Exception as exc:
         print(f"[stat_ingest] NFL scoreboard fetch failed: {exc}")
         return []
 
@@ -374,7 +338,7 @@ def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
         )
         try:
             summary = get_json(summary_url)
-        except Exception as exc:  # pragma: no cover - network/provider dependent
+        except Exception as exc:
             print(f"[stat_ingest] NFL summary {event_id} fetch failed: {exc}")
             continue
         rows.extend(_parse_espn_football_summary(summary, game_date))
@@ -382,7 +346,7 @@ def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
 
 
 def fetch_soccer_logs(game_date: date) -> List[Dict[str, Any]]:
-    """Recent soccer player lines via soccerdata (FBref). Bounded to configured leagues."""
+    """Soccer player lines via soccerdata (FBref)."""
     try:
         import soccerdata as sd
     except ImportError:
@@ -394,7 +358,7 @@ def fetch_soccer_logs(game_date: date) -> List[Dict[str, Any]]:
         try:
             fbref = sd.FBref(leagues=league, seasons=game_date.year)
             frame = fbref.read_player_match_stats(stat_type="summary")
-        except Exception as exc:  # pragma: no cover - network/provider dependent
+        except Exception as exc:
             print(f"[stat_ingest] soccer '{league}' fetch failed: {exc}")
             continue
         if frame is None or getattr(frame, "empty", True):
@@ -424,10 +388,9 @@ def fetch_soccer_logs(game_date: date) -> List[Dict[str, Any]]:
 
 
 def fetch_tennis_logs(game_date: date) -> List[Dict[str, Any]]:
-    """Recent ATP/WTA match logs from the public Sackmann match CSVs."""
+    """ATP/WTA match logs from Sackmann CSVs."""
     import csv
     import io
-
     import requests
 
     rows: List[Dict[str, Any]] = []
@@ -441,7 +404,7 @@ def fetch_tennis_logs(game_date: date) -> List[Dict[str, Any]]:
         try:
             resp = requests.get(url, timeout=30)
             resp.raise_for_status()
-        except Exception as exc:  # pragma: no cover - network dependent
+        except Exception as exc:
             print(f"[stat_ingest] tennis {tour} fetch failed: {exc}")
             continue
         reader = csv.DictReader(io.StringIO(resp.text))
@@ -472,34 +435,43 @@ def fetch_tennis_logs(game_date: date) -> List[Dict[str, Any]]:
     return rows
 
 
-def ingest_all(game_date: date | None = None) -> Dict[str, int]:
-    """Fetch + upsert yesterday's logs for every enabled sport.
+def ingest_all(game_date: date | None = None, lookback_days: int | None = None) -> Dict[str, int]:
+    """Fetch + upsert player logs over a date range.
 
-    Returns a per-table count of rows upserted. Each sport is isolated so one
-    provider failure can't abort the rest.
+    If lookback_days or STAT_INGEST_LOOKBACK_DAYS > 1, backfills history across
+    that many previous days (e.g., 14 days for L10 hit-rate context).
     """
-    game_date = game_date or _yesterday()
-    print(f"[stat_ingest] ingesting player logs for {game_date.isoformat()}")
+    days = lookback_days or STAT_INGEST_LOOKBACK_DAYS
+    base_date = game_date or _yesterday()
+    totals: Dict[str, int] = {}
 
-    jobs: List[tuple[bool, str, Callable[[], List[Dict[str, Any]]]]] = [
-        (ENABLE_MLB_STAT_INGEST, "mlb_player_logs", lambda: fetch_mlb_logs(game_date)),
-        (ENABLE_NBA_STAT_INGEST, "nba_player_logs", lambda: fetch_nba_logs(game_date, "basketball_nba")),
-        (ENABLE_WNBA_STAT_INGEST, "wnba_player_logs", lambda: fetch_nba_logs(game_date, "basketball_wnba")),
-        (ENABLE_NFL_STAT_INGEST, "nfl_player_logs", lambda: fetch_nfl_logs(game_date)),
-        (ENABLE_SOCCER_STAT_INGEST, "soccer_player_logs", lambda: fetch_soccer_logs(game_date)),
-        (ENABLE_TENNIS_STAT_INGEST, "tennis_match_logs", lambda: fetch_tennis_logs(game_date)),
-    ]
+    for i in range(max(1, days)):
+        current_date = base_date - timedelta(days=i)
+        print(f"[stat_ingest] ingesting player logs for {current_date.isoformat()}")
 
-    results: Dict[str, int] = {}
-    for enabled, table, fetch in jobs:
-        if not enabled:
-            continue
-        try:
-            rows = [row for row in fetch() if row.get("player_name")]
-        except Exception as exc:  # pragma: no cover - defensive
-            print(f"[stat_ingest] {table} fetch raised: {exc}")
-            rows = []
-        count = db_manager.upsert_player_logs(table, rows) if rows else 0
-        results[table] = count
-        print(f"[stat_ingest] {table}: {count} rows upserted")
-    return results
+        jobs: List[tuple[bool, str, Callable[[], List[Dict[str, Any]]]]] = [
+            (ENABLE_MLB_STAT_INGEST, "mlb_player_logs", lambda d=current_date: fetch_mlb_logs(d)),
+            (ENABLE_NBA_STAT_INGEST, "nba_player_logs", lambda d=current_date: fetch_nba_logs(d, "basketball_nba")),
+            (ENABLE_WNBA_STAT_INGEST, "wnba_player_logs", lambda d=current_date: fetch_nba_logs(d, "basketball_wnba")),
+            (ENABLE_NFL_STAT_INGEST, "nfl_player_logs", lambda d=current_date: fetch_nfl_logs(d)),
+            (ENABLE_SOCCER_STAT_INGEST, "soccer_player_logs", lambda d=current_date: fetch_soccer_logs(d)),
+            (ENABLE_TENNIS_STAT_INGEST, "tennis_match_logs", lambda d=current_date: fetch_tennis_logs(d)),
+        ]
+
+        for enabled, table, fetch in jobs:
+            if not enabled:
+                continue
+            try:
+                rows = [row for row in fetch() if row.get("player_name")]
+            except Exception as exc:
+                print(f"[stat_ingest] {table} fetch raised: {exc}")
+                rows = []
+            count = db_manager.upsert_player_logs(table, rows) if rows else 0
+            totals[table] = totals.get(table, 0) + count
+            print(f"[stat_ingest] {table} ({current_date.isoformat()}): {count} rows upserted")
+
+    return totals
+
+
+if __name__ == "__main__":
+    ingest_all()
