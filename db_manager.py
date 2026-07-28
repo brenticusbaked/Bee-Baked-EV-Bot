@@ -156,7 +156,7 @@ def _infer_market_type(market: str) -> str:
         return "spread"
     if market_key in {"total", "totals"}:
         return "total"
-    if market_key.startswith("player_") or market_key in {"points", "assists", "rebounds", "goals"}:
+    if market_key.startswith("player_") or market_key in {"points", "assists", "rebounds", "goals", "hits", "total_bases"}:
         return "player_prop"
     return "other"
 
@@ -979,6 +979,7 @@ PROP_STAT_COLUMNS: Dict[str, str] = {
     "pitcher_earned_runs": "earned_runs",
     "pitcher_hits_allowed": "hits_allowed",
     "pitcher_walks": "walks_allowed",
+    "batter_hits_runs_rbis": "hits_runs_rbis",
     "player_points": "points",
     "player_rebounds": "rebounds",
     "player_assists": "assists",
@@ -1019,14 +1020,24 @@ def upsert_player_logs(table: str, rows: List[Dict[str, Any]]) -> int:
     return int(_safe_execute(action, 0) or 0)
 
 def _stat_value_for_prop(row: Dict[str, Any], prop: str) -> Optional[float]:
-    column = PROP_STAT_COLUMNS.get(str(prop).strip().lower())
+    prop_key = str(prop).strip().lower()
+    if prop_key == "batter_hits_runs_rbis":
+        try:
+            h = float(row.get("hits") or (row.get("stats") or {}).get("hits", 0))
+            r = float(row.get("runs") or (row.get("stats") or {}).get("runs", 0))
+            rbi = float(row.get("rbis") or (row.get("stats") or {}).get("rbis", 0))
+            return h + r + rbi
+        except (TypeError, ValueError):
+            return None
+
+    column = PROP_STAT_COLUMNS.get(prop_key)
     value = None
     if column is not None and row.get(column) is not None:
         value = row.get(column)
     else:
         stats = row.get("stats") or {}
         if isinstance(stats, dict):
-            lookup = column or str(prop).strip().lower()
+            lookup = column or prop_key
             value = stats.get(lookup)
     if value is None:
         return None
@@ -1069,19 +1080,28 @@ def get_l10_hit_rate(
         return None
 
     values: List[float] = []
+    game_details = []
     for row in rows:
         value = _stat_value_for_prop(row, prop)
         if value is not None:
             values.append(value)
+            game_details.append({
+                "game_date": row.get("game_date"),
+                "value": value,
+            })
     if not values:
         return None
 
     over = sum(1 for value in values if value > line_value)
     under = sum(1 for value in values if value < line_value)
+    
+    last_game = game_details[0] if game_details else None
+
     return {
         "over": over,
         "under": under,
         "games": len(values),
         "line": line_value,
         "values": values,
+        "last_game": last_game,
     }

@@ -41,9 +41,6 @@ SPORT_ALERT_WEBHOOKS = {
     "basketball_nba": os.getenv("DISCORD_NBA_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
     "americanfootball_nfl": os.getenv("DISCORD_NFL_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL,
 }
-# Tennis sport keys are per-tournament (tennis_atp_*, tennis_wta_*) and soccer
-# spans many league keys (soccer_epl, soccer_usa_mls, ...), so both are routed by
-# prefix rather than an exact key match.
 TENNIS_ALERT_WEBHOOK = os.getenv("DISCORD_TENNIS_BETS_WEBHOOK_URL") or DISCORD_WEBHOOK_URL
 SOCCER_ALERT_WEBHOOK = (
     os.getenv("DISCORD_SOCCER_BETS_WEBHOOK_URL")
@@ -79,40 +76,18 @@ ENABLE_NFL_H2H_ALERTS = os.getenv("ENABLE_NFL_H2H_ALERTS", "true").strip().lower
 ENABLE_ALTERNATE_MARKET_ALERTS = os.getenv("ENABLE_ALTERNATE_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PARTIAL_GAME_MARKET_ALERTS = os.getenv("ENABLE_PARTIAL_GAME_MARKET_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_PLAYER_PROP_ALERTS = os.getenv("ENABLE_PLAYER_PROP_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
-# Append a "Last 10" historical hit-rate line to +EV prop slips, read from the
-# Supabase stat-log cache (Contextual Stat Enrichment Engine). Cache-only: it
-# never calls an external stat API during the scan. Set false to disable.
 ENABLE_L10_CONTEXT = os.getenv("ENABLE_L10_CONTEXT", "true").strip().lower() in {"1", "true", "yes", "on"}
-# Tennis is priced on the moneyline (h2h) only. Sport keys are per-tournament
-# (tennis_atp_wimbledon, tennis_wta_*), so tennis is matched by prefix.
 ENABLE_TENNIS_ALERTS = os.getenv("ENABLE_TENNIS_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
-# Soccer spans many league keys (soccer_epl, soccer_usa_mls, ...). Priced on the
-# 3-way moneyline (h2h, incl. Draw) and totals; matched by prefix.
 ENABLE_SOCCER_ALERTS = os.getenv("ENABLE_SOCCER_ALERTS", "true").strip().lower() in {"1", "true", "yes", "on"}
 UNIFIED_PROP_EV_THRESHOLD = env_float("UNIFIED_PROP_EV_THRESHOLD", max(UNIFIED_EV_THRESHOLD, 0.015))
-# Hard EV floor: never alert below this EV band. Configurable.
 UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.015)
-# When enabled, the realized ROI-by-EV-bucket calibration from bet_history can
-# RAISE (never lower) the floor to the lowest historically-profitable band. The
-# history buckets are discrete ({0%, 2%, 5%, 10%}), so if the 0-2% band wasn't
-# profitable this snaps the floor up to 2% and suppresses 1.5-2% near-misses.
-# Off by default so the explicit UNIFIED_EV_FLOOR above is authoritative; set
-# ENABLE_HISTORY_EV_FLOOR_RAISE=true to re-enable the data-driven safety raise.
 ENABLE_HISTORY_EV_FLOOR_RAISE = os.getenv("ENABLE_HISTORY_EV_FLOOR_RAISE", "false").strip().lower() in {"1", "true", "yes", "on"}
-# Per-prop-type realized ROI from bet_history nudges each prop type's EV alert
-# threshold (favor historically-profitable stat types, tighten chronic losers).
-# Bounded by MAX_PROP_TYPE_EV_ADJUST and never below the hard EV floor, and
-# neutral (no effect) until enough settled history exists per type — so it is
-# safe to leave ON permanently. Set ENABLE_HISTORY_PROP_TYPE_OVERLAY=false to
-# disable.
 ENABLE_HISTORY_PROP_TYPE_OVERLAY = os.getenv("ENABLE_HISTORY_PROP_TYPE_OVERLAY", "true").strip().lower() in {"1", "true", "yes", "on"}
-# Player props carry highly asymmetric juice (e.g. Over -140 / Under +110), so
-# they are de-vigged multiplicatively rather than with the power method used for
-# main markets (see .windsurfrules Rule 1 / the syndicate spec).
 PROP_DEVIG_METHOD = "multiplicative"
 PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.125)
 PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
-UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(1, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 1))
+# Require at least 2 sharp books by default to form a consensus price, avoiding single-book outliers
+UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(2, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 2))
 SHARP_PROP_BOOKS = {
     book.strip().lower()
     for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
@@ -141,10 +116,6 @@ def calculate_edge_from_probability(offered_price: float, fair_probability: floa
     return (float(offered_price) * float(fair_probability)) - 1.0
 
 
-# Player-prop market keys are prefixed by role: NBA/WNBA/NHL use `player_`, MLB
-# uses `batter_` / `pitcher_`. All are per-player Over/Under pairs priced the same
-# way (multiplicative de-vig off the Pinnacle baseline), so they must all be
-# recognized as props — otherwise MLB props get ingested but never evaluated.
 _PLAYER_PROP_PREFIXES = ("player_", "batter_", "pitcher_")
 
 
@@ -165,13 +136,31 @@ def _player_prop_sharp_reference(sharp_by_book: dict, side: str) -> str:
     return f"{book.upper()} {decimal_to_american(price)}"
 
 
-def _l10_context_line(player: str, market_key: str, point: object, side: str, sport: str) -> str:
-    """A 'Last 10' hit-rate line for a prop slip, read from the cached stat logs.
+def _format_prop_stat_label(market_key: str) -> str:
+    """Format technical market keys into clean reader-facing labels (e.g. Hits, Total Bases)."""
+    key = str(market_key).strip().lower()
+    mapping = {
+        "batter_hits": "Hits",
+        "batter_total_bases": "Total Bases",
+        "batter_home_runs": "Home Runs",
+        "batter_runs_scored": "Runs",
+        "batter_rbis": "RBIs",
+        "batter_stolen_bases": "Stolen Bases",
+        "batter_walks": "Walks",
+        "pitcher_strikeouts": "Strikeouts",
+        "pitcher_outs": "Outs",
+        "pitcher_earned_runs": "Earned Runs",
+        "batter_hits_runs_rbis": "Hits + Runs + RBIs",
+    }
+    if key in mapping:
+        return mapping[key]
+    
+    clean = key.replace("batter_", "").replace("player_", "").replace("pitcher_", "")
+    return clean.replace("_", " ").title()
 
-    Returns an empty string when the context can't be built (feature off, sport
-    untracked, no logs, unusable line) so callers can append unconditionally.
-    Reads Supabase only — never an external stat API during the scan.
-    """
+
+def _l10_context_line(player: str, market_key: str, point: object, side: str, sport: str) -> str:
+    """Builds the Last 10 hit rate context line and includes the last game played details."""
     if not ENABLE_L10_CONTEXT:
         return ""
     if point in (None, ""):
@@ -183,13 +172,23 @@ def _l10_context_line(player: str, market_key: str, point: object, side: str, sp
     result = get_l10_hit_rate(player, market_key, line_value, sport)
     if not result or not result.get("games"):
         return ""
+    
     games = int(result["games"])
     cleared = int(result["over"]) if str(side).strip().lower() == "over" else int(result["under"])
     direction = "cleared" if str(side).strip().lower() == "over" else "stayed under"
-    stat_label = str(market_key).split("_", 1)[-1].replace("_", " ")
+    stat_label = _format_prop_stat_label(market_key)
+    
+    last_game_str = ""
+    last_game = result.get("last_game")
+    if last_game and last_game.get("game_date"):
+        g_date = last_game.get("game_date")
+        g_val = last_game.get("value")
+        last_game_str = f"\n🕒 **Last Played ({g_date}):** Recorded {g_val:g} {stat_label}."
+
     return (
         f"\n📊 **Historical Context:** {player} has {direction} {line_value:g} "
-        f"{stat_label} in {cleared}/{games} of their last games."
+        f"{stat_label} in {cleared}/{games} of their last {games} games."
+        f"{last_game_str}"
     )
 
 
@@ -243,11 +242,6 @@ def _market_allowed_for_sport(sport: str, market_type: str) -> bool:
 
 
 def _effective_ev_floor() -> float:
-    """Configured hard EV floor.
-
-    When ``ENABLE_HISTORY_EV_FLOOR_RAISE`` is set, the history-validated floor may
-    raise it (never lower) to the lowest historically-profitable EV band.
-    """
     floor = UNIFIED_EV_FLOOR
     if ENABLE_HISTORY_EV_FLOOR_RAISE:
         validated = validated_ev_floor()
@@ -256,30 +250,7 @@ def _effective_ev_floor() -> float:
     return floor
 
 
-def _market_ev_threshold(market_type: str) -> float:
-    market_family = _market_family(market_type)
-    if market_family == "alternate":
-        threshold = UNIFIED_ALT_MARKET_EV_THRESHOLD
-    elif market_family == "partial":
-        threshold = UNIFIED_PARTIAL_MARKET_EV_THRESHOLD
-    elif market_family == "spreads":
-        threshold = UNIFIED_SPREAD_EV_THRESHOLD
-    elif market_family == "h2h":
-        threshold = UNIFIED_H2H_EV_THRESHOLD
-    elif market_family == "totals":
-        threshold = UNIFIED_TOTAL_EV_THRESHOLD
-    else:
-        threshold = UNIFIED_EV_THRESHOLD
-    return max(threshold, _effective_ev_floor())
-
-
 def _prop_ev_threshold(market_key: str) -> float:
-    """EV alert threshold for a prop stat type.
-
-    Defaults to ``UNIFIED_PROP_EV_THRESHOLD``; when the history overlay is
-    enabled, a bounded per-type ROI delta nudges it, clamped so it can never fall
-    below the hard EV floor.
-    """
     threshold = UNIFIED_PROP_EV_THRESHOLD
     if ENABLE_HISTORY_PROP_TYPE_OVERLAY:
         threshold = max(_effective_ev_floor(), threshold + prop_type_ev_adjustment(market_key))
@@ -294,7 +265,6 @@ def _resolve_talent_prob(
     outcome_name: str,
     market_type: str,
 ) -> float:
-    """Blend sharp fair probability with the talent model for MLB matchups."""
     adj = talent_ctx.get(home_team, away_team)
     if adj is None:
         return fair_probability
@@ -329,7 +299,6 @@ def _resolve_pdo_prob(
     away_team: str,
     outcome_name: str,
 ) -> float:
-    """Adjust NHL totals probability using PDO regression signals."""
     home_data = pdo_ctx.get(home_team)
     away_data = pdo_ctx.get(away_team)
     if home_data is None or away_data is None:
@@ -346,7 +315,6 @@ def _resolve_pace_prob(
     away_team: str,
     outcome_name: str,
 ) -> float:
-    """Adjust NBA totals probability using lineup pace signals."""
     home_data = pace_ctx.get(home_team)
     away_data = pace_ctx.get(away_team)
     if home_data is None or away_data is None:
@@ -364,7 +332,6 @@ def _resolve_proe_prob(
     outcome_name: str,
     market_type: str,
 ) -> float:
-    """Adjust NFL probability using PROE and per-play success signals."""
     home_data = proe_ctx.get(home_team)
     away_data = proe_ctx.get(away_team)
     if home_data is None or away_data is None:
@@ -396,25 +363,10 @@ _LINE_TOKEN_RE = re.compile(r"^[+-]?\d+(?:\.\d+)?$")
 
 
 def _market_side_token(outcome_name: str) -> str:
-    """Collapse an outcome to the directional *side* of its market.
-
-    Totals (and totals-style outcomes) collapse to ``over``/``under``; moneyline
-    and spread outcomes collapse to the team name (the point/handicap is dropped,
-    so ``Home -2.5`` and ``Home -3.5`` are the same side). Two selections in the
-    same event+market with *different* side tokens are opposite sides of the same
-    wager (both moneylines, Over vs Under) and must never be alerted together.
-    """
     return _prop_side(outcome_name)
 
 
 def _side_token_from_selection(selection: str) -> str:
-    """Recover the side token from a stored ``selection`` string.
-
-    Selections are logged as ``f"{name} {point}"`` (e.g. ``"Boston Celtics -3.5"``
-    or ``"Over 8.5"``), so strip a trailing numeric line token before collapsing
-    to a side. Kept consistent with :func:`_market_side_token` so within-run and
-    cross-run (already-logged) opposite detection use the same tokens.
-    """
     text = str(selection or "").strip()
     lowered = text.lower()
     if "over" in lowered:
@@ -428,12 +380,6 @@ def _side_token_from_selection(selection: str) -> str:
 
 
 def _build_logged_sides(bets: list | None) -> dict:
-    """Map ``(event_id, market)`` -> set of open side tokens already logged today.
-
-    Used to suppress alerting the *opposite* side of a wager that is already on
-    the board (e.g. an earlier run alerted the home moneyline; a later run must
-    not alert the away moneyline for the same game/market).
-    """
     sides: dict = {}
     for row in bets or []:
         if row.get("result"):
@@ -453,20 +399,7 @@ def evaluate_player_props(
     soft_books: list,
     book_weights: dict,
 ) -> list:
-    """Scan player-prop markets for a single event.
-
-    Player props are quoted as binary Over/Under pairs per (player, line) with
-    highly asymmetric juice, so the Pinnacle baseline is de-vigged with the
-    multiplicative method:
-
-        P_over = 1 / O_over ; P_under = 1 / O_under
-        Sum = P_over + P_under
-        P_true_over = P_over / Sum   (and symmetrically for the under)
-
-    Returns a list of alert dicts ready for routing through services/alerts.py.
-    """
     matchup = f"{event['away_team']} @ {event['home_team']}"
-    # groups[(market_key, player, point)] = {"sharp_by_book": {book: {side: {"price": price}}}, "soft": [offers]}
     groups: dict = {}
 
     for bookmaker in event.get("bookmakers", []):
@@ -506,6 +439,8 @@ def evaluate_player_props(
     alerts = []
     for (market_key, player, point), data in groups.items():
         sharp_by_book = data["sharp_by_book"]
+        
+        # Require multiple sharp books to have quotes for both Over and Under to build robust consensus pricing
         book_pairs = [sides for sides in sharp_by_book.values() if "over" in sides and "under" in sides]
         if len(book_pairs) < UNIFIED_PROP_CONSENSUS_MIN_BOOKS:
             continue
@@ -531,9 +466,6 @@ def evaluate_player_props(
         if not best_by_side:
             continue
 
-        # Opposite-side suppression: a de-vigged prop has exactly one +EV side, so
-        # alert only the single strongest side per (player, line). Never emit both
-        # the Over and the Under of the same prop.
         best_side = max(best_by_side.items(), key=lambda item: item[1]["weighted"])
         for side, offer in (best_side,):
             fair_probability = fair_by_side[side]
@@ -552,6 +484,8 @@ def evaluate_player_props(
 
             fair_price_american = decimal_to_american(fair_decimal)
             sharp_reference = _player_prop_sharp_reference(sharp_by_book, side)
+            stat_display_name = _format_prop_stat_label(market_key)
+
             was_logged = log_bet_to_db(
                 matchup,
                 market_label,
@@ -563,11 +497,11 @@ def evaluate_player_props(
                 sport,
                 event["id"],
                 notes=(
-                        f"book={offer['book']};book_key={offer['book_key']};market=player_prop;"
-                        f"stat={market_key};line={point};devig={PROP_DEVIG_METHOD};"
-                        f"fair_probability={fair_probability:.4f};fair_decimal={fair_decimal:.4f}"
-                    ),
-                )
+                    f"book={offer['book']};book_key={offer['book_key']};market=player_prop;"
+                    f"stat={market_key};line={point};devig={PROP_DEVIG_METHOD};"
+                    f"fair_probability={fair_probability:.4f};fair_decimal={fair_decimal:.4f}"
+                ),
+            )
             if not was_logged:
                 print(f"Skipping prop alert because DB log failed for {selection}.")
                 continue
@@ -581,9 +515,9 @@ def evaluate_player_props(
                     "description": (
                         f"**+EV PLAYER PROP ALERT**\n\n"
                         f"**Match:** {matchup}\n"
-                        f"**Prop:** {selection} ({market_label})\n"
+                        f"**Prop:** {selection} ({stat_display_name})\n"
                         f"**Book:** [{offer['book']}]({app_link}) @ {decimal_to_american(offer['price'])}\n"
-                        f"**Sharp:** {sharp_reference}\n"
+                        f"**Sharp Consensus:** {sharp_reference} ({len(book_pairs)} books)\n"
                         f"**Fair Value:** {fair_price_american}\n"
                         f"**Edge:** {offer['edge'] * 100:.2f}%\n"
                         f"**De-vig:** {PROP_DEVIG_METHOD}\n"
@@ -617,8 +551,6 @@ def scan_markets(
     ]
     graded_bets = get_all_graded_bets()
     today_bets = get_today_bets()
-    # Opposite-side dedup: sides already alerted today, keyed by (event, market).
-    # Prevents alerting both moneylines / Over+Under of the same game across runs.
     logged_sides = _build_logged_sides(today_bets)
     exposure_tracker = ExposureTracker() if ENABLE_CORRELATION_LIMITS else None
 
@@ -788,10 +720,6 @@ def scan_markets(
 
                 selected_candidates = []
                 seen_outcomes = set()
-                # Sides already claimed for this event+market this run, seeded with
-                # sides already alerted today (cross-run). Only same-side (e.g.
-                # alternate-line) candidates may be added; opposite sides (both
-                # moneylines, Over vs Under) are suppressed.
                 claimed_sides = set(logged_sides.get((str(event["id"]), market_type.upper()), set()))
                 for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True):
                     if candidate["outcome_key"] in seen_outcomes:
@@ -901,7 +829,6 @@ def scan_markets(
                     evaluate_player_props(event, sport, soft_books, book_weights)
                 )
 
-    # Send highest-EV plays first so the best edges lead the Discord feed.
     alerts.sort(key=lambda item: item.get("edge", 0.0), reverse=True)
     for index, alert in enumerate(alerts):
         description = f"{alert_prefix}{alert['description']}" if alert_prefix else alert["description"]
