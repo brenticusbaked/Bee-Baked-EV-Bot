@@ -24,15 +24,29 @@ def import_csv():
     except Exception as e:
         print(f"[import] Could not verify existing history, proceeding cautiously: {e}")
 
-    # Robust path resolution to find bet_history.csv regardless of execution directory
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(base_dir, "bet_history.csv")
+    # Robust multi-location path resolution for bet_history.csv
+    possible_paths = [
+        "bet_history.csv",
+        os.path.join(os.getcwd(), "bet_history.csv"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "bet_history.csv"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bet_history.csv")
+    ]
     
-    print(f"Looking for bet_history.csv at: {csv_path}")
+    csv_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            csv_path = path
+            break
+            
+    if not csv_path:
+        print(f"Error: bet_history.csv could not be found in any search path: {possible_paths}")
+        return
+        
+    print(f"Reading bet_history.csv from: {csv_path}")
     try:
         df = pd.read_csv(csv_path)
-    except FileNotFoundError:
-        print(f"Error: bet_history.csv not found at {csv_path}.")
+    except Exception as e:
+        print(f"Error reading CSV at {csv_path}: {e}")
         return
 
     settled = df[df['status'].isin(['SETTLED_WIN', 'SETTLED_LOSS', 'SETTLED_PUSH', 'SETTLED_VOID'])].copy()
