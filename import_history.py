@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from db_manager import supabase
 
@@ -14,7 +15,7 @@ def import_csv():
         print("[import] Supabase client not configured.")
         return
 
-    # Check if history is already imported to make this safe to run forever
+    # Check if history is already imported
     try:
         existing = supabase.table("bets_log").select("id", count="exact").ilike("notes", "%Historical import%").limit(1).execute()
         if existing.count and existing.count > 0:
@@ -23,11 +24,15 @@ def import_csv():
     except Exception as e:
         print(f"[import] Could not verify existing history, proceeding cautiously: {e}")
 
-    print("Reading bet_history.csv...")
+    # Robust path resolution to find bet_history.csv regardless of execution directory
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    csv_path = os.path.join(base_dir, "bet_history.csv")
+    
+    print(f"Looking for bet_history.csv at: {csv_path}")
     try:
-        df = pd.read_csv("bet_history.csv")
+        df = pd.read_csv(csv_path)
     except FileNotFoundError:
-        print("Error: bet_history.csv not found.")
+        print(f"Error: bet_history.csv not found at {csv_path}.")
         return
 
     settled = df[df['status'].isin(['SETTLED_WIN', 'SETTLED_LOSS', 'SETTLED_PUSH', 'SETTLED_VOID'])].copy()
