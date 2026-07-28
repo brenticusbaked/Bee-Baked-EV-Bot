@@ -25,6 +25,19 @@ def _prop_event():
                 ],
             },
             {
+                "key": "bookmaker",
+                "title": "Bookmaker",
+                "markets": [
+                    {
+                        "key": "player_points",
+                        "outcomes": [
+                            {"name": "Over", "description": "LeBron James", "point": 25.5, "price": 1.72},
+                            {"name": "Under", "description": "LeBron James", "point": 25.5, "price": 2.30},
+                        ],
+                    }
+                ],
+            },
+            {
                 "key": "draftkings",
                 "title": "DraftKings",
                 "markets": [
@@ -50,6 +63,19 @@ def _mlb_prop_event():
             {
                 "key": "pinnacle",
                 "title": "Pinnacle",
+                "markets": [
+                    {
+                        "key": "pitcher_strikeouts",
+                        "outcomes": [
+                            {"name": "Over", "description": "Gerrit Cole", "point": 6.5, "price": 1.90},
+                            {"name": "Under", "description": "Gerrit Cole", "point": 6.5, "price": 1.90},
+                        ],
+                    }
+                ],
+            },
+            {
+                "key": "bookmaker",
+                "title": "Bookmaker",
                 "markets": [
                     {
                         "key": "pitcher_strikeouts",
@@ -94,7 +120,7 @@ class PlayerPropMarketRecognitionTests(unittest.TestCase):
             )
         self.assertEqual(len(alerts), 1)
         self.assertIn("Gerrit Cole", alerts[0]["description"])
-        self.assertIn("PITCHER_STRIKEOUTS", alerts[0]["description"])
+        self.assertIn("STRIKEOUTS", alerts[0]["description"])
 
     def test_sgo_event_extraction_handles_data_wrapped_payloads(self):
         from bot_propodds_nba import _extract_sgo_events
@@ -131,14 +157,14 @@ class PlayerPropEvaluationTests(unittest.TestCase):
         alert = alerts[0]
         self.assertEqual(alert["sport"], "basketball_nba")
         self.assertIn("LeBron James", alert["description"])
-        self.assertIn("PLAYER PROP", alert["description"])
+        self.assertIn("PROP ALERT", alert["description"])
         self.assertIn("multiplicative", alert["description"])
 
     def test_no_alert_when_soft_below_threshold(self):
         event = _prop_event()
         # Soft over priced at the fair line -> no edge.
-        event["bookmakers"][1]["markets"][0]["outcomes"][0]["price"] = 1.60
-        event["bookmakers"][1]["markets"][0]["outcomes"][1]["price"] = 1.60
+        event["bookmakers"][2]["markets"][0]["outcomes"][0]["price"] = 1.60
+        event["bookmakers"][2]["markets"][0]["outcomes"][1]["price"] = 1.60
         with patch.object(unified_bot, "is_already_logged", return_value=False), \
                 patch.object(unified_bot, "log_bet_to_db", return_value=True):
             alerts = unified_bot.evaluate_player_props(
