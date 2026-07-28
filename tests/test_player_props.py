@@ -120,7 +120,7 @@ class PlayerPropMarketRecognitionTests(unittest.TestCase):
             )
         self.assertEqual(len(alerts), 1)
         self.assertIn("Gerrit Cole", alerts[0]["description"])
-        self.assertIn("STRIKEOUTS", alerts[0]["description"])
+        self.assertIn("Strikeouts", alerts[0]["description"])
 
     def test_sgo_event_extraction_handles_data_wrapped_payloads(self):
         from bot_propodds_nba import _extract_sgo_events
@@ -174,6 +174,10 @@ class PlayerPropEvaluationTests(unittest.TestCase):
 
     def test_skips_group_missing_sharp_side(self):
         event = _prop_event()
+        
+        # Remove Bookmaker so we only have Pinnacle, which we will intentionally break
+        event["bookmakers"] = [b for b in event["bookmakers"] if b["key"] != "bookmaker"]
+        
         # Drop pinnacle under -> incomplete baseline, cannot de-vig.
         event["bookmakers"][0]["markets"][0]["outcomes"] = [
             event["bookmakers"][0]["markets"][0]["outcomes"][0]
