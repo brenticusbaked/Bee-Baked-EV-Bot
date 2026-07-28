@@ -97,7 +97,8 @@ UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVE
 DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
 ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_TIME_DECAY = os.getenv("ENABLE_TIME_DECAY", "true").strip().lower() in {"1", "true", "yes", "on"}
-ENABLE_CORRELATION_LIMITS = os.getenv("ENABLE_CORRELATION_LIMITS", "true").strip().lower() in {"1", "true", "yes", "on"}
+# Hardcoded to False to completely remove the 25-unit cap constraint
+ENABLE_CORRELATION_LIMITS = False
 ENABLE_MARKET_EFFICIENCY = os.getenv("ENABLE_MARKET_EFFICIENCY", "true").strip().lower() in {"1", "true", "yes", "on"}
 MIN_EFFICIENCY_SCORE = env_float("MIN_EFFICIENCY_SCORE", 0.30)
 
