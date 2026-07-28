@@ -2,7 +2,6 @@ import pandas as pd
 from db_manager import supabase
 
 def decimal_to_american(decimal_odds):
-    """Convert decimal odds to American format for Supabase."""
     if pd.isna(decimal_odds) or decimal_odds <= 1.0:
         return "-110"
     if decimal_odds >= 2.0:
@@ -11,6 +10,19 @@ def decimal_to_american(decimal_odds):
         return f"{int(round(-100 / (decimal_odds - 1.0)))}"
 
 def import_csv():
+    if not supabase:
+        print("[import] Supabase client not configured.")
+        return
+
+    # Check if history is already imported to make this safe to run forever
+    try:
+        existing = supabase.table("bets_log").select("id", count="exact").ilike("notes", "%Historical import%").limit(1).execute()
+        if existing.count and existing.count > 0:
+            print(f"[import] Historical data already detected in bets_log ({existing.count} records). Skipping import.")
+            return
+    except Exception as e:
+        print(f"[import] Could not verify existing history, proceeding cautiously: {e}")
+
     print("Reading bet_history.csv...")
     try:
         df = pd.read_csv("bet_history.csv")
@@ -18,7 +30,6 @@ def import_csv():
         print("Error: bet_history.csv not found.")
         return
 
-    # Filter for settled bets using exact CSV column names
     settled = df[df['status'].isin(['SETTLED_WIN', 'SETTLED_LOSS', 'SETTLED_PUSH', 'SETTLED_VOID'])].copy()
     
     status_map = {
@@ -38,7 +49,7 @@ def import_csv():
             "market": str(row['type']).upper() if pd.notna(row['type']) else "UNKNOWN",
             "odds": decimal_to_american(row['odds']),
             "edge": float(row['ev']) if pd.notna(row['ev']) else 0.0,
-            "units": round(raw_amount / 3.0, 2),  # Normalizes to $3 unit base
+            "units": round(raw_amount / 3.0, 2),
             "sport": str(row['sports']).lower() if pd.notna(row['sports']) else "unknown",
             "result": status_map[row['status']],
             "date": row['time_placed_iso'],
@@ -47,12 +58,7 @@ def import_csv():
         })
         
     print(f"Found {len(rows_to_insert)} settled bets to import.")
-    
-    if not supabase:
-        print("Supabase client not configured. Check your .env file.")
-        return
 
-    # Push to Supabase in chunks of 1000
     chunk_size = 1000
     for i in range(0, len(rows_to_insert), chunk_size):
         chunk = rows_to_insert[i:i + chunk_size]
