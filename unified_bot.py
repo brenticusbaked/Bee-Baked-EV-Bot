@@ -86,8 +86,7 @@ ENABLE_HISTORY_PROP_TYPE_OVERLAY = os.getenv("ENABLE_HISTORY_PROP_TYPE_OVERLAY",
 PROP_DEVIG_METHOD = "multiplicative"
 PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.125)
 PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
-# Require at least 2 sharp books by default to form a consensus price, avoiding single-book outliers
-UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(2, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 2))
+UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(1, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 1))
 SHARP_PROP_BOOKS = {
     book.strip().lower()
     for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
@@ -137,7 +136,6 @@ def _player_prop_sharp_reference(sharp_by_book: dict, side: str) -> str:
 
 
 def _format_prop_stat_label(market_key: str) -> str:
-    """Format technical market keys into clean reader-facing labels (e.g. Hits, Total Bases)."""
     key = str(market_key).strip().lower()
     mapping = {
         "batter_hits": "Hits",
@@ -160,7 +158,6 @@ def _format_prop_stat_label(market_key: str) -> str:
 
 
 def _l10_context_line(player: str, market_key: str, point: object, side: str, sport: str) -> str:
-    """Builds the Last 10 hit rate context line and includes the last game played details."""
     if not ENABLE_L10_CONTEXT:
         return ""
     if point in (None, ""):
@@ -248,6 +245,23 @@ def _effective_ev_floor() -> float:
         if validated is not None:
             floor = max(floor, validated)
     return floor
+
+
+def _market_ev_threshold(market_type: str) -> float:
+    market_family = _market_family(market_type)
+    if market_family == "alternate":
+        threshold = UNIFIED_ALT_MARKET_EV_THRESHOLD
+    elif market_family == "partial":
+        threshold = UNIFIED_PARTIAL_MARKET_EV_THRESHOLD
+    elif market_family == "spreads":
+        threshold = UNIFIED_SPREAD_EV_THRESHOLD
+    elif market_family == "h2h":
+        threshold = UNIFIED_H2H_EV_THRESHOLD
+    elif market_family == "totals":
+        threshold = UNIFIED_TOTAL_EV_THRESHOLD
+    else:
+        threshold = UNIFIED_EV_THRESHOLD
+    return max(threshold, _effective_ev_floor())
 
 
 def _prop_ev_threshold(market_key: str) -> float:
@@ -440,7 +454,6 @@ def evaluate_player_props(
     for (market_key, player, point), data in groups.items():
         sharp_by_book = data["sharp_by_book"]
         
-        # Require multiple sharp books to have quotes for both Over and Under to build robust consensus pricing
         book_pairs = [sides for sides in sharp_by_book.values() if "over" in sides and "under" in sides]
         if len(book_pairs) < UNIFIED_PROP_CONSENSUS_MIN_BOOKS:
             continue
