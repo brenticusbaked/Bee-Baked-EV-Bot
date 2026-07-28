@@ -86,7 +86,7 @@ jobs:
           ENABLE_UNIFIED_SCAN: "true"
           ENABLE_ARBITRAGE_SCAN: "true"
           ENABLE_CLV_TRACKER: "true"
-          ENABLE_SGO_GRADER: "false"
+          ENABLE_SGO_GRADER: "true"
           ENABLE_EXECUTION_DESK: "true"
           ENABLE_ODDS_SECONDARY_PULL: "true"
           ENABLE_ODDS_TERTIARY_PULL: "true"
