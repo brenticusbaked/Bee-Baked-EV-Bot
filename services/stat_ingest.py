@@ -8,7 +8,7 @@ Supports multi-day backfilling via STAT_INGEST_LOOKBACK_DAYS.
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List
 
 import db_manager
