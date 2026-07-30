@@ -6,6 +6,7 @@ import {
   isTennisToken,
   resolveSportsFromActive,
 } from "./sports.ts";
+import { mainMarketsFor as filterMainMarkets } from "./markets.ts";
 
 type OddsOutcome = {
   name: string;
@@ -79,7 +80,7 @@ const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
 // bill as an extra region-equivalent.
 const BOOKMAKERS = Deno.env.get("ODDS_API_TARGET_BOOKS") ??
   "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers";
-const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals,h2h_1st_5_innings,runs_1st_inning";
+const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals,h2h_1st_5_innings";
 const WNBA_PROP_MARKETS = Deno.env.get("ODDS_API_WNBA_PROP_MARKETS") ??
   "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals,player_turnovers,player_points_rebounds_assists,player_points_rebounds,player_points_assists,player_rebounds_assists,player_field_goals,player_frees_made,player_frees_attempts";
 const NFL_PROP_MARKETS = Deno.env.get("ODDS_API_NFL_PROP_MARKETS") ??
@@ -89,7 +90,8 @@ const NFL_PROP_MARKETS = Deno.env.get("ODDS_API_NFL_PROP_MARKETS") ??
 // pull cheap (1 market x regions). Override per-sport main markets here.
 const TENNIS_MAIN_MARKETS = Deno.env.get("ODDS_API_TENNIS_MARKETS") ?? "h2h";
 function mainMarketsFor(sportKey: string): string {
-  return sportKey.startsWith("tennis") ? TENNIS_MAIN_MARKETS : MAIN_MARKETS;
+  const rawMarkets = sportKey.startsWith("tennis") ? TENNIS_MAIN_MARKETS : MAIN_MARKETS;
+  return filterMainMarkets(sportKey, rawMarkets);
 }
 // Soft (recreational) enrichment pull: US region, rec books only.
 const ENRICH_REGIONS = Deno.env.get("ODDS_API_ENRICH_REGIONS") ?? "us";

@@ -14,6 +14,9 @@ COMPLETED_STATUSES = {"completed", "final", "closed", "over", "ended"}
 # The cache keeps games around for live handling for roughly a few hours after
 # scheduled start, so we tolerate that window before calling a game started.
 START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 180.0)
+# Scheduled fixtures can drift a bit in the cache or across time zones, so we
+# allow a broader buffer before treating them as truly stale.
+SCHEDULE_GRACE_MINUTES = env_float("SCRATCH_GUARD_SCHEDULE_GRACE_MINUTES", 360.0)
 
 
 def check_event_status(event: dict) -> Tuple[bool, str]:
@@ -59,14 +62,14 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
 
     now = datetime.now(timezone.utc)
     commence_utc = commence.astimezone(timezone.utc)
+    minutes_past_start = (now - commence_utc).total_seconds() / 60.0
 
-    if status in STARTED_STATUSES and now > commence_utc:
-        if (now - commence_utc).total_seconds() > START_GRACE_MINUTES * 60.0:
+    if status in STARTED_STATUSES:
+        if minutes_past_start > START_GRACE_MINUTES:
             return False, f"event {status}"
+        return True, "ok"
 
-    if now > commence_utc:
-        if (now - commence_utc).total_seconds() <= START_GRACE_MINUTES * 60.0:
-            return True, "ok"
+    if minutes_past_start > SCHEDULE_GRACE_MINUTES:
         return False, "event already started"
 
     return True, "ok"
