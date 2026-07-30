@@ -460,9 +460,13 @@ def is_already_logged(*args) -> bool:
 
 def update_bet_clv(bet_id: Any, closing_odds: Any, clv_pct: Any, closing_line: Any = None):
     def action():
-        update_data = {"closing_odds": closing_odds, "clv_pct": clv_pct}
+        update_data = {
+            "closing_line_american": closing_odds,
+            "clv_edge_pct": clv_pct,
+            "clv_tracked_at": datetime.now(timezone.utc).isoformat(),
+        }
         if closing_line is not None:
-            update_data["closing_line"] = closing_line
+            update_data["closing_line_decimal"] = closing_line
         supabase.table("bets_log").update(update_data).eq("id", bet_id).execute()
     _safe_execute(action, None)
 
