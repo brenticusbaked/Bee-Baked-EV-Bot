@@ -43,6 +43,14 @@ def validate_supabase_connection() -> bool:
         return False
 
 
+def _force_postgrest_http1(client):
+    try:
+        if hasattr(client, "postgrest") and hasattr(client.postgrest, "session"):
+            client.postgrest.session.headers.update({"Connection": "close"})
+    except Exception:
+        pass
+
+
 def get_market_cache(max_age_minutes: Optional[int] = None) -> Dict[str, Any]:
     def action():
         res = supabase.table("market_cache").select("*").execute()
@@ -97,7 +105,8 @@ def get_all_graded_bets() -> List[Dict[str, Any]]:
     return _safe_execute(action, [])
 
 
-def log_bet_to_db(bet_data: Dict[str, Any]) -> bool:
+def log_bet_to_db(*args, **kwargs) -> bool:
+    bet_data = args[0] if args else kwargs
     def action():
         payload = dict(bet_data)
         if "created_at" not in payload:
@@ -187,6 +196,10 @@ def log_execution_report_to_db(report: Dict[str, Any]) -> bool:
     return _safe_execute(action, False)
 
 
+def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    return dict(report)
+
+
 def get_latest_rows(table: str, column: str, limit: int = 5) -> List[Dict[str, Any]]:
     def action():
         res = supabase.table(table).select("*").order(column, desc=True).limit(limit).execute()
@@ -203,6 +216,16 @@ def get_table_count(table: str) -> int:
 
 def assemble_cache(fetch_func=None, odds_data=None) -> Dict[str, Any]:
     if odds_data:
+        if isinstance(odds_data, list):
+            grouped = {}
+            for row in odds_data:
+                sport = row.get("sport_key")
+                if not sport:
+                    continue
+                if sport not in grouped:
+                    grouped[sport] = []
+                grouped[sport].append(row)
+            return grouped
         return odds_data
     if fetch_func:
         return fetch_func()
@@ -214,7 +237,8 @@ def _stat_log_table(sport: str) -> Optional[str]:
         "baseball_mlb": "mlb_player_logs",
         "basketball_nba": "nba_player_logs",
         "football_nfl": "nfl_player_logs",
-        "icehockey_nhl": "nhl_player_logs"
+        "icehockey_nhl": "nhl_player_logs",
+        "basketball_wnba": "wnba_player_logs"
     }
     if sport in mapping:
         return mapping[sport]
@@ -229,12 +253,25 @@ def _stat_value_for_prop(row: dict, prop: str) -> Optional[float]:
             return float(row[prop])
         except (TypeError, ValueError):
             pass
+    for k, v in row.items():
+        if k.lower() == prop.lower() and v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
     stats = row.get("stats")
-    if isinstance(stats, dict) and prop in stats and stats[prop] is not None:
-        try:
-            return float(stats[prop])
-        except (TypeError, ValueError):
-            pass
+    if isinstance(stats, dict):
+        if prop in stats and stats[prop] is not None:
+            try:
+                return float(stats[prop])
+            except (TypeError, ValueError):
+                pass
+        for k, v in stats.items():
+            if k.lower() == prop.lower() and v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
     return None
 
 
