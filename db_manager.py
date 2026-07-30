@@ -448,7 +448,90 @@ def log_execution_report_to_db(report: Dict[str, Any]) -> bool:
 
 
 def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
-    return dict(report)
+    def _enum_value(value: Any) -> Any:
+        return value.value if hasattr(value, "value") else value
+
+    def _datetime_value(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    payload = dict(report)
+    parent_order = payload.get("parent_order") or payload.get("order") or {}
+    if isinstance(parent_order, dict):
+        order = dict(parent_order)
+        order.setdefault("order_id", parent_order.get("order_id"))
+        order["side"] = _enum_value(order.get("side"))
+        order["order_type"] = _enum_value(order.get("order_type"))
+        order["time_in_force"] = _enum_value(order.get("time_in_force"))
+        order["created_at"] = _datetime_value(order.get("created_at"))
+        for key in ("filled_quantity", "fill_rate", "average_price", "slippage", "edge_capture", "fees"):
+            if key not in order and isinstance(payload.get("metrics"), dict):
+                order[key] = payload["metrics"].get(key)
+        if isinstance(payload.get("metrics"), dict):
+            order.update({key: payload["metrics"].get(key) for key in ("filled_quantity", "fill_rate", "average_price", "slippage", "edge_capture", "fees")})
+        payload["order"] = order
+        payload["parent_order"] = order
+
+    child_orders = []
+    for child in payload.get("child_orders", []) or []:
+        if not isinstance(child, dict):
+            continue
+        normalized_child = dict(child)
+        normalized_child["side"] = _enum_value(normalized_child.get("side"))
+        normalized_child["status"] = _enum_value(normalized_child.get("status"))
+        child_orders.append(normalized_child)
+    payload["child_orders"] = child_orders
+
+    fills = []
+    fills_by_child: Dict[str, List[Dict[str, Any]]] = {}
+    for index, fill in enumerate(payload.get("fills", []) or [], start=1):
+        if not isinstance(fill, dict):
+            continue
+        normalized_fill = dict(fill)
+        normalized_fill["side"] = _enum_value(normalized_fill.get("side"))
+        normalized_fill["filled_at"] = _datetime_value(normalized_fill.get("filled_at"))
+        child_order_id = normalized_fill.get("child_order_id")
+        if child_order_id:
+            normalized_fill.setdefault("fill_id", f"{child_order_id}-{index}")
+            fills_by_child.setdefault(child_order_id, []).append(normalized_fill)
+        fills.append(normalized_fill)
+    payload["fills"] = fills
+
+    venue_metrics = []
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    for index, child in enumerate(child_orders, start=1):
+        child_order_id = child.get("child_order_id")
+        child_fills = fills_by_child.get(child_order_id, [])
+        routed_quantity = _coerce_numeric(child.get("quantity")) or 0.0
+        filled_quantity = sum(_coerce_numeric(fill.get("quantity")) or 0.0 for fill in child_fills)
+        notional = sum(((_coerce_numeric(fill.get("quantity")) or 0.0) * (_coerce_numeric(fill.get("price")) or 0.0)) for fill in child_fills)
+        fee_total = sum(_coerce_numeric(fill.get("fee")) or 0.0 for fill in child_fills)
+        average_fill_price = (notional / filled_quantity) if filled_quantity else None
+        route_score = _coerce_numeric(child.get("route_score"))
+        metadata = child.get("metadata") if isinstance(child.get("metadata"), dict) else {}
+        venue_metric = {
+            "metric_id": f"{child_order_id}-M{index}" if child_order_id else None,
+            "parent_order_id": child.get("parent_order_id") or (payload.get("order") or {}).get("order_id"),
+            "child_order_id": child_order_id,
+            "venue_id": child.get("venue_id"),
+            "symbol": child.get("symbol"),
+            "status": child.get("status"),
+            "routed_quantity": round(routed_quantity, 6),
+            "filled_quantity": round(filled_quantity, 6),
+            "fill_rate": round(filled_quantity / routed_quantity, 6) if routed_quantity else 0.0,
+            "average_fill_price": round(average_fill_price, 6) if average_fill_price is not None else None,
+            "route_score": route_score,
+            "fee": round(fee_total, 6),
+            "latency_ms": metadata.get("latency_ms"),
+            "fill_probability": metadata.get("fill_probability"),
+            "edge_capture": metrics.get("edge_capture"),
+            "measured_at": child_fills[0].get("filled_at") if child_fills else datetime.now(timezone.utc).isoformat(),
+        }
+        venue_metrics.append(venue_metric)
+    payload["venue_metrics"] = venue_metrics
+
+    return payload
 
 
 def get_latest_rows(table: str, column: str, limit: int = 5) -> List[Dict[str, Any]]:
