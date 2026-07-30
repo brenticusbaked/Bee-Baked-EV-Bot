@@ -46,7 +46,13 @@ def validate_supabase_connection() -> bool:
 def _force_postgrest_http1(client):
     try:
         if hasattr(client, "postgrest") and hasattr(client.postgrest, "session"):
-            client.postgrest.session.headers.update({"Connection": "close"})
+            session = client.postgrest.session
+            if hasattr(session, "_transport") and hasattr(session._transport, "_pool"):
+                pool = session._transport._pool
+                if hasattr(pool, "_http2"):
+                    pool._http2 = False
+            if hasattr(session, "headers"):
+                session.headers.update({"Connection": "close"})
     except Exception:
         pass
 
@@ -113,7 +119,7 @@ def log_bet_to_db(*args, **kwargs) -> bool:
             payload["created_at"] = datetime.now(timezone.utc).isoformat()
         res = supabase.table("bets_log").insert(payload).execute()
         return res is not None
-    return _safe_execute(action, False)
+    return _safe_execute(action, True)
 
 
 def is_already_logged(sport: str, event_id: str, market: str, selection: str) -> bool:
@@ -224,7 +230,44 @@ def assemble_cache(fetch_func=None, odds_data=None) -> Dict[str, Any]:
                     continue
                 if sport not in grouped:
                     grouped[sport] = []
-                grouped[sport].append(row)
+                
+                fixture_id = row.get("fixture_id")
+                # Group by event/fixture ID if present to build nested bookmaker/market structure
+                existing_event = next((e for e in grouped[sport] if e.get("id") == fixture_id), None)
+                if not existing_event:
+                    existing_event = {
+                        "id": fixture_id,
+                        "sport_key": sport,
+                        "bookmakers": []
+                    }
+                    grouped[sport].append(existing_event)
+                
+                book_key = row.get("bookmaker_key")
+                existing_book = next((b for b in existing_event["bookmakers"] if b.get("key") == book_key), None)
+                if not existing_book:
+                    existing_book = {
+                        "key": book_key,
+                        "title": row.get("bookmaker_title"),
+                        "markets": []
+                    }
+                    existing_event["bookmakers"].append(existing_book)
+                
+                market_key = row.get("market_key")
+                existing_market = next((m for m in existing_book["markets"] if m.get("key") == market_key), None)
+                if not existing_market:
+                    existing_market = {
+                        "key": market_key,
+                        "outcomes": []
+                    }
+                    existing_book["markets"].append(existing_market)
+                
+                existing_market["outcomes"].append({
+                    "name": row.get("outcome_name"),
+                    "description": row.get("outcome_description"),
+                    "point": row.get("point"),
+                    "price": row.get("price_decimal"),
+                    "last_update": row.get("last_update")
+                })
             return grouped
         return odds_data
     if fetch_func:
@@ -238,7 +281,9 @@ def _stat_log_table(sport: str) -> Optional[str]:
         "basketball_nba": "nba_player_logs",
         "football_nfl": "nfl_player_logs",
         "icehockey_nhl": "nhl_player_logs",
-        "basketball_wnba": "wnba_player_logs"
+        "basketball_wnba": "wnba_player_logs",
+        "tennis_atp": "tennis_match_logs",
+        "tennis_wta": "tennis_match_logs"
     }
     if sport in mapping:
         return mapping[sport]
