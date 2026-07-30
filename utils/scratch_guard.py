@@ -11,9 +11,9 @@ from utils.thresholds import env_float
 CANCELLED_STATUSES = {"cancelled", "postponed", "suspended", "canceled"}
 STARTED_STATUSES = {"in_progress", "live", "in_play", "started"}
 COMPLETED_STATUSES = {"completed", "final", "closed", "over", "ended"}
-# Small grace window so a game is not dropped just because the feed says the
-# scheduled start time has passed by a minute or two but play has not begun yet.
-START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 15.0)
+# The cache keeps games around for live handling for roughly a few hours after
+# scheduled start, so we tolerate that window before calling a game started.
+START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 180.0)
 
 
 def check_event_status(event: dict) -> Tuple[bool, str]:
