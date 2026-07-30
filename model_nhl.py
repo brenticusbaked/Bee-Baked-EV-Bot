@@ -5,6 +5,7 @@ from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import get_json
 from services.odds_reference import format_pinnacle_reference
+from services.last_ten import build_last_ten_context_line
 from utils.links import sportsbook_search_link
 from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
 from utils.odds import decimal_to_american
@@ -137,6 +138,7 @@ def run_nhl_model():
                     f"**Fair Value:** {fair_price}\n"
                     f"**Model Edge:** {edge * 100:.2f}%\n"
                     f"**Suggested:** {units:.2f} Units"
+                    f"{build_last_ten_context_line(better_team, 'spreads', '-1.5', 'over', 'icehockey_nhl')}"
                 )
             )
 

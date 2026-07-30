@@ -9,6 +9,7 @@ from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import request
+from services.last_ten import build_last_ten_context_line
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
 from utils.prop_pricing import (
@@ -759,6 +760,7 @@ def _process_sgo_event(
                         f"**Fair Source:** {probability_source} ({consensus_books} book consensus)\n"
                         f"**Suggested:** {units:.2f} Units\n"
                         f"**Book Weight:** {book_weight:.2f}x"
+                        f"{build_last_ten_context_line(player_name, stat_type, line_value, side, sport_key)}"
                     ),
                 }
             )

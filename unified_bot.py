@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from db_manager import (
     get_all_graded_bets,
-    get_l10_hit_rate,
     get_master_cache,
     get_today_bets,
     is_already_logged,
@@ -17,6 +16,7 @@ from models.talent_model import TalentContext, adjusted_fair_probability, build_
 from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
+from services.last_ten import build_last_ten_context_line
 from services.history_calibration import prop_type_ev_adjustment, validated_ev_floor
 from utils.correlation import ExposureEntry, ExposureTracker, check_exposure
 from utils.kelly import dynamic_kelly_units
@@ -204,47 +204,7 @@ def _format_prop_stat_label(market_key: str) -> str:
 
 
 def _l10_context_line(target_name: str, market_key: str, point: object, side: str, sport: str) -> str:
-    if not ENABLE_L10_CONTEXT:
-        return ""
-    try:
-        line_value = float(point) if point not in (None, "") else 0.0
-    except (TypeError, ValueError):
-        line_value = 0.0
-
-    result = get_l10_hit_rate(target_name, market_key, line_value, sport)
-    if not result or not result.get("games"):
-        return ""
-    
-    games = int(result["games"])
-    cleared = int(result["over"]) if str(side).strip().lower() == "over" else int(result["under"])
-    direction = "cleared" if str(side).strip().lower() == "over" else "stayed under"
-    
-    if _is_player_prop_market(market_key):
-        stat_label = _format_prop_stat_label(market_key)
-        target_label = target_name
-    else:
-        stat_label = market_key.upper()
-        target_label = target_name
-
-    last_game_str = ""
-    last_game = result.get("last_game")
-    if last_game and last_game.get("game_date"):
-        g_date = last_game.get("game_date")
-        g_val = last_game.get("value")
-        last_game_str = f"\n🕒 **Last Played ({g_date}):** Recorded {g_val:g}."
-
-    if _is_player_prop_market(market_key):
-        return (
-            f"\n📊 **Historical Context:** {target_label} has {direction} {line_value:g} "
-            f"{stat_label} in {cleared}/{games} of their last {games} games."
-            f"{last_game_str}"
-        )
-    else:
-        return (
-            f"\n📊 **Historical Context:** {target_label} has {direction} in "
-            f"{cleared}/{games} of their last {games} games."
-            f"{last_game_str}"
-        )
+    return build_last_ten_context_line(target_name, market_key, point, side, sport, enabled=ENABLE_L10_CONTEXT)
 
 
 def _market_family(market_type: str) -> str:

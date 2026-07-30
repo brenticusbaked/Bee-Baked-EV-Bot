@@ -3,6 +3,7 @@ from services.alerts import send_discord_alert
 from services.http_client import get_json as _http_get_json
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.odds_reference import format_pinnacle_reference
+from services.last_ten import build_last_ten_context_line
 from utils.links import sportsbook_search_link
 from utils.model_pricing import fair_american_from_probability, model_edge_from_probability
 from utils.odds import decimal_to_american, quarter_kelly_units, american_to_decimal
@@ -270,6 +271,7 @@ def run_mlb_model():
                     f"**Model Edge:** {edge * 100:.2f}% | **Fair:** {fair_p}\n"
                     f"**Primary Bet:** {u_size:.2f} Units\n\n"
                     f"{angles_text}"
+                    f"{build_last_ten_context_line(better_team, 'h2h', '', 'over', 'baseball_mlb')}"
                 )
             )
 

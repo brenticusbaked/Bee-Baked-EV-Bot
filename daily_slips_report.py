@@ -58,11 +58,19 @@ def build_daily_slips_report() -> str:
     pushes = int((settled_df.get("result", "").astype(str) == "PUSH").sum()) if not settled_df.empty else 0
 
     net_units = 0.0
+    risked_units = 0.0
     if not settled_df.empty:
+        settled_results = settled_df.get("result", "").astype(str).str.upper()
         net_units = sum(
             profit_for_result(row.get("odds", 0), row.get("units", 0), row.get("result", ""))
             for _, row in settled_df.iterrows()
         )
+        risked_units = sum(abs(float(row.get("units", 0) or 0.0)) for _, row in settled_df.iterrows())
+        settled_df = settled_df.copy()
+        settled_df["result"] = settled_results
+
+    roi_pct = (net_units / risked_units * 100.0) if risked_units > 0 else 0.0
+    win_pct = ((wins / (wins + losses + pushes)) * 100.0) if (wins + losses + pushes) > 0 else 0.0
 
     clv_beaten_rate = 0.0
     avg_clv = 0.0
@@ -89,7 +97,9 @@ def build_daily_slips_report() -> str:
         f"Settled Record: {wins}-{losses}"
         + (f"-{pushes}" if pushes else "")
         + "\n"
-        f"Settled Net Units: {net_units:+.2f}\n"
+        f"Win%: {win_pct:.1f}\n"
+        f"ROI: {roi_pct:+.1f}%\n"
+        f"Net Units: {net_units:+.2f}\n"
         f"CLV Updates: {len(clv_df)}\n"
         f"CLV Beaten: {clv_beaten_rate:.1f}%\n"
         f"Avg CLV Edge: {avg_clv:+.2f}%\n"

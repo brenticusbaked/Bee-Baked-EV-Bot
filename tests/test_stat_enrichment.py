@@ -60,10 +60,11 @@ class L10ContextLineTest(unittest.TestCase):
     def test_over_context_formatting(self):
         with mock.patch.object(unified_bot, "ENABLE_L10_CONTEXT", True), \
              mock.patch.object(
-                 unified_bot, "get_l10_hit_rate",
+                 db_manager, "get_l10_hit_rate",
                  return_value={"over": 7, "under": 3, "games": 10, "line": 1.5},
              ):
             line = unified_bot._l10_context_line("Wyatt Langford", "batter_total_bases", 1.5, "over", "baseball_mlb")
+        self.assertIn("Last 10", line)
         self.assertIn("7/10", line)
         self.assertIn("cleared", line)
         self.assertIn("Wyatt Langford", line)
@@ -74,8 +75,9 @@ class L10ContextLineTest(unittest.TestCase):
 
     def test_no_data_returns_empty(self):
         with mock.patch.object(unified_bot, "ENABLE_L10_CONTEXT", True), \
-             mock.patch.object(unified_bot, "get_l10_hit_rate", return_value=None):
-            self.assertEqual(unified_bot._l10_context_line("X", "batter_hits", 0.5, "over", "baseball_mlb"), "")
+             mock.patch.object(db_manager, "get_l10_hit_rate", return_value=None):
+            self.assertIn("Last 10", unified_bot._l10_context_line("X", "batter_hits", 0.5, "over", "baseball_mlb"))
+            self.assertIn("unavailable", unified_bot._l10_context_line("X", "batter_hits", 0.5, "over", "baseball_mlb"))
 
 
 class SoccerRoutingTest(unittest.TestCase):
