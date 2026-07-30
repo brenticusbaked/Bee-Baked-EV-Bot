@@ -186,7 +186,7 @@ def _format_prop_stat_label(market_key: str) -> str:
         "player_passing_tds": "Passing Touchdowns",
         "player_rushing_yds": "Rushing Yards",
         "player_rushing_yards": "Rushing Yards",
-        "player_rushing_tds": "Rushing Touchdowns",
+        "player_rushing_tds": "Passing Touchdowns",
         "player_receptions": "Receptions",
         "player_receiving_yds": "Receiving Yards",
         "player_receiving_yards": "Receiving Yards",
@@ -203,36 +203,48 @@ def _format_prop_stat_label(market_key: str) -> str:
     return clean.replace("_", " ").title()
 
 
-def _l10_context_line(player: str, market_key: str, point: object, side: str, sport: str) -> str:
+def _l10_context_line(target_name: str, market_key: str, point: object, side: str, sport: str) -> str:
     if not ENABLE_L10_CONTEXT:
         return ""
-    if point in (None, ""):
-        return ""
     try:
-        line_value = float(point)
+        line_value = float(point) if point not in (None, "") else 0.0
     except (TypeError, ValueError):
-        return ""
-    result = get_l10_hit_rate(player, market_key, line_value, sport)
+        line_value = 0.0
+
+    result = get_l10_hit_rate(target_name, market_key, line_value, sport)
     if not result or not result.get("games"):
         return ""
     
     games = int(result["games"])
     cleared = int(result["over"]) if str(side).strip().lower() == "over" else int(result["under"])
     direction = "cleared" if str(side).strip().lower() == "over" else "stayed under"
-    stat_label = _format_prop_stat_label(market_key)
     
+    if _is_player_prop_market(market_key):
+        stat_label = _format_prop_stat_label(market_key)
+        target_label = target_name
+    else:
+        stat_label = market_key.upper()
+        target_label = target_name
+
     last_game_str = ""
     last_game = result.get("last_game")
     if last_game and last_game.get("game_date"):
         g_date = last_game.get("game_date")
         g_val = last_game.get("value")
-        last_game_str = f"\n🕒 **Last Played ({g_date}):** Recorded {g_val:g} {stat_label}."
+        last_game_str = f"\n🕒 **Last Played ({g_date}):** Recorded {g_val:g}."
 
-    return (
-        f"\n📊 **Historical Context:** {player} has {direction} {line_value:g} "
-        f"{stat_label} in {cleared}/{games} of their last {games} games."
-        f"{last_game_str}"
-    )
+    if _is_player_prop_market(market_key):
+        return (
+            f"\n📊 **Historical Context:** {target_label} has {direction} {line_value:g} "
+            f"{stat_label} in {cleared}/{games} of their last {games} games."
+            f"{last_game_str}"
+        )
+    else:
+        return (
+            f"\n📊 **Historical Context:** {target_label} has {direction} in "
+            f"{cleared}/{games} of their last {games} games."
+            f"{last_game_str}"
+        )
 
 
 def _market_family(market_type: str) -> str:
@@ -862,6 +874,9 @@ def scan_markets(
                     td = candidate.get("time_decay")
                     eff_text = f"\n**Mkt Efficiency:** {eff.score:.0%}" if eff else ""
                     td_text = f"\n**Time Phase:** {td.phase} ({td.hours_to_event:.1f}h)" if td else ""
+                    
+                    # Added L10 Context Line for Main Markets (Spreads, Totals, H2H)
+                    l10_context = _l10_context_line(final["name"], market_type, final.get("point"), final["name"], sport)
 
                     app_link = get_mobile_app_link(final["book_key"], final["id"], event["id"], matchup)
                     alerts.append(
@@ -879,6 +894,7 @@ def scan_markets(
                                 f"**Book Weight:** {book_weight:.2f}x\n"
                                 f"**Suggested:** {units:.2f} Units"
                                 f"{eff_text}{td_text}"
+                                f"{l10_context}"
                             )
                         }
                     )
