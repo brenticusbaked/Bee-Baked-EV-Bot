@@ -1,6 +1,9 @@
 import os
+import re
 import pandas as pd
 from db_manager import supabase
+
+_HISTORICAL_NOTE_RE = re.compile(r"^Historical import - ID:\s*(?P<bet_id>.+?)\s*$")
 
 def decimal_to_american(decimal_odds):
     if pd.isna(decimal_odds) or decimal_odds <= 1.0:
@@ -14,15 +17,6 @@ def import_csv():
     if not supabase:
         print("[import] Supabase client not configured.")
         return
-
-    # Check if history is already imported
-    try:
-        existing = supabase.table("bets_log").select("id", count="exact").ilike("notes", "%Historical import%").limit(1).execute()
-        if existing.count and existing.count > 0:
-            print(f"[import] Historical data already detected in bets_log ({existing.count} records). Skipping import.")
-            return
-    except Exception as e:
-        print(f"[import] Could not verify existing history, proceeding cautiously: {e}")
 
     # Robust multi-location path resolution for bet_history.csv
     possible_paths = [
@@ -57,9 +51,33 @@ def import_csv():
         'SETTLED_PUSH': 'push',
         'SETTLED_VOID': 'push'
     }
-    
+
+    existing_history_ids = set()
+    try:
+        existing_rows = (
+            supabase.table("bets_log")
+            .select("notes")
+            .ilike("notes", "Historical import - ID:%")
+            .execute()
+            .data
+            or []
+        )
+        for row in existing_rows:
+            note = str(row.get("notes") or "").strip()
+            match = _HISTORICAL_NOTE_RE.match(note)
+            if match:
+                existing_history_ids.add(match.group("bet_id"))
+        if existing_history_ids:
+            print(f"[import] Detected {len(existing_history_ids)} previously imported historical bet(s).")
+    except Exception as e:
+        print(f"[import] Could not verify existing history, proceeding cautiously: {e}")
+
     rows_to_insert = []
     for _, row in settled.iterrows():
+        bet_id = str(row.get('bet_id') or "").strip()
+        if bet_id and bet_id in existing_history_ids:
+            continue
+
         raw_amount = float(row['amount']) if pd.notna(row['amount']) else 0.0
         
         rows_to_insert.append({
@@ -73,7 +91,7 @@ def import_csv():
             "result": status_map[row['status']],
             "date": row['time_placed_iso'],
             "graded_at": row['time_settled_iso'],
-            "notes": f"Historical import - ID: {row['bet_id']}"
+            "notes": f"Historical import - ID: {bet_id or row['bet_id']}"
         })
         
     print(f"Found {len(rows_to_insert)} settled bets to import.")
