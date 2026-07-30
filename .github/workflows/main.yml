@@ -129,5 +129,5 @@ jobs:
         run: |
           python import_history.py
           python master_run.py
-          python model_wnba.py
+          python wnba_model.py
           python model_nrfi.py

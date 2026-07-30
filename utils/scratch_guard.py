@@ -4,12 +4,16 @@ from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from utils.time import get_local_now
+from utils.thresholds import env_float
 
 
 # Game statuses that indicate cancellation or postponement
 CANCELLED_STATUSES = {"cancelled", "postponed", "suspended", "canceled"}
 STARTED_STATUSES = {"in_progress", "live", "in_play", "started"}
 COMPLETED_STATUSES = {"completed", "final", "closed", "over", "ended"}
+# Small grace window so a game is not dropped just because the feed says the
+# scheduled start time has passed by a minute or two but play has not begun yet.
+START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 15.0)
 
 
 def check_event_status(event: dict) -> Tuple[bool, str]:
@@ -58,6 +62,8 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
     now = datetime.now(timezone.utc)
     commence_utc = commence.astimezone(timezone.utc)
     if now > commence_utc:
+        if (now - commence_utc).total_seconds() <= START_GRACE_MINUTES * 60.0:
+            return True, "ok"
         return False, "event already started"
 
     return True, "ok"

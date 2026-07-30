@@ -19,6 +19,18 @@ class ScratchGuardTests(unittest.TestCase):
         self.assertTrue(valid)
         self.assertEqual(reason, "ok")
 
+    def test_recently_started_game_is_within_grace_window(self):
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        valid, reason = check_event_status({"commence_time": past})
+        self.assertTrue(valid)
+        self.assertEqual(reason, "ok")
+
+    def test_old_started_game_is_rejected(self):
+        past = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        valid, reason = check_event_status({"commence_time": past})
+        self.assertFalse(valid)
+        self.assertEqual(reason, "event already started")
+
 
 if __name__ == "__main__":
     unittest.main()
