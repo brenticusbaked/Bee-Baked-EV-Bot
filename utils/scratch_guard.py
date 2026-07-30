@@ -32,7 +32,28 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
         return False, "unparseable commence_time"
 
     if commence.tzinfo is None:
-        commence = commence.replace(tzinfo=get_local_now().tzinfo or timezone.utc)
+        local_tz = get_local_now().tzinfo or timezone.utc
+        naive = commence
+        local_candidate = naive.replace(tzinfo=local_tz)
+        utc_candidate = naive.replace(tzinfo=timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+
+        candidates = [local_candidate, utc_candidate]
+        future_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.astimezone(timezone.utc) > now_utc
+        ]
+        if future_candidates:
+            commence = min(
+                future_candidates,
+                key=lambda candidate: candidate.astimezone(timezone.utc),
+            )
+        else:
+            commence = max(
+                candidates,
+                key=lambda candidate: candidate.astimezone(timezone.utc),
+            )
 
     now = datetime.now(timezone.utc)
     commence_utc = commence.astimezone(timezone.utc)
