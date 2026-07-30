@@ -19,6 +19,12 @@ class ScratchGuardTests(unittest.TestCase):
         self.assertTrue(valid)
         self.assertEqual(reason, "ok")
 
+    def test_started_status_does_not_override_future_commence_time(self):
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        valid, reason = check_event_status({"commence_time": future, "status": "started"})
+        self.assertTrue(valid)
+        self.assertEqual(reason, "ok")
+
     def test_recently_started_game_is_within_grace_window(self):
         past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
         valid, reason = check_event_status({"commence_time": past})

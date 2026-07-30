@@ -21,8 +21,6 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
     status = str(event.get("status", "")).strip().lower()
     if status in CANCELLED_STATUSES:
         return False, f"event {status}"
-    if status in STARTED_STATUSES:
-        return False, f"event {status}"
     if status in COMPLETED_STATUSES:
         return False, f"event {status}"
 
@@ -61,6 +59,11 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
 
     now = datetime.now(timezone.utc)
     commence_utc = commence.astimezone(timezone.utc)
+
+    if status in STARTED_STATUSES and now > commence_utc:
+        if (now - commence_utc).total_seconds() > START_GRACE_MINUTES * 60.0:
+            return False, f"event {status}"
+
     if now > commence_utc:
         if (now - commence_utc).total_seconds() <= START_GRACE_MINUTES * 60.0:
             return True, "ok"
