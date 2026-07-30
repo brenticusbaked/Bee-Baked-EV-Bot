@@ -15,7 +15,7 @@ concurrency:
 jobs:
   bet-lifecycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
