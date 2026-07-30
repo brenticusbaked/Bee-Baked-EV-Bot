@@ -358,34 +358,4 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
     fills = safe_report.get("fills", [])
     metrics = safe_report.get("metrics", {})
     order_id = order.get("order_id")
-    logged_at = get_local_now().isoformat()
-    order_payload = {
-        "order_id": order_id,
-        "symbol": order.get("symbol"),
-        "side": order.get("side"),
-        "quantity": order.get("quantity"),
-        "limit_price": order.get("limit_price"),
-        "fair_price": order.get("fair_price"),
-        "order_type": order.get("order_type"),
-        "time_in_force": order.get("time_in_force"),
-        "strategy": order.get("strategy"),
-        "source_signal": order.get("source_signal"),
-        "status": safe_report.get("status"),
-        "rejected_reason": safe_report.get("rejected_reason"),
-        "filled_quantity": metrics.get("filled_quantity"),
-        "fill_rate": metrics.get("fill_rate"),
-        "average_price": metrics.get("average_price"),
-        "slippage": metrics.get("slippage"),
-        "edge_capture": metrics.get("edge_capture"),
-        "fees": metrics.get("fees"),
-        "metadata": order.get("metadata", {}),
-        "created_at": order.get("created_at"),
-        "logged_at": logged_at,
-    }
-    children_payload = []
-    for child in child_orders:
-        children_payload.append(
-            {
-                "child_order_id": child.get("child_order_id"),
-                "parent_order_id": child.get("parent_order_id") or order_id,
-                "venue_id": child.get("venue_id
+    logged_at = get_local_now().isoformat
