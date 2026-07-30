@@ -248,6 +248,48 @@ def _safe_execute(action, fallback):
         return fallback
 
 
+def _extract_cache_blob(rows: Any) -> Dict[str, Any]:
+    def _group_event_list(items: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for item in items:
+            sport_key = item.get("sport_key") or item.get("sport")
+            if not sport_key:
+                continue
+            grouped.setdefault(str(sport_key), []).append(item)
+        return grouped
+
+    if isinstance(rows, dict):
+        if isinstance(rows.get("data"), dict):
+            return rows["data"]
+        if isinstance(rows.get("payload"), dict):
+            return rows["payload"]
+        if isinstance(rows.get("data"), list):
+            grouped = _group_event_list([item for item in rows["data"] if isinstance(item, dict)])
+            return grouped or {"items": rows["data"]}
+        if isinstance(rows.get("payload"), list):
+            grouped = _group_event_list([item for item in rows["payload"] if isinstance(item, dict)])
+            return grouped or {"items": rows["payload"]}
+        return rows
+
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if isinstance(row.get("data"), dict):
+                return row["data"]
+            if isinstance(row.get("payload"), dict):
+                return row["payload"]
+            if isinstance(row.get("data"), list):
+                grouped = _group_event_list([item for item in row["data"] if isinstance(item, dict)])
+                return grouped or {"items": row["data"]}
+            if isinstance(row.get("payload"), list):
+                grouped = _group_event_list([item for item in row["payload"] if isinstance(item, dict)])
+                return grouped or {"items": row["payload"]}
+        return {}
+
+    return {}
+
+
 def validate_supabase_connection() -> Dict[str, Any]:
     result: Dict[str, Any] = {"ok": False, "connected": False, "errors": [], "tables": {}}
     if not supabase:
@@ -302,34 +344,24 @@ def _force_postgrest_http1(client):
 
 
 def get_market_cache(max_age_minutes: Optional[int] = None) -> Dict[str, Any]:
-    def action():
-        res = supabase.table("market_cache").select("*").execute()
-        data = res.data or {}
-        if isinstance(data, list) and len(data) > 0 and "payload" in data[0]:
-            return data[0]["payload"]
-        return data
-    return _safe_execute(action, {})
+    del max_age_minutes
+    return get_master_cache()
 
 
 def save_market_cache(cache_data: Dict[str, Any]):
-    def action():
-        supabase.table("market_cache").upsert({"id": 1, "payload": cache_data, "updated_at": datetime.now(timezone.utc).isoformat()}).execute()
-    _safe_execute(action, None)
+    save_master_cache(cache_data)
 
 
 def get_master_cache() -> Dict[str, Any]:
     def action():
-        res = supabase.table("odds_cache").select("*").execute()
-        data = res.data or {}
-        if isinstance(data, list) and len(data) > 0 and "payload" in data[0]:
-            return data[0]["payload"]
-        return data
+        res = supabase.table("odds_cache").select("*").order("updated_at", desc=True).limit(1).execute()
+        return _extract_cache_blob(res.data or {})
     return _safe_execute(action, {})
 
 
 def save_master_cache(cache_data: Dict[str, Any]):
     def action():
-        supabase.table("odds_cache").upsert({"id": 1, "payload": cache_data, "updated_at": datetime.now(timezone.utc).isoformat()}).execute()
+        supabase.table("odds_cache").upsert({"id": "master", "data": cache_data, "updated_at": datetime.now(timezone.utc).isoformat()}).execute()
     _safe_execute(action, None)
 
 
@@ -355,6 +387,32 @@ def get_all_graded_bets() -> List[Dict[str, Any]]:
     return _safe_execute(action, [])
 
 
+def get_ungraded_past_bets() -> List[Dict[str, Any]]:
+    bets = get_all_bets()
+    return [
+        bet
+        for bet in bets
+        if str(bet.get("result") or "").strip() == ""
+        and bet.get("graded_at") in (None, "")
+    ]
+
+
+def update_result(bet_id: Any, result: str) -> bool:
+    if not supabase:
+        return False
+
+    def action():
+        supabase.table("bets_log").update(
+            {
+                "result": result,
+                "graded_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", bet_id).execute()
+        return True
+
+    return _safe_execute(action, False)
+
+
 def log_bet_to_db(*args, **kwargs) -> bool:
     if not supabase:
         _RUNTIME_DB_STATS["bet_log_failure"] += 1
@@ -378,15 +436,24 @@ def log_bet_to_db(*args, **kwargs) -> bool:
             return False
 
 
-def is_already_logged(sport: str, event_id: str, market: str, selection: str) -> bool:
+def is_already_logged(*args) -> bool:
+    if len(args) == 3:
+        sport = None
+        matchup, market, selection = args
+    elif len(args) == 4:
+        sport, event_id, market, selection = args
+    else:
+        raise TypeError("is_already_logged() expects 3 or 4 positional arguments")
+
     def action():
-        res = (supabase.table("bets_log")
-               .select("id")
-               .eq("sport", sport)
-               .eq("event_id", event_id)
-               .eq("market", market)
-               .eq("selection", selection)
-               .execute())
+        query = supabase.table("bets_log").select("id")
+        if sport is not None:
+            query = query.eq("sport", sport)
+        if len(args) == 3:
+            query = query.eq("matchup", matchup)
+        elif event_id is not None:
+            query = query.eq("event_id", event_id)
+        res = query.eq("market", market).eq("selection", selection).execute()
         return len(res.data or []) > 0
     return _safe_execute(action, False)
 
@@ -402,39 +469,80 @@ def update_bet_clv(bet_id: Any, closing_odds: Any, clv_pct: Any, closing_line: A
 
 def load_tracker_state(sport: str, fallback: Dict[str, Any] = None) -> Dict[str, Any]:
     def action():
-        res = supabase.table("tracker_state").select("state").eq("sport", sport).execute()
+        res = supabase.table("bot_state").select("*").eq("id", sport).limit(1).execute()
         if res.data and len(res.data) > 0:
-            return res.data[0].get("state", fallback or {})
+            row = res.data[0]
+            if isinstance(row.get("data"), dict):
+                return row["data"]
+            if isinstance(row.get("state"), dict):
+                return row["state"]
         return fallback or {}
     return _safe_execute(action, fallback or {})
 
 
 def save_tracker_state(sport: str, data: Dict[str, Any], fallback: Dict[str, Any] = None):
     def action():
-        supabase.table("tracker_state").upsert({"sport": sport, "state": data, "updated_at": datetime.now(timezone.utc).isoformat()}).execute()
+        supabase.table("bot_state").upsert({"id": sport, "data": data, "updated_at": datetime.now(timezone.utc).isoformat()}).execute()
     _safe_execute(action, None)
 
 
-def log_alert_event(sport: str, alert: Dict[str, Any], dedupe_key: str = None, count: int = 1, payload_preview: Dict[str, Any] = None, status: str = 'sent'):
+def log_alert_event(*args, **kwargs):
+    sport = kwargs.pop("sport", kwargs.pop("source", None))
+    alert = kwargs.pop("alert", None)
+    alert_type = kwargs.pop("alert_type", None)
+    dedupe_key = kwargs.pop("dedupe_key", None)
+    count = kwargs.pop("count", 1)
+    payload_preview = kwargs.pop("payload_preview", None)
+    status = kwargs.pop("status", "sent")
+
+    if args:
+        if len(args) >= 1 and sport is None:
+            sport = args[0]
+        if len(args) >= 2 and alert is None:
+            alert = args[1]
+        if len(args) >= 3 and dedupe_key is None:
+            dedupe_key = args[2]
+        if len(args) >= 4:
+            count = args[3]
+        if len(args) >= 5 and payload_preview is None:
+            payload_preview = args[4]
+        if len(args) >= 6:
+            status = args[5]
+
+    if alert is None:
+        alert = alert_type or {}
+
+    if isinstance(alert, dict):
+        if alert_type is None:
+            alert_type = alert.get("alert_type") or alert.get("type") or alert.get("event_type")
+    else:
+        alert = {"value": alert}
+
+    if payload_preview is not None and not isinstance(payload_preview, str):
+        try:
+            payload_preview = json.dumps(payload_preview, default=str)
+        except Exception:
+            payload_preview = str(payload_preview)
+
     def action():
         payload = {
-            "sport": sport,
-            "alert": alert,
+            "source": sport,
+            "alert_type": alert_type,
             "dedupe_key": dedupe_key,
             "count": count,
             "payload_preview": payload_preview,
             "status": status,
-            "created_at": datetime.now(timezone.utc).isoformat()
+            "sent_at": datetime.now(timezone.utc).isoformat(),
         }
-        supabase.table("alert_events").insert(payload).execute()
+        supabase.table("alerts_sent").insert(payload).execute()
     _safe_execute(action, None)
 
 
 def alert_already_sent(alert_type: str, dedupe_key: str, window_hours: int = 24) -> bool:
     def action():
-        res = (supabase.table("alert_events")
+        res = (supabase.table("alerts_sent")
                .select("id")
-               .eq("sport", alert_type)
+               .eq("alert_type", alert_type)
                .eq("dedupe_key", dedupe_key)
                .execute())
         return len(res.data or []) > 0
