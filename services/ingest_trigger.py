@@ -39,7 +39,8 @@ def trigger_odds_ingest() -> Dict[str, Any]:
     if secret:
         headers["x-ingest-secret"] = secret
 
-    timeout = float(os.getenv("ODDS_INGEST_TRIGGER_TIMEOUT", "60"))
+    # Increased default timeout from 60 to 150 seconds to prevent ReadTimeout during heavy ingests
+    timeout = float(os.getenv("ODDS_INGEST_TRIGGER_TIMEOUT", "150"))
     try:
         resp = requests.post(
             url,
