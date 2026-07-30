@@ -3,6 +3,8 @@
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
+from utils.time import get_local_now
+
 
 # Game statuses that indicate cancellation or postponement
 CANCELLED_STATUSES = {"cancelled", "postponed", "suspended", "canceled"}
@@ -29,8 +31,12 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
     except (ValueError, TypeError):
         return False, "unparseable commence_time"
 
+    if commence.tzinfo is None:
+        commence = commence.replace(tzinfo=get_local_now().tzinfo or timezone.utc)
+
     now = datetime.now(timezone.utc)
-    if now > commence:
+    commence_utc = commence.astimezone(timezone.utc)
+    if now > commence_utc:
         return False, "event already started"
 
     return True, "ok"
