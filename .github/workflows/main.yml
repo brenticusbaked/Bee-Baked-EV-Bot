@@ -83,6 +83,8 @@ jobs:
           ENABLE_NBA_MODEL: "true"
           ENABLE_NHL_MODEL: "true"
           ENABLE_MLB_MODEL: "true"
+          ENABLE_WNBA_MODEL: "true"
+          ENABLE_NRFI_MODEL: "true"
           ENABLE_UNIFIED_SCAN: "true"
           ENABLE_ARBITRAGE_SCAN: "true"
           ENABLE_CLV_TRACKER: "true"
@@ -127,3 +129,5 @@ jobs:
         run: |
           python import_history.py
           python master_run.py
+          python model_wnba.py
+          python model_nrfi.py
