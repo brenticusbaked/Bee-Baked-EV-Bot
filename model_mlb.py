@@ -271,7 +271,7 @@ def run_mlb_model():
                     f"**Model Edge:** {edge * 100:.2f}% | **Fair:** {fair_p}\n"
                     f"**Primary Bet:** {u_size:.2f} Units\n\n"
                     f"{angles_text}"
-                    f"{build_last_ten_context_line(better_team, 'h2h', '', 'over', 'baseball_mlb')}"
+                    f"{build_last_ten_context_line(better_team, 'h2h', '', 'over', 'baseball_mlb', opponent=(away_team if better_team == home_team else home_team))}"
                 )
             )
 

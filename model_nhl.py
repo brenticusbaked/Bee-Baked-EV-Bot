@@ -138,7 +138,7 @@ def run_nhl_model():
                     f"**Fair Value:** {fair_price}\n"
                     f"**Model Edge:** {edge * 100:.2f}%\n"
                     f"**Suggested:** {units:.2f} Units"
-                    f"{build_last_ten_context_line(better_team, 'spreads', '-1.5', 'over', 'icehockey_nhl')}"
+                    f"{build_last_ten_context_line(better_team, 'spreads', '-1.5', 'over', 'icehockey_nhl', opponent=worse_team)}"
                 )
             )
 

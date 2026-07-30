@@ -43,6 +43,7 @@ def build_last_ten_context_line(
     point: object,
     side: str,
     sport: str,
+    opponent: str | None = None,
     enabled: bool | None = None,
 ) -> str:
     if enabled is None:
@@ -55,7 +56,7 @@ def build_last_ten_context_line(
     except (TypeError, ValueError):
         line_value = 0.0
 
-    result = db_manager.get_l10_hit_rate(target_name, market_key, line_value, sport)
+    result = db_manager.get_l10_hit_rate(target_name, market_key, line_value, sport, opponent=opponent)
     prefix = "\n**Last 10:** "
     if not result or not result.get("games"):
         return f"{prefix}unavailable."
@@ -75,10 +76,16 @@ def build_last_ten_context_line(
         target_label = target_name
         body = f"{target_label} has {direction} in {cleared}/{games} of their last {games} games."
 
-    last_game = result.get("last_game")
-    if last_game and last_game.get("game_date") is not None:
-        g_date = last_game.get("game_date")
-        g_val = last_game.get("value")
-        body += f" Last played {g_date}: recorded {g_val:g}."
+    last_vs_game = result.get("last_vs_game")
+    if opponent and last_vs_game and last_vs_game.get("game_date") is not None:
+        vs_date = last_vs_game.get("game_date")
+        vs_val = last_vs_game.get("value")
+        body += f" Last vs {opponent}: {vs_val:g} on {vs_date}."
+    else:
+        last_game = result.get("last_game")
+        if last_game and last_game.get("game_date") is not None:
+            g_date = last_game.get("game_date")
+            g_val = last_game.get("value")
+            body += f" Last played {g_date}: recorded {g_val:g}."
 
     return prefix + body

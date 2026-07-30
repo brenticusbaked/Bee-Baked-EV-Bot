@@ -11,6 +11,13 @@ except ImportError:  # pragma: no cover - optional dependency in some environmen
 
 logger = logging.getLogger("db_manager")
 
+_RUNTIME_DB_STATS = {
+    "bet_log_success": 0,
+    "bet_log_failure": 0,
+    "execution_log_success": 0,
+    "execution_log_failure": 0,
+}
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -350,20 +357,24 @@ def get_all_graded_bets() -> List[Dict[str, Any]]:
 
 def log_bet_to_db(*args, **kwargs) -> bool:
     if not supabase:
+        _RUNTIME_DB_STATS["bet_log_failure"] += 1
         return False
 
     bet_data = _normalize_bet_payload(*args, **kwargs)
     try:
         supabase.table("bets_log").insert(bet_data).execute()
+        _RUNTIME_DB_STATS["bet_log_success"] += 1
         return True
     except Exception as first_error:
         logger.warning(f"bets_log insert failed, retrying legacy payload: {first_error}")
         legacy_payload = _legacy_bets_log_payload(bet_data)
         try:
             supabase.table("bets_log").insert(legacy_payload).execute()
+            _RUNTIME_DB_STATS["bet_log_success"] += 1
             return True
         except Exception as second_error:
             logger.error(f"bets_log insert failed after legacy retry: {second_error}")
+            _RUNTIME_DB_STATS["bet_log_failure"] += 1
             return False
 
 
@@ -443,7 +454,53 @@ def log_execution_report_to_db(report: Dict[str, Any]) -> bool:
         if "created_at" not in payload:
             payload["created_at"] = datetime.now(timezone.utc).isoformat()
         supabase.table("execution_reports").insert(payload).execute()
+        _RUNTIME_DB_STATS["execution_log_success"] += 1
         return True
+    result = _safe_execute(action, False)
+    if not result:
+        _RUNTIME_DB_STATS["execution_log_failure"] += 1
+    return result
+
+
+def reset_runtime_db_stats() -> None:
+    for key in _RUNTIME_DB_STATS:
+        _RUNTIME_DB_STATS[key] = 0
+
+
+def get_runtime_db_stats() -> Dict[str, int]:
+    return dict(_RUNTIME_DB_STATS)
+
+
+def log_workflow_run(
+    workflow_name: str,
+    status: str,
+    runtime_seconds: float,
+    task_count: int,
+    failure_count: int,
+    alert_count: int,
+    graded_count: int,
+    tracked_count: int,
+    summary: str,
+) -> bool:
+    if not supabase:
+        return False
+
+    def action():
+        payload = {
+            "workflow_name": workflow_name,
+            "status": status,
+            "runtime_seconds": runtime_seconds,
+            "task_count": task_count,
+            "failure_count": failure_count,
+            "alert_count": alert_count,
+            "graded_count": graded_count,
+            "tracked_count": tracked_count,
+            "summary": summary,
+            "run_at": datetime.now(timezone.utc).isoformat(),
+        }
+        supabase.table("workflow_runs").insert(payload).execute()
+        return True
+
     return _safe_execute(action, False)
 
 
@@ -704,7 +761,14 @@ def _stat_value_for_prop(row: dict, prop: str) -> Optional[float]:
     return value
 
 
-def get_l10_hit_rate(player: str, prop: str, line: float, sport: str, games: int = 10) -> Optional[Dict[str, Any]]:
+def get_l10_hit_rate(
+    player: str,
+    prop: str,
+    line: float,
+    sport: str,
+    games: int = 10,
+    opponent: str | None = None,
+) -> Optional[Dict[str, Any]]:
     table = _stat_log_table(sport)
     if not table:
         return None
@@ -719,7 +783,7 @@ def get_l10_hit_rate(player: str, prop: str, line: float, sport: str, games: int
             .select("*")
             .ilike("player_name", player)
             .order("game_date", desc=True)
-            .limit(max(1, int(games)))
+            .limit(max(1, int(games) * (5 if opponent else 1)))
             .execute()
             .data
         )
@@ -728,13 +792,24 @@ def get_l10_hit_rate(player: str, prop: str, line: float, sport: str, games: int
     if not rows:
         return None
 
+    opponent_key = str(opponent or "").strip().lower()
     values: List[float] = []
     game_details = []
+    last_vs_game = None
     for row in rows:
         val = _stat_value_for_prop(row, prop)
         if val is not None:
             values.append(val)
-            game_details.append({"game_date": row.get("game_date"), "value": val})
+            detail = {
+                "game_date": row.get("game_date"),
+                "value": val,
+                "opponent": row.get("opponent"),
+            }
+            game_details.append(detail)
+            if opponent_key:
+                row_opponent = str(row.get("opponent") or "").strip().lower()
+                if row_opponent and row_opponent == opponent_key and last_vs_game is None:
+                    last_vs_game = detail
 
     if not values:
         return None
@@ -750,6 +825,8 @@ def get_l10_hit_rate(player: str, prop: str, line: float, sport: str, games: int
         "line": line_value,
         "values": values,
         "last_game": last_game,
+        "last_vs_game": last_vs_game,
+        "opponent": opponent,
     }
 
 

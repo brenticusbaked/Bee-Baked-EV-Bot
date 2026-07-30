@@ -203,8 +203,23 @@ def _format_prop_stat_label(market_key: str) -> str:
     return clean.replace("_", " ").title()
 
 
-def _l10_context_line(target_name: str, market_key: str, point: object, side: str, sport: str) -> str:
-    return build_last_ten_context_line(target_name, market_key, point, side, sport, enabled=ENABLE_L10_CONTEXT)
+def _l10_context_line(
+    target_name: str,
+    market_key: str,
+    point: object,
+    side: str,
+    sport: str,
+    opponent: str | None = None,
+) -> str:
+    return build_last_ten_context_line(
+        target_name,
+        market_key,
+        point,
+        side,
+        sport,
+        opponent=opponent,
+        enabled=ENABLE_L10_CONTEXT,
+    )
 
 
 def _market_family(market_type: str) -> str:
@@ -836,7 +851,19 @@ def scan_markets(
                     td_text = f"\n**Time Phase:** {td.phase} ({td.hours_to_event:.1f}h)" if td else ""
                     
                     # Added L10 Context Line for Main Markets (Spreads, Totals, H2H)
-                    l10_context = _l10_context_line(final["name"], market_type, final.get("point"), final["name"], sport)
+                    opponent_team = None
+                    if final["name"] == event.get("home_team"):
+                        opponent_team = event.get("away_team")
+                    elif final["name"] == event.get("away_team"):
+                        opponent_team = event.get("home_team")
+                    l10_context = _l10_context_line(
+                        final["name"],
+                        market_type,
+                        final.get("point"),
+                        final["name"],
+                        sport,
+                        opponent=opponent_team,
+                    )
 
                     app_link = get_mobile_app_link(final["book_key"], final["id"], event["id"], matchup)
                     alerts.append(

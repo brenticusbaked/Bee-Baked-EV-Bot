@@ -57,10 +57,13 @@ def _ip_to_outs(innings_pitched: Any) -> Any:
 def _parse_mlb_boxscore(box: Dict[str, Any], day: str) -> List[Dict[str, Any]]:
     """Parse a statsapi boxscore_data dict into per-player log rows with stat aliasing."""
     rows: List[Dict[str, Any]] = []
+    home_team = str(((box.get("home") or {}).get("team") or {}).get("abbreviation") or "")
+    away_team = str(((box.get("away") or {}).get("team") or {}).get("abbreviation") or "")
     for side in ("home", "away"):
         team_block = box.get(side) or {}
         players = team_block.get("players") or {}
         team_abbr = str(((team_block.get("team") or {}).get("abbreviation")) or "")
+        opponent_abbr = away_team if side == "home" else home_team
         for player in players.values():
             name = str(((player.get("person") or {}).get("fullName")) or "").strip()
             if not name:
@@ -104,6 +107,7 @@ def _parse_mlb_boxscore(box: Dict[str, Any], day: str) -> List[Dict[str, Any]]:
                 "league": "baseball_mlb",
                 "player_name": name,
                 "team": team_abbr,
+                "opponent": opponent_abbr,
                 "hits": hits,
                 "total_bases": total_bases,
                 "home_runs": hrs,
@@ -192,9 +196,12 @@ def _parse_espn_basketball_summary(
     """Parse an ESPN game-summary boxscore into per-player log rows."""
     rows: List[Dict[str, Any]] = []
     boxscore = summary.get("boxscore") or {}
-    for team_block in boxscore.get("players") or []:
+    team_blocks = boxscore.get("players") or []
+    team_abbrs = [str((team_block.get("team") or {}).get("abbreviation") or "") for team_block in team_blocks]
+    for team_block in team_blocks:
         team = team_block.get("team") or {}
         team_abbr = str(team.get("abbreviation") or "")
+        opponent = next((abbr for abbr in team_abbrs if abbr and abbr != team_abbr), "")
         for stat_group in team_block.get("statistics") or []:
             keys = stat_group.get("keys") or stat_group.get("names") or []
             for athlete_entry in stat_group.get("athletes") or []:
@@ -217,6 +224,7 @@ def _parse_espn_basketball_summary(
                     "player_id": str(athlete.get("id") or ""),
                     "player_name": str(athlete.get("displayName") or ""),
                     "team": team_abbr,
+                    "opponent": opponent,
                     "points": points,
                     "rebounds": rebounds,
                     "assists": assists,
@@ -280,9 +288,12 @@ def _parse_espn_football_summary(
     """Parse an ESPN NFL game-summary boxscore into per-player log rows."""
     merged: Dict[str, Dict[str, Any]] = {}
     boxscore = summary.get("boxscore") or {}
-    for team_block in boxscore.get("players") or []:
+    team_blocks = boxscore.get("players") or []
+    team_abbrs = [str((team_block.get("team") or {}).get("abbreviation") or "") for team_block in team_blocks]
+    for team_block in team_blocks:
         team = team_block.get("team") or {}
         team_abbr = str(team.get("abbreviation") or "")
+        opponent = next((abbr for abbr in team_abbrs if abbr and abbr != team_abbr), "")
         for stat_group in team_block.get("statistics") or []:
             keys = stat_group.get("keys") or stat_group.get("names") or []
             for athlete_entry in stat_group.get("athletes") or []:
@@ -298,6 +309,7 @@ def _parse_espn_football_summary(
                     {
                         "name": str(athlete.get("displayName") or ""),
                         "team": team_abbr,
+                        "opponent": opponent,
                         "keyed": {},
                     },
                 )
@@ -316,6 +328,7 @@ def _parse_espn_football_summary(
             "player_id": athlete_id,
             "player_name": record["name"],
             "team": record["team"],
+            "opponent": record.get("opponent", ""),
             "passing_yards": passing_yards,
             "passing_tds": _num(keyed.get("passingTouchdowns")),
             "rushing_yards": rushing_yards,

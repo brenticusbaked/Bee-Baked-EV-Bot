@@ -61,23 +61,42 @@ class L10ContextLineTest(unittest.TestCase):
         with mock.patch.object(unified_bot, "ENABLE_L10_CONTEXT", True), \
              mock.patch.object(
                  db_manager, "get_l10_hit_rate",
-                 return_value={"over": 7, "under": 3, "games": 10, "line": 1.5},
+                 return_value={
+                     "over": 7,
+                     "under": 3,
+                     "games": 10,
+                     "line": 1.5,
+                     "last_vs_game": {"game_date": "2026-07-21", "value": 2},
+                 },
              ):
-            line = unified_bot._l10_context_line("Wyatt Langford", "batter_total_bases", 1.5, "over", "baseball_mlb")
+            line = unified_bot._l10_context_line(
+                "Wyatt Langford",
+                "batter_total_bases",
+                1.5,
+                "over",
+                "baseball_mlb",
+                opponent="Houston Astros",
+            )
         self.assertIn("Last 10", line)
         self.assertIn("7/10", line)
         self.assertIn("cleared", line)
         self.assertIn("Wyatt Langford", line)
+        self.assertIn("Last vs Houston Astros", line)
+        self.assertIn("2 on 2026-07-21", line)
 
     def test_disabled_returns_empty(self):
         with mock.patch.object(unified_bot, "ENABLE_L10_CONTEXT", False):
-            self.assertEqual(unified_bot._l10_context_line("X", "batter_hits", 0.5, "over", "baseball_mlb"), "")
+            self.assertEqual(
+                unified_bot._l10_context_line("X", "batter_hits", 0.5, "over", "baseball_mlb"),
+                "",
+            )
 
     def test_no_data_returns_empty(self):
         with mock.patch.object(unified_bot, "ENABLE_L10_CONTEXT", True), \
              mock.patch.object(db_manager, "get_l10_hit_rate", return_value=None):
-            self.assertIn("Last 10", unified_bot._l10_context_line("X", "batter_hits", 0.5, "over", "baseball_mlb"))
-            self.assertIn("unavailable", unified_bot._l10_context_line("X", "batter_hits", 0.5, "over", "baseball_mlb"))
+            line = unified_bot._l10_context_line("X", "batter_hits", 0.5, "over", "baseball_mlb")
+            self.assertIn("Last 10", line)
+            self.assertIn("unavailable", line)
 
 
 class SoccerRoutingTest(unittest.TestCase):
