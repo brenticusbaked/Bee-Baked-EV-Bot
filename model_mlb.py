@@ -9,19 +9,22 @@ from utils.odds import decimal_to_american, quarter_kelly_units, american_to_dec
 from utils.thresholds import env_float
 from utils.time import get_local_now
 
+import math
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
-MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.25)
-MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.01)
+MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.00) # Tightened threshold for xERA
+MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.015) # Raised to 1.5% minimum edge
 F5_MARKET_PRIORITY = {"h2h_1st_5_innings": 2, "h2h_1st_half": 2, "h2h": 1}
+
+LEAGUE_AVG_XERA = 4.00
+LEAGUE_AVG_XWOBA = 0.315
+
 
 def get_dynamic_link(bookmaker, target_string):
     return sportsbook_search_link(bookmaker, target_string)
 
 
 def _get_json(url: str, timeout: int = 8):
-    # Route statsapi.mlb.com through the shared client: direct-first with a
-    # residential-proxy fallback if the runner IP is blocked (see http_client).
     return _http_get_json(url, timeout=timeout)
 
 
@@ -102,6 +105,7 @@ def get_best_f5_moneyline(target_team):
 
 
 def get_advanced_pitcher_stats(pitcher_id, api_cache, fip_cache):
+    """Retrieves Pitcher metrics favoring Statcast xERA / FIP over raw ERA."""
     if pitcher_id in api_cache:
         return api_cache[pitcher_id]
         
@@ -113,8 +117,8 @@ def get_advanced_pitcher_stats(pitcher_id, api_cache, fip_cache):
     str_id = str(pitcher_id)
     source = "statsapi_estimate"
     if fip_cache and str_id in fip_cache:
-        actual_fip = fip_cache[str_id].get("fip")
-        source = "fangraphs"
+        actual_fip = fip_cache[str_id].get("fip") or fip_cache[str_id].get("xera")
+        source = "statcast_fangraphs"
         
     try:
         person = _get_json(url).get("people", [{}])[0]
@@ -131,6 +135,31 @@ def get_advanced_pitcher_stats(pitcher_id, api_cache, fip_cache):
         
     api_cache[pitcher_id] = (est_fip, actual_fip, era, source)
     return api_cache[pitcher_id]
+
+
+def _calculate_f5_win_probability(pitcher_a_xera: float, pitcher_b_xera: float) -> float:
+    """
+    Replaces static linear probability with an Expected Runs (Pythagenpat) model for F5.
+    Calculates expected runs over 5 innings based on opposing xERA baselines.
+    """
+    # Convert 9-inning xERA to 5-inning expected runs
+    exp_runs_against_b = (pitcher_b_xera / 9.0) * 5.0  # Runs scored by Team A
+    exp_runs_against_a = (pitcher_a_xera / 9.0) * 5.0  # Runs scored by Team B
+
+    # Pythagenpat exponent for baseball
+    total_exp_runs = exp_runs_against_a + exp_runs_against_b
+    if total_exp_runs <= 0:
+        return 0.50
+
+    pythag_exp = (total_exp_runs) ** 0.287
+    
+    # Expected win probability for Team A
+    prob_a = (exp_runs_against_b ** pythag_exp) / (
+        (exp_runs_against_b ** pythag_exp) + (exp_runs_against_a ** pythag_exp)
+    )
+    
+    # Clamp bounds to safe limits
+    return max(0.35, min(0.68, prob_a))
 
 
 def run_mlb_model():
@@ -168,8 +197,12 @@ def run_mlb_model():
 
             if a_mod_fip < h_mod_fip:
                 better_team, adv_p, disadv_p = away_team, away_p['fullName'], home_p['fullName']
+                # Away team has the better pitcher
+                prob = _calculate_f5_win_probability(a_mod_fip, h_mod_fip)
             else:
                 better_team, adv_p, disadv_p = home_team, home_p['fullName'], away_p['fullName']
+                # Home team has the better pitcher (+3% home field advantage adjustment for F5)
+                prob = _calculate_f5_win_probability(h_mod_fip, a_mod_fip) + 0.03
 
             if is_already_logged(matchup, "MODEL_MLB_F5", better_team): continue
 
@@ -183,14 +216,12 @@ def run_mlb_model():
                 better_team,
             )
 
-            # Core Model Probabilities
-            prob = min(0.53 + max(fip_diff - MLB_FIP_GAP_THRESHOLD, 0.0) * 0.03, 0.64)
             fair_p = fair_american_from_probability(prob)
             edge = model_edge_from_probability(prob, odds)
             if edge < MLB_MODEL_EDGE_THRESHOLD:
                 continue
             
-            # Use utility for precise Quarter-Kelly sizing
+            # Precise Quarter-Kelly sizing
             dec_odds = american_to_decimal(odds)
             u_size = quarter_kelly_units(edge, dec_odds)
             if u_size <= 0:
@@ -207,8 +238,8 @@ def run_mlb_model():
                 "baseball_mlb",
                 event_id,
                 notes=(
-                    f"book={book};market={selected_market};model=mlb_fip;"
-                    f"probability={prob:.4f};fip_diff={fip_diff:.4f};"
+                    f"book={book};market={selected_market};model=mlb_f5_pythagenpat;"
+                    f"probability={prob:.4f};fip_xera_diff={fip_diff:.4f};"
                     f"away_source={a_source};home_source={h_source}"
                 ),
             )
@@ -216,7 +247,6 @@ def run_mlb_model():
                 print(f"Skipping MLB model alert because DB log failed for {better_team}.")
                 continue
 
-            # Dynamic Angle Sizing (Estimating secondary edges as ~75% of primary F5 edge)
             secondary_u = max(0.5, round(u_size * 0.75, 1))
 
             angles_text = (
@@ -229,12 +259,12 @@ def run_mlb_model():
 
             alerts.append(
                 (
-                    f"**MLB ADVANCED METRIC MISMATCH**\n"
+                    f"**MLB STATCAST F5 MODEL MISMATCH**\n"
                     f"**Game:** {matchup}\n"
                     f"**Advantage:** {better_team} (F5)\n"
-                    f"**{away_p['fullName']}** FIP: **{a_mod_fip:.2f}** | ERA: **{a_era:.2f}** ({a_source})\n"
-                    f"**{home_p['fullName']}** FIP: **{h_mod_fip:.2f}** | ERA: **{h_era:.2f}** ({h_source})\n"
-                    f"**FIP Gap:** {fip_diff:.2f}\n"
+                    f"**{away_p['fullName']}** xERA/FIP: **{a_mod_fip:.2f}** | ERA: **{a_era:.2f}** ({a_source})\n"
+                    f"**{home_p['fullName']}** xERA/FIP: **{h_mod_fip:.2f}** | ERA: **{h_era:.2f}** ({h_source})\n"
+                    f"**Metric Gap:** {fip_diff:.2f}\n"
                     f"**Price:** [{book}]({link}) @ {odds}\n"
                     f"**Pinnacle:** {pinnacle_reference}\n"
                     f"**Model Edge:** {edge * 100:.2f}% | **Fair:** {fair_p}\n"
