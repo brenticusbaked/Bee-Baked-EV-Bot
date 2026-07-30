@@ -259,6 +259,66 @@ def reset_runtime_db_stats():
 def get_runtime_db_stats() -> Dict[str, int]:
     return dict(RUNTIME_DB_STATS)
 
+def get_l10_hit_rate(
+    player: str,
+    prop: str,
+    line: float,
+    sport: str,
+    games: int = 10,
+) -> Optional[Dict[str, Any]]:
+    table = _stat_log_table(sport)
+    if not table:
+        return None
+    try:
+        line_value = float(line)
+    except (TypeError, ValueError):
+        return None
+    name = _normalize_player_name(player)
+    if not name:
+        return None
+
+    def action():
+        return (
+            supabase.table(table)
+            .select("*")
+            .ilike("player_name", name)
+            .order("game_date", desc=True)
+            .limit(max(1, int(games)))
+            .execute()
+            .data
+        )
+
+    rows = _safe_execute(action, None)
+    if not rows:
+        return None
+
+    values: List[float] = []
+    game_details = []
+    for row in rows:
+        value = _stat_value_for_prop(row, prop)
+        if value is not None:
+            values.append(value)
+            game_details.append({
+                "game_date": row.get("game_date"),
+                "value": value,
+            })
+    if not values:
+        return None
+
+    over = sum(1 for value in values if value > line_value)
+    under = sum(1 for value in values if value < line_value)
+    
+    last_game = game_details[0] if game_details else None
+
+    return {
+        "over": over,
+        "under": under,
+        "games": len(values),
+        "line": line_value,
+        "values": values,
+        "last_game": last_game,
+    }
+
 def _send_dead_letter(table_name: str, payload: dict) -> None:
     if not DISCORD_DEAD_LETTER_WEBHOOK_URL:
         return
