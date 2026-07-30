@@ -273,6 +273,11 @@ def _send_dead_letter(table_name: str, payload: dict) -> None:
     except Exception as exc:
         print(f"Failed to dispatch dead-letter to Discord: {exc}")
 
+def get_all_graded_bets() -> List[Dict[str, Any]]:
+    def action():
+        return supabase.table("bets_log").select("*").neq("result", "").execute().data
+    return _safe_execute(action, [])
+
 def _queue_pending_bet_log(payload: Dict[str, Any], alert: bool = True) -> None:
     if alert and supabase is not None and SUPABASE_REACHABLE:
         _send_dead_letter("bets_log", payload)
@@ -413,9 +418,27 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
         }
         for fill in fills
     ]
+    venue_metrics_payload = [
+        {
+            "metric_id": f"{child.get('child_order_id')}:{logged_at}",
+            "parent_order_id": child.get("parent_order_id") or order_id,
+            "child_order_id": child.get("child_order_id"),
+            "venue_id": child.get("venue_id"),
+            "symbol": child.get("symbol"),
+            "status": child.get("status"),
+            "routed_quantity": child.get("quantity"),
+            "filled_quantity": 0.0,
+            "fill_rate": 0.0,
+            "average_fill_price": None,
+            "route_score": child.get("route_score"),
+            "fee": 0.0,
+            "measured_at": logged_at,
+        }
+        for child in child_orders
+    ]
     return {
         "order": order_payload,
         "child_orders": children_payload,
         "fills": fills_payload,
-        "venue_metrics": [],
+        "venue_metrics": venue_metrics_payload,
     }
