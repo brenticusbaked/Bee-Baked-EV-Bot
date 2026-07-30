@@ -255,7 +255,7 @@ def validate_supabase_connection() -> Dict[str, Any]:
         return result
 
     try:
-        probe = supabase.table("bets_log").select("id", count="exact").limit(1).execute()
+        probe = supabase.table("bets_log").select("*", count="exact").limit(1).execute()
         result["connected"] = probe is not None
     except Exception as e:
         result["errors"].append(f"Supabase connection failed: {e}")
@@ -263,7 +263,7 @@ def validate_supabase_connection() -> Dict[str, Any]:
 
     for table in REQUIRED_TABLES:
         try:
-            probe = supabase.table(table).select("id", count="exact").limit(1).execute()
+            probe = supabase.table(table).select("*", count="exact").limit(1).execute()
             result["tables"][table] = probe is not None
         except Exception as e:
             result["tables"][table] = False
@@ -600,7 +600,7 @@ def get_latest_rows(table: str, column: str, limit: int = 5) -> List[Dict[str, A
 
 def get_table_count(table: str) -> int:
     def action():
-        res = supabase.table(table).select("id", count="exact").execute()
+        res = supabase.table(table).select("*", count="exact").execute()
         return res.count or 0
     return _safe_execute(action, 0)
 
@@ -737,6 +737,33 @@ def assemble_cache(fetch_func=None, odds_data=None) -> Dict[str, Any]:
                         outcome.pop("_stamp", None)
 
     return grouped
+
+
+def hydrate_market_cache() -> Dict[str, Any]:
+    """Rebuild and persist the odds cache from Supabase fixtures + historical odds."""
+    if not supabase:
+        return {"detail": "Supabase client is not configured", "count": 0, "label": "updates", "meta": {}}
+
+    def action():
+        fixtures_res = supabase.table("fixtures").select("*").execute()
+        odds_res = supabase.table("historical_odds").select("*").execute()
+        fixtures = fixtures_res.data or []
+        historical_odds = odds_res.data or []
+        cache = assemble_cache(fixtures, historical_odds)
+        save_master_cache(cache)
+        sport_count = len(cache) if isinstance(cache, dict) else 0
+        event_count = sum(len(events) for events in cache.values()) if isinstance(cache, dict) else 0
+        return {
+            "detail": "market cache hydrated from Supabase",
+            "count": event_count,
+            "label": "updates",
+            "meta": {
+                "cache_sports": sport_count,
+                "cache_events": event_count,
+            },
+        }
+
+    return _safe_execute(action, {"detail": "market cache hydration failed", "count": 0, "label": "updates", "meta": {}})
 
 
 def _stat_log_table(sport: str) -> Optional[str]:
