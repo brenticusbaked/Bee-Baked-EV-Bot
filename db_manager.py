@@ -387,4 +387,24 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
         children_payload.append(
             {
                 "child_order_id": child.get("child_order_id"),
-                "parent_order_id": child.get("parent_order_id") or
+                "parent_order_id": child.get("parent_order_id") or order_id,
+                "venue_id": child.get("venue_id"),
+                "symbol": child.get("symbol"),
+                "side": child.get("side"),
+                "quantity": child.get("quantity"),
+                "limit_price": child.get("limit_price"),
+                "route_score": child.get("route_score"),
+                "status": child.get("status"),
+                "metadata": child.get("metadata", {}),
+                "logged_at": logged_at,
+            }
+        )
+    fills_payload = []
+    fills_by_child = {}
+    for fill in fills:
+        fill_id = f"{fill.get('child_order_id')}:{fill.get('filled_at')}"
+        fills_by_child.setdefault(fill.get("child_order_id"), []).append(fill)
+        fills_payload.append(
+            {
+                "fill_id": fill_id,
+                "child_order_id": fill.get("child_
