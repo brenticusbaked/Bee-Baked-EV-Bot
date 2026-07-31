@@ -20,19 +20,22 @@ from services.http_client import get_json as _http_get_json
 from utils.thresholds import env_float
 from utils.time import get_local_now
 
-# --- ADDED: Patch requests.get to bypass FanGraphs 403 Forbidden blocks ---
-_original_get = requests.get
-def _spoofed_get(*args, **kwargs):
-    headers = kwargs.get("headers", {})
-    headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    })
-    kwargs["headers"] = headers
-    return _original_get(*args, **kwargs)
-requests.get = _spoofed_get
-# -------------------------------------------------------------------------
+# --- DEEPER PATCH: Catch pybaseball's internal Session requests ---
+_original_session_request = requests.Session.request
+
+def _spoofed_session_request(self, method, url, **kwargs):
+    if "fangraphs" in str(url).lower():
+        headers = kwargs.get("headers", {})
+        headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        kwargs["headers"] = headers
+    return _original_session_request(self, method, url, **kwargs)
+
+requests.Session.request = _spoofed_session_request
+# ------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
 
