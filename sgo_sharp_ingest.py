@@ -2,10 +2,12 @@ import os
 import requests
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
-from db_manager import get_supabase_client
+from supabase import create_client
 
 SGO_API_KEY = os.environ.get("SGO_API_KEY")
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 TARGET_BOOKS = ["circa", "pinnacle", "draftkings"]
 LEAGUE_MAP = {
@@ -18,6 +20,10 @@ def similar(a, b):
 
 def get_odds_api_schedule(sport_key):
     """Fetches upcoming events from The Odds API to use as the base IDs."""
+    if not ODDS_API_KEY:
+        print("Warning: ODDS_API_KEY is not set.")
+        return []
+        
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/events?apiKey={ODDS_API_KEY}"
     try:
         response = requests.get(url, timeout=10)
@@ -30,15 +36,19 @@ def get_odds_api_schedule(sport_key):
 
 def fetch_sgo_sharp_lines():
     if not SGO_API_KEY or not ODDS_API_KEY:
-        print("Error: SGO_API_KEY or ODDS_API_KEY is missing.")
+        print("Error: SGO_API_KEY or ODDS_API_KEY environment variable is missing.")
         return
 
-    supabase = get_supabase_client()
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Error: SUPABASE_URL or SUPABASE_KEY environment variable is missing.")
+        return
+
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     odds_rows = []
     
     for sgo_league, odds_api_sport in LEAGUE_MAP.items():
-        print(f"Fetching mapping and SGO odds for {sgo_league}...")
+        print(f"Fetching mapping and SGO sharp odds for {sgo_league}...")
         
         # 1. Build the ID Map for this league
         odds_events = get_odds_api_schedule(odds_api_sport)
@@ -46,6 +56,9 @@ def fetch_sgo_sharp_lines():
         
         try:
             response = requests.get(url, timeout=20)
+            if response.status_code == 429:
+                print(f"SGO rate limit reached (429) for {sgo_league}. Skipping this cycle.")
+                continue
             response.raise_for_status()
             data = response.json()
             
@@ -63,13 +76,13 @@ def fetch_sgo_sharp_lines():
                         best_score = score
                         mapped_fixture_id = o_event['id']
                 
-                # If we couldn't confidently match the game, skip it
+                # Skip if no confident match (>70% similarity)
                 if not mapped_fixture_id or best_score < 0.7:
                     continue
                 
                 # 2. Extract targeted sharp odds
                 for odd in event.get("odds", []):
-                    bookmaker = odd.get("sportsbook", "").lower()
+                    bookmaker = str(odd.get("sportsbook", "")).lower()
                     
                     if bookmaker in TARGET_BOOKS:
                         market_key = odd.get("marketType", "unknown")
