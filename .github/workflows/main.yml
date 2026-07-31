@@ -2,12 +2,9 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # 7:00 AM CT - first refresh after overnight gap
-    - cron: '0 12 * * *'
-    # Hourly from 8:00 AM to 9:00 PM CT
-    - cron: '0 13-23,0-2 * * *'
-    # 10:30 PM CT - late-night opener
-    - cron: '30 3 * * *'
+    # Run every 2 hours during peak betting windows to conserve credits
+    - cron: '0 12,14,16,18,20,22 * * *'
+    - cron: '0 0,2 * * *'
   workflow_dispatch:
     inputs:
       scratch_guard_trace:
@@ -45,7 +42,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Only install browsers when cache misses
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != "true" ]; then
             playwright install chromium
           fi
@@ -56,16 +52,11 @@ jobs:
           ODDS_API_KEY_2: ${{ secrets.ODDS_API_KEY_2 }}
           ODDS_API_KEY_3: ${{ secrets.ODDS_API_KEY_3 }}
           ODDS_API_KEY_4: ${{ secrets.ODDS_API_KEY_4 }}
-          # --- NEW FREE ODDS APIS ---
           ODDSPAPI_KEY: ${{ secrets.ODDSPAPI_KEY }}
           SHARPAPI_KEY: ${{ secrets.SHARPAPI_KEY }}
           PARLAYAPI_KEY: ${{ secrets.PARLAYAPI_KEY }}
-          # --------------------------
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          # Auth for the startup ingest trigger (services/ingest_trigger.py). Must
-          # match the odds-cache-ingest Edge Function's ODDS_INGEST_FUNCTION_SECRET;
-          # without it the forced pre-hydrate ingest is rejected with HTTP 401.
           ODDS_INGEST_FUNCTION_SECRET: ${{ secrets.ODDS_INGEST_FUNCTION_SECRET }}
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -130,8 +121,6 @@ jobs:
           EXECUTION_MAX_NOTIONAL: "0"
           EXECUTION_MAX_SYMBOL_EXPOSURE: "0"
           PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,betonline,fanduel,draftkings"
-          
-          # --- PROXY AUTHENTICATION ---
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
