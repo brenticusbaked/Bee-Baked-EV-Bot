@@ -241,7 +241,7 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
     groups: [
       "pitcher_strikeouts,pitcher_outs,pitcher_hits_allowed,pitcher_earned_runs",
       "batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored",
-      "batter_strikeouts,batter_walks,batter_stolen_bases",
+      "batter_strikeouts,batter_walks", // Removed batter_stolen_bases
       "alternate_spreads,alternate_totals",
     ],
   },
