@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 
 from utils.time import get_local_now
 from utils.thresholds import env_float
+import os
 
 
 # Game statuses that indicate cancellation or postponement
@@ -17,6 +18,7 @@ START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 180.0)
 # Scheduled fixtures can drift a bit in the cache or across time zones, so we
 # allow a broader buffer before treating them as truly stale.
 SCHEDULE_GRACE_MINUTES = env_float("SCRATCH_GUARD_SCHEDULE_GRACE_MINUTES", 360.0)
+TRACE_SKIPS = os.getenv("SCRATCH_GUARD_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def check_event_status(event: dict) -> Tuple[bool, str]:
@@ -84,7 +86,16 @@ def filter_valid_events(events: List[dict], sport: str = "") -> List[dict]:
             valid.append(event)
         else:
             matchup = f"{event.get('away_team', '?')} @ {event.get('home_team', '?')}"
-            print(f"scratch_guard: skipping {sport} {matchup} ({reason})")
+            if TRACE_SKIPS:
+                status = str(event.get("status", "")).strip().lower() or "unknown"
+                commence_time = str(event.get("commence_time", "")).strip() or "missing"
+                now_utc = datetime.now(timezone.utc).isoformat()
+                print(
+                    f"scratch_guard: skipping {sport} {matchup} ({reason}) "
+                    f"| status={status} | commence_time={commence_time} | now_utc={now_utc}"
+                )
+            else:
+                print(f"scratch_guard: skipping {sport} {matchup} ({reason})")
     return valid
 
 

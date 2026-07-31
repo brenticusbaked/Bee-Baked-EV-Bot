@@ -9,6 +9,12 @@ on:
     # 10:30 PM CT - late-night opener
     - cron: '30 3 * * *'
   workflow_dispatch:
+    inputs:
+      scratch_guard_trace:
+        description: "Print scratch_guard skip details for one run"
+        required: false
+        default: "false"
+        type: boolean
 
 concurrency:
   group: main-pipeline
@@ -97,6 +103,7 @@ jobs:
           ENABLE_PARTIAL_GAME_MARKET_ALERTS: "true"
           SCRATCH_GUARD_START_GRACE_MINUTES: "180"
           SCRATCH_GUARD_SCHEDULE_GRACE_MINUTES: "360"
+          SCRATCH_GUARD_TRACE: ${{ inputs.scratch_guard_trace || 'false' }}
           ENABLE_MLB_H2H_ALERTS: "true"
           ENABLE_CORRELATION_LIMITS: "false"
           UNIFIED_EV_THRESHOLD: "0.008"
