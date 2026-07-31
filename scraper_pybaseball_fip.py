@@ -34,7 +34,8 @@ async def run_fip_scraper():
         browser = await p.chromium.launch(headless=True, proxy=proxy_settings)
         context = await browser.new_context(
             ignore_https_errors=True,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080}
         )
         page = await context.new_page()
         
@@ -42,17 +43,17 @@ async def run_fip_scraper():
             url = f"https://www.fangraphs.com/leaders/major-league?pos=all&stats=pit&lg=all&qual=0&type=8&season={season}&month=0"
             async with page.expect_response(
                 lambda res: "api/leaders/major-league/data" in res.url,
-                timeout=15000,
+                timeout=30000,
             ) as response_info:
-                await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                await page.goto(url, wait_until="networkidle", timeout=40000)
             json_response = await response_info.value.json()
             if "data" in json_response:
                 fg_data = json_response["data"]
-        except Exception:
-            print(f"FanGraphs DOM timeout caught gracefully. Checking for intercepted API data...")
+        except Exception as e:
+            print(f"FanGraphs DOM timeout/intercept caught: {e}. Checking for intercepted API data...")
             if not fg_data:
                 try:
-                    await page.reload(wait_until="domcontentloaded", timeout=15000)
+                    await page.reload(wait_until="networkidle", timeout=20000)
                 except Exception:
                     pass
             
