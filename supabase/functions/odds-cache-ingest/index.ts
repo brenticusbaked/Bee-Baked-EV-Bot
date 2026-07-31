@@ -44,10 +44,6 @@ type IngestJob = {
   regions: string;
   bookmakers?: string;
   estimatedCredits: number;
-  // Enrich jobs carry BOTH the sharp (Pinnacle/EU) and soft (US) pull as an
-  // atomic pair. They remain two separate API requests (Rule 2 — sharp/soft
-  // isolation), but are budgeted together so a sharp pull is never paid for
-  // without its soft counterpart. Undefined for main jobs.
   sharpRegions?: string;
   sharpBookmakers?: string;
   softRegions?: string;
@@ -57,27 +53,18 @@ type IngestJob = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-// Tiered key pool in strict priority order: ODDS_API_KEY is the 20k-credit
-// primary that carries the whole budget; ODDS_API_KEY_2..4 are 500-credit/mo
-// reserves used ONLY as failover on quota/auth errors (401/402/429). Keys are
-// tried in this fixed order (never round-robin) so the small reserve keys are
-// not burned prematurely and a single exhausted key never stalls ingestion.
+
+// Expanded Tiered Key Pool (added ODDS_API_KEY_5)
 const ODDS_API_KEYS = [
   Deno.env.get("ODDS_API_KEY") ?? "",
   Deno.env.get("ODDS_API_KEY_2") ?? "",
   Deno.env.get("ODDS_API_KEY_3") ?? "",
   Deno.env.get("ODDS_API_KEY_4") ?? "",
+  Deno.env.get("ODDS_API_KEY_5") ?? "",
 ].map((key) => key.trim()).filter(Boolean);
-// Trimmed so a stray trailing space/newline in the stored secret (a common
-// cause of spurious 401s) can't break the exact-match auth check below.
+
 const INGEST_SECRET = (Deno.env.get("ODDS_INGEST_FUNCTION_SECRET") ?? "").trim();
 const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
-// Target books. The Odds API bills per REGION (or per 10 bookmakers), not per
-// individual book, so widening this list up to 10 books adds ZERO credit cost
-// while giving props a broader consensus baseline and more soft-book mispricings
-// to catch. Keep pinnacle (eu, sharp baseline for main markets) first and keep
-// the list at <=10 so it stays a single region-equivalent. Books past 10 would
-// bill as an extra region-equivalent.
 const BOOKMAKERS = Deno.env.get("ODDS_API_TARGET_BOOKS") ??
   "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers";
 const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals";
@@ -85,22 +72,16 @@ const WNBA_PROP_MARKETS = Deno.env.get("ODDS_API_WNBA_PROP_MARKETS") ??
   "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals,player_turnovers,player_points_rebounds_assists,player_points_rebounds,player_points_assists,player_rebounds_assists,player_field_goals,player_frees_made,player_frees_attempts";
 const NFL_PROP_MARKETS = Deno.env.get("ODDS_API_NFL_PROP_MARKETS") ??
   "player_pass_attempts,player_pass_completions,player_pass_interceptions,player_pass_longest_completion,player_pass_rush_yds,player_pass_rush_reception_tds,player_pass_rush_reception_yds,player_pass_tds,player_pass_yds,player_pass_yds_q1,player_pats,player_receptions,player_reception_longest,player_reception_tds,player_reception_yds,player_rush_attempts,player_rush_longest,player_rush_reception_tds,player_rush_reception_yds,player_rush_tds,player_rush_yds,player_sacks,player_solo_tackles,player_tackles_assists,player_kicking_points,player_field_goals,player_defensive_interceptions";
-// Tennis is priced on the moneyline (h2h) only — game spreads/totals are thin
-// and less reliably posted by Pinnacle, and h2h keeps each tournament's main
-// pull cheap (1 market x regions). Override per-sport main markets here.
+
 const TENNIS_MAIN_MARKETS = Deno.env.get("ODDS_API_TENNIS_MARKETS") ?? "h2h";
 function mainMarketsFor(sportKey: string): string {
   const rawMarkets = sportKey.startsWith("tennis") ? TENNIS_MAIN_MARKETS : MAIN_MARKETS;
   return filterMainMarkets(sportKey, rawMarkets);
 }
-// Soft (recreational) enrichment pull: US region, rec books only.
+
 const ENRICH_REGIONS = Deno.env.get("ODDS_API_ENRICH_REGIONS") ?? "us";
-// Sharp enrichment pull: Pinnacle lives only in `eu`, and it is the mandatory
-// fair-value baseline for every prop (.windsurfrules Rule 1/2). Fetched as its
-// own request so sharp and soft data stay isolated.
 const SHARP_BOOK = Deno.env.get("ODDS_API_SHARP_BOOK") ?? "pinnacle";
 const ENRICH_SHARP_REGIONS = Deno.env.get("ODDS_API_ENRICH_SHARP_REGIONS") ?? "eu";
-// Soft books for the enrichment pull = target books minus the sharp book.
 const SOFT_BOOKMAKERS = (Deno.env.get("ODDS_API_TARGET_BOOKS") ??
   "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers")
   .split(",")
@@ -108,101 +89,34 @@ const SOFT_BOOKMAKERS = (Deno.env.get("ODDS_API_TARGET_BOOKS") ??
   .filter((book) => book && book !== SHARP_BOOK)
   .join(",");
 
-// Extended US book coverage. Bovada is already covered by the `us` region on
-// every main run at no extra cost. The only extra region we pull is `us_ex`
-// (US exchanges) for Novig — cost is billed per region, not per book, so Kalshi
-// / Polymarket / ProphetX come along for free in the same request. Fliff / ESPN
-// BET (ex-theScore) live in a separate `us2` region and are NOT pulled by
-// default to avoid the extra per-region credit; add "us2" to
-// ODDS_API_EXTENDED_REGIONS (and the books to ODDS_API_EXTENDED_BOOKS) to opt
-// in. Extended pulls run every N slots and stay bounded by MAX_CREDITS_PER_RUN.
-// Set ODDS_EXTENDED_EVERY_N_SLOTS=0 to disable extended coverage entirely.
 const EXTENDED_REGIONS = Deno.env.get("ODDS_API_EXTENDED_REGIONS") ?? "us_ex";
 const EXTENDED_BOOKS = Deno.env.get("ODDS_API_EXTENDED_BOOKS") ??
   "novig,kalshi,polymarket,prophetx";
-// Disabled by default: the extended pull only adds the betting EXCHANGES
-// (Novig/Kalshi/Polymarket/ProphetX), which are used almost exclusively for the
-// arbitrage scanner. Scheduled arb alerts are off, so paying an extra billed
-// region for exchange lines every few slots is wasted budget — those freed
-// credits go to the sharp/soft prop pulls instead. Set
-// ODDS_EXTENDED_EVERY_N_SLOTS>0 to re-enable exchange coverage for manual arb.
 const EXTENDED_EVERY_N_SLOTS = Number(Deno.env.get("ODDS_EXTENDED_EVERY_N_SLOTS") ?? "0");
 const ENABLE_MARKET_ENRICHMENT =
   (Deno.env.get("ENABLE_MARKET_ENRICHMENT") ?? "true").toLowerCase() !== "false";
 
-// Strict per-run credit ceiling. Each prop group needs BOTH a sharp (Pinnacle/
-// EU) and a soft (US) per-event pull, and the two are budgeted as an atomic pair
-// (see the enrich executor) so a sharp pull is never paid for without its soft
-// counterpart. With two in-season sports the mains cost ~12 credits (2 sports x
-// 3 markets x us,eu) and one prop pair costs ~10 (5 markets x eu + 5 x us), so
-// the ceiling must clear ~22 for props to land at all — 14 could only ever fit
-// the sharp half, which is why soft-book props were missing.
-//
-// The per-run ceiling is a *safety cap*, not the spend driver: the game-proximity
-// throttle below only pulls a sport on ticks near its next game, so realized
-// spend has run far under the theoretical 30-runs/day x ceiling. Depth was raised
-// from 24 to 48 credits/run and from 2 to 4 enriched events/run to cover more
-// props/alternates while the throttle keeps actual monthly spend near the 20k
-// tier. Monitor odds_ingest_runs.credits_used; if it trends much above ~600/day,
-// lower these (or ODDS_MAX_EVENTS_PER_ENRICH) via env — no redeploy needed.
-// For a temporary end-of-month burn, set ODDS_BURN_UNTIL (below) rather than
-// changing these permanent defaults.
-
-// --- Auto-expiring end-of-month credit burn ----------------------------------
-// Set ODDS_BURN_UNTIL to a UTC date (YYYY-MM-DD, inclusive) to temporarily
-// deepen ingestion and spend down the remaining monthly credits before the tier
-// resets. While today's UTC date is on or before ODDS_BURN_UNTIL, the burn caps
-// apply and the proximity throttle is bypassed (pull every active sport every
-// tick); once the date passes, the function reverts to the steady-state defaults
-// automatically — no manual change or redeploy needed. Leave unset to disable.
-// The primary key is hard-capped at the monthly tier, so a burn can't exceed it;
-// tune intensity with ODDS_BURN_MAX_CREDITS_PER_RUN / ODDS_BURN_MAX_EVENTS_PER_ENRICH.
 const BURN_UNTIL = (Deno.env.get("ODDS_BURN_UNTIL") ?? "").trim();
 const BURN_ACTIVE = BURN_UNTIL !== "" && new Date().toISOString().slice(0, 10) <= BURN_UNTIL;
 const BURN_MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_BURN_MAX_CREDITS_PER_RUN") ?? "150");
 const BURN_MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_BURN_MAX_EVENTS_PER_ENRICH") ?? "6");
-if (BURN_ACTIVE) {
-  console.log(`[burn] active until ${BURN_UNTIL}: depth raised, proximity throttle bypassed`);
-}
 
 const MAX_CREDITS_PER_RUN = BURN_ACTIVE
   ? BURN_MAX_CREDITS_PER_RUN
   : Number(Deno.env.get("ODDS_MAX_CREDITS_PER_RUN") ?? "48");
-// Cap on how many events get per-event enrichment (props/alternates/derivatives)
-// in a single run. Events rotate across runs by the time-based slot.
 const MAX_EVENTS_PER_ENRICH = BURN_ACTIVE
   ? BURN_MAX_EVENTS_PER_ENRICH
   : Number(Deno.env.get("ODDS_MAX_EVENTS_PER_ENRICH") ?? "4");
 const CYCLE_MINUTES = Number(Deno.env.get("ODDS_CYCLE_MINUTES") ?? "10");
 
-// --- Game-proximity throttle -------------------------------------------------
-// Concentrate the Odds API budget on games that are close to first pitch/tip and
-// spend almost nothing when the nearest game is far away. On each cron tick the
-// function looks up the nearest upcoming fixture per sport, derives a target
-// poll interval from how many hours out that game is, and only pulls the sport
-// on ticks that land on that interval (measured in CYCLE_MINUTES slots). This
-// reproduces a "poll faster as the game approaches" schedule while staying on
-// the serverless pg_cron model — no long-running process, no extra infra, and
-// it can only ever REDUCE spend versus pulling every sport every tick. The
-// tiers mirror the syndicate's requested schedule (far → sparse ... imminent →
-// every tick). Set ODDS_PROXIMITY_THROTTLE=false to pull every active sport on
-// every tick (previous behaviour).
 const PROXIMITY_THROTTLE = !BURN_ACTIVE &&
   (Deno.env.get("ODDS_PROXIMITY_THROTTLE") ?? "true").toLowerCase() !== "false";
-// Hour cutoffs (hours until nearest game) that define the tiers.
 const PROXIMITY_FAR_HOURS = Number(Deno.env.get("ODDS_PROXIMITY_FAR_HOURS") ?? "24");
 const PROXIMITY_MID_HOURS = Number(Deno.env.get("ODDS_PROXIMITY_MID_HOURS") ?? "12");
 const PROXIMITY_NEAR_HOURS = Number(Deno.env.get("ODDS_PROXIMITY_NEAR_HOURS") ?? "2");
-// Target minutes between pulls for each tier.
-//   > FAR_HOURS            -> POLL_FAR_MINUTES     (default 4h)
-//   MID_HOURS..FAR_HOURS   -> POLL_MID_MINUTES     (default 1h)
-//   NEAR_HOURS..MID_HOURS  -> POLL_CLOSE_MINUTES   (default 15m)
-//   <= NEAR_HOURS (or live)-> every tick (CYCLE_MINUTES)
 const POLL_FAR_MINUTES = Number(Deno.env.get("ODDS_POLL_FAR_MINUTES") ?? "240");
 const POLL_MID_MINUTES = Number(Deno.env.get("ODDS_POLL_MID_MINUTES") ?? "60");
 const POLL_CLOSE_MINUTES = Number(Deno.env.get("ODDS_POLL_CLOSE_MINUTES") ?? "15");
-// Nearest game unknown (no fixtures cached yet) -> moderate discovery cadence so
-// a fresh slate is still picked up promptly without polling a dead sport all day.
 const POLL_UNKNOWN_MINUTES = Number(Deno.env.get("ODDS_POLL_UNKNOWN_MINUTES") ?? "60");
 
 const PROXIMITY_CONFIG: ProximityConfig = {
@@ -216,27 +130,12 @@ const PROXIMITY_CONFIG: ProximityConfig = {
   cycleMinutes: CYCLE_MINUTES,
 };
 
-// Universe of leagues the syndicate cares about, in realized-ROI priority order
-// (MLB best on volume, then WNBA; NBA/NHL/NFL for their seasons; tennis).
-// The first sport is favored by the first-job-always-runs rule, so keep the
-// strongest market first. This is a *superset* — each run auto-narrows it to the
-// leagues actually in season (see resolveActiveSports), so idle leagues cost 0
-// credits and NBA/NHL/NFL switch on by themselves when their seasons open. No
-// need to edit this by season. Tokens may be concrete Odds API sport keys or
-// umbrella tennis tokens (`tennis`, `tennis_atp`, `tennis_wta`); tennis keys are
-// per-tournament and rotate weekly, so they're expanded at runtime.
 const SPORT_UNIVERSE_BASE = (Deno.env.get("ODDS_API_SPORT_UNIVERSE") ??
   "baseball_mlb,basketball_wnba,basketball_nba,icehockey_nhl,americanfootball_nfl,tennis")
   .split(",")
   .map((sport) => sport.trim())
   .filter(Boolean);
 
-// Multi-sport expansion toggles. Soccer/tennis are gated so we don't drain the
-// Odds API budget: every candidate is still leagueHasGames()-gated (free
-// /events, 0 credits), so an off-season / no-games league costs nothing.
-//   - ENABLE_TENNIS_SCAN (default on): keep the `tennis` umbrella token.
-//   - ENABLE_SOCCER_SCAN (default off): add the SOCCER_LEAGUES_FILTER keys.
-//   - SOCCER_LEAGUES_FILTER: which soccer leagues to consider (bounds the pull).
 const ENABLE_TENNIS_SCAN =
   (Deno.env.get("ENABLE_TENNIS_SCAN") ?? "true").toLowerCase() !== "false";
 const ENABLE_SOCCER_SCAN =
@@ -260,9 +159,6 @@ const SPORT_UNIVERSE = (() => {
   return universe;
 })();
 
-// Auto-detect in-season leagues by default. Set ODDS_API_AUTODETECT_SPORTS=false
-// to pin the run to an explicit ODDS_API_ACTIVE_SPORTS list instead (manual
-// override; still season-filtered and tennis-expanded).
 const AUTODETECT_SPORTS =
   (Deno.env.get("ODDS_API_AUTODETECT_SPORTS") ?? "true").toLowerCase() !==
     "false";
@@ -271,19 +167,10 @@ const MANUAL_SPORTS = (Deno.env.get("ODDS_API_ACTIVE_SPORTS") ?? "")
   .map((sport) => sport.trim())
   .filter(Boolean);
 
-// How far ahead a league must have a scheduled game to count as "in season".
-// Covers the current + upcoming slate (e.g. NFL/NHL preseason a week out) while
-// still excluding a league that only posts distant futures.
 const SEASON_HORIZON_HOURS = Number(
   Deno.env.get("ODDS_SEASON_HORIZON_HOURS") ?? "192",
 );
 
-// True if a concrete league has at least one real, dated game within the season
-// horizon. Uses the FREE /v4/sports/{key}/events endpoint (0 credits) which
-// lists only actual game events — never futures/outrights — so a league that is
-// technically "active" year-round for Super Bowl/Stanley Cup futures does NOT
-// count as in season here. On any error we return false (exclude) rather than
-// spend main-pull credits on a league we can't confirm has games.
 async function leagueHasGames(sportKey: string): Promise<boolean> {
   try {
     const url = new URL(
@@ -299,23 +186,6 @@ async function leagueHasGames(sportKey: string): Promise<boolean> {
   }
 }
 
-// Resolve the desired league universe into the concrete sport keys to pull this
-// run. Two independent free (0-credit) signals:
-//   - Concrete leagues (baseball_mlb, basketball_nba, ...): kept only if they
-//     have a real upcoming GAME (leagueHasGames -> /events). This is what makes
-//     NBA/NHL/NFL switch on exactly when their seasons have games and stay off
-//     — with zero wasted credits — the rest of the year.
-//   - Tennis umbrella tokens: expanded to the currently-active per-tournament
-//     keys from the /v4/sports listing (keys rotate weekly).
-// Free /events checks run in parallel. If everything is unreachable the run
-// simply yields no sports (a skipped tick), which is cheaper and safer than
-// blindly pulling every league.
-// Raw /v4/sports listing (free, 0 credits). Returns the sport keys, or null if
-// the listing couldn't be fetched/parsed. `all=true` includes sports that are
-// out of season / not in the default in-season listing — needed for tennis,
-// whose per-tournament keys are frequently absent from the default listing even
-// while tournaments are running. Kept separate so a debug call can surface
-// exactly what The Odds API is returning.
 async function fetchSportKeys(all: boolean): Promise<string[] | null> {
   try {
     const url = new URL("https://api.the-odds-api.com/v4/sports/");
@@ -335,24 +205,16 @@ async function fetchSportKeys(all: boolean): Promise<string[] | null> {
 
 async function resolveActiveSports(universe: string[]): Promise<string[]> {
   const wantsTennis = universe.some(isTennisToken);
-
-  // Tennis discovery. Use the `all=true` listing because tennis tournaments are
-  // routinely missing from the default in-season listing, then keep only the
-  // tennis keys that actually have upcoming matches (leagueHasGames -> /events),
-  // exactly like the concrete leagues. This avoids requesting a listed-but-empty
-  // tournament and burns 0 credits (both endpoints are free).
   let tennisCandidates: string[] = [];
   if (wantsTennis) {
     const allKeys = (await fetchSportKeys(true)) ?? [];
     const tennisKeys = allKeys.filter((key) => key.startsWith("tennis"));
-    // Expand umbrella tokens (tennis / tennis_atp / tennis_wta) to candidates.
     tennisCandidates = resolveSportsFromActive(
       universe.filter(isTennisToken),
       tennisKeys,
     );
   }
 
-  // Gate concrete leagues AND tennis candidates on real upcoming games.
   const concrete = universe.filter((token) => !isTennisToken(token));
   const gateTargets = [...concrete, ...tennisCandidates];
   const gates = await Promise.all(
@@ -373,24 +235,6 @@ async function resolveActiveSports(universe: string[]): Promise<string[]> {
   return resolved;
 }
 
-// Per-sport expansion markets, fetched from the per-event odds endpoint. Each
-// entry is an ordered list of market GROUPS; every group becomes its own enrich
-// job. Groups are kept small (<=5 markets => <=5 credits/event per region) so
-// each fits under MAX_CREDITS_PER_RUN, and the rotation fans the groups out
-// across cron slots. Order matters: earlier groups (highest-liquidity, main
-// lines) are favored by the rotation.
-//
-// IMPORTANT: the +EV engine prices every player prop against the PINNACLE
-// baseline (multiplicative de-vig; see unified_bot.evaluate_player_props and
-// .windsurfrules Rule 1). It can only alert on markets Pinnacle actually posts
-// as clean Over/Under pairs. So these lists are limited to standard counting-
-// stat Over/Under props + team alternate spread/total ladders + quarter/half
-// derivatives. NOT included (Pinnacle doesn't post them / they aren't clean
-// two-way markets, so the current engine can't price them and pulling them
-// would waste credits): alternate player-prop ladders, first-basket, anytime-
-// scorer, double/triple-double, record-a-win. Pricing those needs a
-// distribution model off the Pinnacle main line (utils/prop_pricing.py) wired
-// into the alert path — a separate, approval-gated change.
 type SportExtras = { groups: string[] };
 const SPORT_EXTRAS: Record<string, SportExtras> = {
   baseball_mlb: {
@@ -433,18 +277,12 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
   },
 };
 
-// Soccer shares one enrichment profile across all soccer_* league keys. Limited
-// to clean two-way Over/Under player props Pinnacle posts (shots / shots on
-// target) plus alternate totals — anytime-scorer is not a clean two-way market
-// so it's excluded (same rationale as the note above).
 const SOCCER_PROP_MARKETS = Deno.env.get("ODDS_API_SOCCER_PROP_MARKETS") ??
   "player_shots_on_target,player_shots";
 const SOCCER_EXTRAS: SportExtras = {
   groups: [SOCCER_PROP_MARKETS, "alternate_totals"],
 };
 
-// Enrichment profile for a sport key. Soccer is resolved by prefix since every
-// soccer_* league uses the same profile.
 function extrasFor(sportKey: string): SportExtras | undefined {
   if (SPORT_EXTRAS[sportKey]) return SPORT_EXTRAS[sportKey];
   if (sportKey.startsWith("soccer_")) return SOCCER_EXTRAS;
@@ -471,16 +309,11 @@ function currentSlot(): number {
   return Math.floor(Date.now() / (CYCLE_MINUTES * 60 * 1000));
 }
 
-// How far ahead enrichment (props/alternates/derivatives) reaches for upcoming
-// fixtures. Raised from 30h to 48h so late-night runs (e.g. the 03:30 UTC slot)
-// pick up tomorrow's opening lines instead of stopping at ~30h — the late-night
-// date-scoping fix. Tunable via env without a redeploy.
 const UPCOMING_HORIZON_HOURS = Number(
   Deno.env.get("ODDS_UPCOMING_HORIZON_HOURS") ?? "48",
 );
 
 async function getUpcomingFixtureIds(sportKey: string): Promise<string[]> {
-  // Live and near-term fixtures only (avoids paying to enrich finished games).
   const lookbackHours = 6;
   const horizonHours = UPCOMING_HORIZON_HOURS;
   const since = new Date(Date.now() - lookbackHours * 3600 * 1000).toISOString();
@@ -496,13 +329,8 @@ async function getUpcomingFixtureIds(sportKey: string): Promise<string[]> {
   return data.map((row) => String(row.id));
 }
 
-// Hours until the nearest upcoming (or currently-live) game for a sport, read
-// from cached fixtures. Costs zero Odds API credits. Returns null when no
-// fixture is cached in range so the caller falls back to the discovery cadence.
 async function hoursUntilNearestGame(sportKey: string): Promise<number | null> {
   const now = Date.now();
-  // Include games that started up to ~3h ago so in-play events still count as
-  // "near". Horizon of 72h keeps far-out openers visible for the sparse tier.
   const lookbackHours = 3;
   const horizonHours = 72;
   const since = new Date(now - lookbackHours * 3600 * 1000).toISOString();
@@ -530,9 +358,6 @@ function buildJobs(slot: number, sports: string[]): IngestJob[] {
     estimatedCredits: creditsFor(mainMarketsFor(sportKey), REGIONS),
   }));
 
-  // Extended-book main pull (Fliff / ESPN BET / exchanges) in their own regions.
-  // Runs only every EXTENDED_EVERY_N_SLOTS-th slot so the extra billed regions
-  // don't refresh every cycle; the per-run ceiling still bounds total spend.
   const extendedJobs: IngestJob[] = [];
   if (
     EXTENDED_EVERY_N_SLOTS > 0 &&
@@ -552,13 +377,6 @@ function buildJobs(slot: number, sports: string[]): IngestJob[] {
     }
   }
 
-  // Enrichment fetches derivatives / alternates / player props from the
-  // per-event odds endpoint. Every prop is priced against the PINNACLE baseline
-  // downstream, and Pinnacle only lives in the `eu` region, so each group needs
-  // BOTH a sharp pull (eu, pinnacle only) and a soft pull (us, rec books). These
-  // are kept as separate requests per .windsurfrules Rule 2 (sharp/soft data
-  // isolation); the cache merges them back per fixture. Without the sharp pull,
-  // props have no baseline and never alert.
   const enrichJobs: IngestJob[] = [];
   if (ENABLE_MARKET_ENRICHMENT) {
     for (const sportKey of sports) {
@@ -584,8 +402,6 @@ function buildJobs(slot: number, sports: string[]): IngestJob[] {
     }
   }
 
-  // Rotate each group independently by the time slot so main refreshes, extended
-  // book pulls, and expensive enrichment pulls fan out fairly across the day.
   return [
     ...rotate(mainJobs, slot),
     ...rotate(extendedJobs, slot),
@@ -593,17 +409,31 @@ function buildJobs(slot: number, sports: string[]): IngestJob[] {
   ];
 }
 
-// Fetch with tiered-key failover in strict priority order (primary 20k key
-// first, then 500-credit reserves). Advances to the next key only on
-// quota/auth errors so one exhausted key never stalls the run.
+// Improved oddsFetch: checks both status code and body text for quota expiration strings
 async function oddsFetch(url: URL): Promise<Response> {
   let lastResponse: Response | null = null;
   for (const key of ODDS_API_KEYS) {
     url.searchParams.set("apiKey", key);
     const response = await fetch(url);
-    if (![401, 402, 429].includes(response.status)) {
+    
+    // Clone response to inspect body without consuming it
+    const clone = response.clone();
+    let bodyText = "";
+    try {
+      bodyText = await clone.text();
+    } catch (_e) {
+      // ignore body read issues
+    }
+
+    const isQuotaError = 
+      [401, 402, 429].includes(response.status) || 
+      bodyText.includes("OUT_OF_USAGE_CREDITS");
+
+    if (!isQuotaError) {
       return response;
     }
+    
+    console.warn(`API Key ending in ...${key.slice(-4)} exhausted or hit quota limit. Rotating...`);
     lastResponse = response;
   }
   if (lastResponse) return lastResponse;
@@ -644,7 +474,6 @@ async function fetchEventOdds(
   const remaining = numericHeader(response, "x-requests-remaining");
   const lastCost = numericHeader(response, "x-requests-last");
   if (response.status === 404 || response.status === 422) {
-    // Market not offered for this event/sport — treat as a no-op, still billed.
     return { event: null, creditsUsed: lastCost ?? creditsFor(markets, regions), remaining };
   }
   if (!response.ok) {
@@ -678,8 +507,6 @@ async function upsertFixtures(sportKey: string, events: OddsEvent[]): Promise<nu
   return fixtureRows.length;
 }
 
-// Cache invalidation: latest stored last_update per fixture|book|market so we
-// only write rows when the API payload is genuinely newer.
 async function latestUpdateMap(fixtureIds: string[]): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   if (!fixtureIds.length) return map;
@@ -734,7 +561,6 @@ async function upsertOdds(sportKey: string, events: OddsEvent[]): Promise<number
         const marketTs = Date.parse(marketLastUpdate);
         const key = `${event.id}|${bookmaker.key}|${market.key}`;
         const storedTs = seen.get(key);
-        // Skip stale markets: only ingest when strictly newer than what we have.
         if (storedTs !== undefined && Number.isFinite(marketTs) && marketTs <= storedTs) {
           continue;
         }
@@ -776,10 +602,6 @@ serve(async (request) => {
     return new Response(JSON.stringify({ error: "missing required environment variables" }), { status: 500 });
   }
 
-  // Manual/forced invocations bypass the proximity throttle so a hand-fired
-  // test (or an ad-hoc backfill) always pulls every active sport instead of
-  // possibly landing on a "skipped" slot. Triggered by `{"force": true}` or any
-  // trigger string starting with "manual" in the request body.
   let forceRun = false;
   let debug = "";
   try {
@@ -789,13 +611,9 @@ serve(async (request) => {
       trigger.startsWith("manual");
     debug = String((body as { debug?: unknown })?.debug ?? "");
   } catch (_error) {
-    // No/invalid JSON body — treat as a normal scheduled tick.
+    // No/invalid JSON body
   }
 
-  // Zero-credit diagnostic: `{"debug":"sports"}` returns exactly what the
-  // sport-resolution sees (raw active listing, tennis keys, per-league game
-  // gating, final resolved set) without pulling any odds. Use it to see why a
-  // league/tennis is or isn't being requested.
   if (debug === "sports") {
     const inSeason = await fetchSportKeys(false);
     const allKeys = await fetchSportKeys(true);
@@ -828,17 +646,11 @@ serve(async (request) => {
 
   const slot = currentSlot();
   const startedAt = new Date().toISOString();
-  // Narrow the desired league set to what's in season (and expand tennis to its
-  // active tournament keys). Default: auto-detect from the full universe. If
-  // auto-detect is disabled and an explicit ODDS_API_ACTIVE_SPORTS is set, use
-  // that as the desired set instead.
   const desiredSports = (!AUTODETECT_SPORTS && MANUAL_SPORTS.length > 0)
     ? MANUAL_SPORTS
     : SPORT_UNIVERSE;
   const activeSports = await resolveActiveSports(desiredSports);
 
-  // Game-proximity throttle: only pull sports whose nearest game makes them due
-  // on this tick. Spends nothing on sports whose next game is hours away.
   let sportsToRun = activeSports;
   const proximityBySport: Record<string, number | null> = {};
   if (PROXIMITY_THROTTLE && !forceRun) {
@@ -852,8 +664,6 @@ serve(async (request) => {
     sportsToRun = due;
   }
 
-  // Nothing due this tick — record a zero-credit skipped run (so the schedule is
-  // visibly ticking, not silently dead) and return without spending credits.
   if (sportsToRun.length === 0) {
     await supabase.from("odds_ingest_runs").insert({
       status: "skipped",
@@ -894,11 +704,6 @@ serve(async (request) => {
     const jobs = buildJobs(slot, sportsToRun);
     let enrichedEvents = 0;
 
-    // A forced/manual run (e.g. the pipeline's pre-scan trigger) refreshes EVERY
-    // active event's props/alternates so the scan and execution desk price off
-    // freshly-pulled odds instead of a rotating, possibly stale subset. It uses a
-    // higher force-only credit ceiling; the primary key is still hard-capped at
-    // the monthly tier so this can't overspend it.
     const forceFull = forceRun;
     const effMaxCredits = forceFull
       ? Number(Deno.env.get("ODDS_FORCE_MAX_CREDITS_PER_RUN") ?? "500")
@@ -928,11 +733,7 @@ serve(async (request) => {
         const pairCredits = job.perEventCredits ?? job.estimatedCredits;
         for (const eventId of rotated) {
           const firstEnrich = apiRequests === 0;
-          // Reserve the FULL sharp+soft pair budget before starting so we never
-          // pay for a sharp pull that can't be de-vigged with a soft price into
-          // an alert (the bug that left soft-book props missing).
           if (!firstEnrich && creditsUsed + pairCredits > effMaxCredits) break;
-          // Sharp pull (Pinnacle/EU) — mandatory fair-value baseline.
           const sharp = await fetchEventOdds(
             job.sportKey,
             eventId,
@@ -944,7 +745,6 @@ serve(async (request) => {
           creditsUsed += sharp.creditsUsed;
           if (sharp.remaining !== null) remaining = sharp.remaining;
           if (sharp.event) oddsRows += await upsertOdds(job.sportKey, [sharp.event]);
-          // Soft pull (US rec books) — separate request (Rule 2), same event.
           const soft = await fetchEventOdds(
             job.sportKey,
             eventId,
