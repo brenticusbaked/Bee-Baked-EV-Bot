@@ -80,7 +80,7 @@ const REGIONS = Deno.env.get("ODDS_API_REGIONS") ?? "us,eu";
 // bill as an extra region-equivalent.
 const BOOKMAKERS = Deno.env.get("ODDS_API_TARGET_BOOKS") ??
   "pinnacle,fanduel,draftkings,betmgm,bet365,caesars,bovada,espnbet,fanatics,betrivers";
-const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals,h2h_1st_5_innings";
+const MAIN_MARKETS = Deno.env.get("ODDS_API_MARKETS") ?? "h2h,spreads,totals";
 const WNBA_PROP_MARKETS = Deno.env.get("ODDS_API_WNBA_PROP_MARKETS") ??
   "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals,player_turnovers,player_points_rebounds_assists,player_points_rebounds,player_points_assists,player_rebounds_assists,player_field_goals,player_frees_made,player_frees_attempts";
 const NFL_PROP_MARKETS = Deno.env.get("ODDS_API_NFL_PROP_MARKETS") ??

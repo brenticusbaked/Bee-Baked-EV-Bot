@@ -171,6 +171,20 @@ class LeagueFetchToleranceTests(unittest.TestCase):
         self.assertNotIn("WNBA:400", stats.get("errored_leagues", []))
         self.assertNotIn("reason", stats)
 
+    def test_retry_error_is_soft_skipped(self):
+        def responder(method, url, params=None, **kwargs):
+            league = (params or {}).get("leagueID")
+            if league == "NBA":
+                raise requests.exceptions.RetryError("retry exhausted")
+            fake = mock.Mock()
+            fake.json.return_value = {"success": True, "data": [_mlb_event()]}
+            return fake
+
+        picks, _near, stats = self._run(["NBA", "MLB"], responder)
+        self.assertGreater(stats["events"], 0)
+        self.assertIn("NBA:retry", stats.get("soft_skipped_leagues", []))
+        self.assertNotIn("NBA:RetryError", stats.get("errored_leagues", []))
+
 
 if __name__ == "__main__":
     unittest.main()

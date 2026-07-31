@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime
 
 from db_manager import _execution_payload_from_report
 from execution.desk import ExecutionDesk, report_to_dict
@@ -34,6 +35,17 @@ class ExecutionPersistenceTests(unittest.TestCase):
         self.assertEqual(len(payload["venue_metrics"]), 2)
         self.assertTrue(payload["fills"][0]["fill_id"].startswith(payload["fills"][0]["child_order_id"]))
         self.assertTrue(payload["venue_metrics"][0]["metric_id"].startswith(payload["venue_metrics"][0]["child_order_id"]))
+        self.assertFalse(_contains_datetime(payload))
+
+
+def _contains_datetime(value):
+    if isinstance(value, datetime):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_datetime(inner) for inner in value.values())
+    if isinstance(value, list):
+        return any(_contains_datetime(inner) for inner in value)
+    return False
 
 
 if __name__ == "__main__":

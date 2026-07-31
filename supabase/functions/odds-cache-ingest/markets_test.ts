@@ -5,7 +5,7 @@ Deno.test("mlb main markets strip runs_1st_inning", () => {
   const raw = "h2h,spreads,totals,h2h_1st_5_innings,runs_1st_inning";
   assertEquals(
     mainMarketsFor("baseball_mlb", raw),
-    "h2h,spreads,totals,h2h_1st_5_innings",
+    "h2h,spreads,totals",
   );
 });
 

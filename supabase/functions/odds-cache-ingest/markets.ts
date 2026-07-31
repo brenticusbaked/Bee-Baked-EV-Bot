@@ -12,9 +12,12 @@ export function mainMarketsFor(sportKey: string, rawMarkets: string): string {
     .filter(Boolean);
 
   if (sportKey === "baseball_mlb") {
-    // MLB main pulls can keep first-five moneyline/spread/total markets, but
-    // the 1st-inning NRFI market belongs to the separate MLB NRFI model path.
-    return markets.filter((market) => market !== "runs_1st_inning").join(",");
+    // MLB main pulls should not request the 1st-inning or first-five markets
+    // from the main odds endpoint. The NRFI model owns the 1st-inning market,
+    // and first-five pricing is handled separately downstream.
+    return markets
+      .filter((market) => market !== "runs_1st_inning" && !BASEBALL_ONLY_MAIN_MARKETS.has(market))
+      .join(",");
   }
 
   // Every non-MLB sport should drop baseball-only inning markets so a shared

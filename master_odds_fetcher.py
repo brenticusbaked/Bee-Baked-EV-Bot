@@ -43,12 +43,19 @@ SOFT_BOOKS = os.getenv("ODDS_API_SOFT_BOOKS", DEFAULT_SOFT_BOOKS)
 ENABLE_ODDS_SECONDARY_PULL = env_flag("ENABLE_ODDS_SECONDARY_PULL", True)
 ENABLE_ODDS_TERTIARY_PULL = env_flag("ENABLE_ODDS_TERTIARY_PULL", True)
 ENABLE_ODDS_PARTIAL_MARKET_PULL = env_flag("ENABLE_ODDS_PARTIAL_MARKET_PULL", False)
+ENABLE_MLB_F5_PULL = env_flag("ENABLE_MLB_F5_PULL", True)
 
 PARTIAL_GAME_CONFIG = {
     "basketball_nba": "alternate_spreads,alternate_totals,spreads_q1,totals_q1,h2h_q1,spreads_h1,totals_h1,h2h_h1",
     "icehockey_nhl": "alternate_spreads,alternate_totals,spreads_1st_period,totals_1st_period,h2h_1st_period",
-    "baseball_mlb": "alternate_spreads,alternate_totals,h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings",
+    "baseball_mlb": "alternate_spreads,alternate_totals",
     "americanfootball_nfl": "alternate_spreads,alternate_totals,spreads_q1,totals_q1,h2h_q1,spreads_h1,totals_h1,h2h_h1",
+}
+
+# Dedicated MLB first-five pull so the model can keep using F5 markets without
+# reintroducing them into the shared main ingest defaults.
+MLB_F5_CONFIG = {
+    "baseball_mlb": "h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings",
 }
 
 
@@ -221,12 +228,31 @@ def run_fetcher():
     else:
         print("ODDS_API_KEY_3 not set. Skipping partial-game and alternate-market pull.")
 
+    active_mlb_f5 = filter_config_in_season(MLB_F5_CONFIG)
+    mlb_f5_sharp = 0
+    mlb_f5_soft = 0
+    if ODDS_API_KEY_4 and ENABLE_MLB_F5_PULL:
+        skipped_mlb_f5 = set(MLB_F5_CONFIG) - set(active_mlb_f5)
+        if skipped_mlb_f5:
+            print(f"BEE-BAKED FETCH: Skipping off-season sports (mlb_f5): {', '.join(sorted(skipped_mlb_f5))}")
+        print(
+            "BEE-BAKED FETCH: Running dedicated MLB first-five pull"
+            f" ({_credits_for_config(active_mlb_f5) * 2} credits/run)"
+        )
+        mlb_f5_sharp = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_f5, "mlb f5 sharp eu", SHARP_REGION, SHARP_BOOKS)
+        mlb_f5_soft = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_f5, "mlb f5 soft us", SOFT_REGION, SOFT_BOOKS)
+    elif not ENABLE_MLB_F5_PULL:
+        print("ENABLE_MLB_F5_PULL=false. Skipping dedicated MLB first-five pull.")
+    else:
+        print("ODDS_API_KEY_4 not set. Skipping dedicated MLB first-five pull.")
+
     save_master_cache(cache)
 
     primary_denom = len(active_primary)
     secondary_denom = len(active_secondary) if (ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL) else 0
     tertiary_denom = len(active_tertiary) if (ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL) else 0
     partial_denom = len(active_partial) if (ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL) else 0
+    mlb_f5_denom = len(active_mlb_f5) if (ODDS_API_KEY_4 and ENABLE_MLB_F5_PULL) else 0
 
     detail = (
         f"fetch complete"
@@ -234,6 +260,7 @@ def run_fetcher():
         f" | secondary sharp: {secondary_sharp}/{secondary_denom} soft: {secondary_soft}/{secondary_denom}"
         f" | tertiary sharp: {tertiary_sharp}/{tertiary_denom} soft: {tertiary_soft}/{tertiary_denom}"
         f" | partial/alternate sharp: {partial_sharp}/{partial_denom} soft: {partial_soft}/{partial_denom}"
+        f" | mlb_f5 sharp: {mlb_f5_sharp}/{mlb_f5_denom} soft: {mlb_f5_soft}/{mlb_f5_denom}"
     )
     return {"detail": detail, "count": len(cache), "label": "updates"}
 

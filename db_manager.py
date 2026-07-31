@@ -617,6 +617,17 @@ def log_workflow_run(
 
 
 def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    def _json_safe(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {key: _json_safe(inner) for key, inner in value.items()}
+        if isinstance(value, list):
+            return [_json_safe(item) for item in value]
+        if isinstance(value, tuple):
+            return [_json_safe(item) for item in value]
+        return value
+
     def _enum_value(value: Any) -> Any:
         return value.value if hasattr(value, "value") else value
 
@@ -700,7 +711,7 @@ def _execution_payload_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
         venue_metrics.append(venue_metric)
     payload["venue_metrics"] = venue_metrics
 
-    return payload
+    return _json_safe(payload)
 
 
 def get_latest_rows(table: str, column: str, limit: int = 5) -> List[Dict[str, Any]]:

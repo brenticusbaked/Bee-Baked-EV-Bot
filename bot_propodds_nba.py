@@ -553,6 +553,7 @@ def get_sgo_edges():
         "sharp_sides": 0,
         "soft_sides": 0,
         "qualified_groups": 0,
+        "soft_skipped_leagues": [],
         "errored_leagues": [],
     }
 
@@ -561,7 +562,11 @@ def get_sgo_edges():
         sport_key = LEAGUE_SPORT_KEYS.get(league, league.lower())
 
         try:
-            data = request("GET", url, params=params, timeout=15, retry_on_429=True).json()
+            data = request("GET", url, params=params, timeout=15, retry_on_429=False).json()
+        except requests.exceptions.RetryError:
+            print(f"[prop_bot] {league}: transient upstream retry exhaustion; skipping league.")
+            scan_stats["soft_skipped_leagues"].append(f"{league}:retry")
+            continue
         except requests.HTTPError as exc:
             resp = getattr(exc, "response", None)
             status_code = getattr(resp, "status_code", None)
@@ -574,6 +579,10 @@ def get_sgo_edges():
             # FIX: Handle 400 Bad Request / unsupported league as a clean skip without logging it as a hard task failure
             if status_code == 400 or "unsupported league" in body.lower():
                 print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
+                scan_stats["soft_skipped_leagues"].append(f"{league}:unsupported")
+            elif status_code == 429 or "rate limit" in body.lower():
+                print(f"[prop_bot] {league}: rate-limited by SGO; skipping league.")
+                scan_stats["soft_skipped_leagues"].append(f"{league}:rate_limit")
             else:
                 print(
                     f"[prop_bot] {league}: fetch failed ({status_code or 'HTTPError'}); "
@@ -586,8 +595,13 @@ def get_sgo_edges():
             continue
         except Exception as exc:
             exc_str = str(exc)
+            if "RetryError" in type(exc).__name__ or "retry" in exc_str.lower() or "rate limit" in exc_str.lower():
+                print(f"[prop_bot] {league}: transient upstream retry exhaustion; skipping league.")
+                scan_stats["soft_skipped_leagues"].append(f"{league}:retry")
+                continue
             if "400" in exc_str or "unsupported league" in exc_str.lower():
                 print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
+                scan_stats["soft_skipped_leagues"].append(f"{league}:unsupported")
             else:
                 print(f"[prop_bot] {league}: fetch failed ({type(exc).__name__}); skipping league")
                 scan_stats["errored_leagues"].append(f"{league}:{type(exc).__name__}")
@@ -803,6 +817,9 @@ def main():
             f"{scan_stats.get('parsed_props', 0)} parsed props, "
             f"{scan_stats.get('qualified_groups', 0)} sharp markets"
         )
+        soft_skipped = scan_stats.get("soft_skipped_leagues") or []
+        if soft_skipped:
+            detail += f"; soft-skipped leagues: {', '.join(soft_skipped)}"
         errored = scan_stats.get("errored_leagues") or []
         if errored:
             detail += f"; skipped leagues: {', '.join(errored)}"
