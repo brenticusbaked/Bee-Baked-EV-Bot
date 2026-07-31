@@ -140,3 +140,4 @@ jobs:
           python master_run.py
           python wnba_model.py
           python model_nrfi.py
+          python daily_slips_report.py
