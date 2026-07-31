@@ -4,13 +4,13 @@ import pandas as pd
 import pybaseball
 import requests
 from datetime import datetime
-from db_manager import save_tracker_state
+from db_manager import save_tracker_state, load_tracker_state
 
 STATE_KEY = "mlb_fip_cache"
 CACHE_FILE = "fip_cache.json"
 
 def run_fip_scraper():
-    print("Initializing Direct API FanGraphs Scraper (Bypassing Cloudflare 403)...")
+    print("Initializing Direct API FanGraphs Scraper...")
     season = datetime.now().year
     
     url = "https://www.fangraphs.com/api/leaders/major-league/data"
@@ -38,7 +38,6 @@ def run_fip_scraper():
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": "https://www.fangraphs.com/leaders/major-league?pos=all&stats=pit&lg=all&qual=0&type=8&season=2026&month=0",
         "Origin": "https://www.fangraphs.com",
-        "Connection": "keep-alive"
     }
     
     fg_data = None
@@ -50,10 +49,16 @@ def run_fip_scraper():
         if "data" in json_response:
             fg_data = json_response["data"]
     except Exception as e:
-        print(f"Direct API request failed: {e}")
+        print(f"Cloudflare/API block encountered ({e}). Loading fallback cache state...")
 
+    # Fallback to existing tracker cache if live fetch is blocked or fails
     if not fg_data:
-        print("Error: Could not retrieve FanGraphs API data directly.")
+        existing_cache = load_tracker_state(STATE_KEY, {})
+        if existing_cache:
+            print(f"Successfully loaded {len(existing_cache)} pitchers from existing local FIP cache fallback.")
+            return {"detail": "fip fallback cache loaded successfully", "count": len(existing_cache), "label": "updates"}
+        
+        print("Error: Could not retrieve FanGraphs API data and no local fallback cache available.")
         return {"detail": "fangraphs scrape error: no data", "count": 0, "label": "updates"}
 
     try:
