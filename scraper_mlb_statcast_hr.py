@@ -76,7 +76,7 @@ def fetch_batter_power_stats(season=2026):
             slg = float(stat.get("sluggingPercentage", 0.0) if stat.get("sluggingPercentage") else 0.0)
             iso = float(stat.get("iso", slg - float(stat.get("battingAverage", 0.0))))
             
-            if ab > 20:  # Minimum threshold filter
+            if ab > 20:
                 batter_cache[player_id] = {
                     "name": player.get("fullName"),
                     "home_runs": hr,
@@ -91,8 +91,40 @@ def fetch_batter_power_stats(season=2026):
         
     return batter_cache
 
+def calculate_hr_units(batter_stats, base_unit_size=3.0, kelly_fraction=0.25):
+    """
+    Evaluates cached batters and computes recommended unit sizes based on 
+    isolated power (ISO) and HR rate metrics relative to baseline odds thresholds.
+    """
+    recommendations = []
+    for player_id, stats in batter_stats.items():
+        iso = stats.get("iso", 0.0)
+        hr_per_ab = stats.get("hr_per_ab", 0.0)
+        
+        # Simple threshold model for elite power profile match
+        if iso > 0.250 and hr_per_ab > 0.06:
+            # Model estimated probability based on ISO power scale
+            implied_prob = min(0.35, hr_per_ab * 1.5)
+            # Simulated sportsbook American odds representation (+350 baseline mapping)
+            decimal_odds = 4.50 
+            
+            # Kelly Criterion formula: f* = (bp - q) / b
+            b = decimal_odds - 1.0
+            q = 1.0 - implied_prob
+            kelly_stake_pct = (b * implied_prob - q) / b
+            
+            if kelly_stake_pct > 0:
+                recommended_units = round(kelly_stake_pct * kelly_fraction * 100, 2)
+                recommendations.append({
+                    "name": stats["name"],
+                    "iso": iso,
+                    "recommended_units": max(0.5, recommended_units * (base_unit_size / 3.0))
+                })
+                
+    return recommendations
+
 def run_hr_pipeline():
-    print("Initializing Free-Data Home Run Model Pipeline...")
+    print("Initializing Free-Data Home Run Model Pipeline with Sizing...")
     slate = fetch_todays_mlb_slate()
     batter_stats = fetch_batter_power_stats()
     
@@ -102,8 +134,10 @@ def run_hr_pipeline():
     else:
         save_tracker_state(STATE_KEY, batter_stats, CACHE_FILE)
         
-    print(f"HR Model Pipeline complete. Tracked slate games: {len(slate)}, Cached Batters: {len(batter_stats)}")
-    return {"detail": "hr model execution complete", "count": len(batter_stats), "label": "updates"}
+    recommendations = calculate_hr_units(batter_stats)
+    print(f"Generated unit sizing recommendations for {len(recommendations)} high-value power hitters.")
+    
+    return {"detail": "hr model execution complete", "count": len(batter_stats), "recommendations": recommendations, "label": "updates"}
 
 if __name__ == "__main__":
     run_hr_pipeline()
