@@ -36,7 +36,7 @@ def fetch_todays_mlb_slate():
                     "status": status,
                     "home_team": home_team,
                     "away_team": away_team
-                }
+                })
         print(f"Successfully fetched {len(games_list)} games for today's MLB slate.")
     except Exception as e:
         print(f"Failed to fetch MLB schedule: {e}")
