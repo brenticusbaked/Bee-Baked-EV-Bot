@@ -15,9 +15,6 @@ COMPLETED_STATUSES = {"completed", "final", "closed", "over", "ended"}
 # The cache keeps games around for live handling for roughly a few hours after
 # scheduled start, so we tolerate that window before calling a game started.
 START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 180.0)
-# Scheduled fixtures can drift a bit in the cache or across time zones, so we
-# allow a broader buffer before treating them as truly stale.
-SCHEDULE_GRACE_MINUTES = env_float("SCRATCH_GUARD_SCHEDULE_GRACE_MINUTES", 360.0)
 TRACE_SKIPS = os.getenv("SCRATCH_GUARD_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -71,8 +68,14 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
             return False, f"event {status}"
         return True, "ok"
 
-    if minutes_past_start > SCHEDULE_GRACE_MINUTES:
-        return False, "event already started"
+    # Scheduled fixtures are frequently stale or timezone-shifted in the cache.
+    # Do not hard-fail on kickoff age alone; let explicit live/completed statuses
+    # do the blocking so fresh games do not get scratched prematurely.
+    if minutes_past_start > START_GRACE_MINUTES and TRACE_SKIPS:
+        print(
+            "scratch_guard: allowing stale-scheduled event "
+            f"(age={minutes_past_start:.1f}m, grace={START_GRACE_MINUTES:.1f}m)"
+        )
 
     return True, "ok"
 

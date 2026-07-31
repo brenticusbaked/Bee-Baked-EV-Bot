@@ -20,6 +20,19 @@ MC_LOOKBACK_DAYS = max(1, env_int("MC_LOOKBACK_DAYS", 30))
 MC_MIN_GRADED_BETS = max(10, env_int("MC_MIN_GRADED_BETS", 25))
 
 
+def _parse_datetime_utc(raw: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(f"{raw}T00:00:00+00:00")
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _estimate_bet_profile(graded_bets: List[dict]) -> Dict[str, float]:
     """Extract win rate, average win payout, and average unit size from history."""
     if not graded_bets:
@@ -61,13 +74,9 @@ def _recent_graded_bets(graded_bets: List[dict]) -> List[dict]:
         raw_date = str(bet.get("graded_at") or bet.get("date") or "").strip()
         if not raw_date:
             continue
-        try:
-            parsed = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                parsed = datetime.fromisoformat(f"{raw_date}T00:00:00+00:00")
-            except ValueError:
-                continue
+        parsed = _parse_datetime_utc(raw_date)
+        if parsed is None:
+            continue
         if parsed >= cutoff:
             recent.append(bet)
     return recent or graded_bets
