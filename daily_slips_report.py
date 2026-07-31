@@ -146,3 +146,9 @@ def send_daily_slips_report():
 
 if __name__ == "__main__":
     send_daily_slips_report()
+
+if __name__ == "__main__":
+    report_text = build_daily_slips_report()
+    print("--- GENERATED REPORT PREVIEW ---")
+    print(report_text)
+    print("--------------------------------")
