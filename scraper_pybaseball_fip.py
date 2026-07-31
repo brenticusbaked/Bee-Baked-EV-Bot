@@ -2,65 +2,58 @@ import os
 import random
 import pandas as pd
 import pybaseball
-import asyncio
-from playwright.async_api import async_playwright
+import requests
 from datetime import datetime
 from db_manager import save_tracker_state
 
 STATE_KEY = "mlb_fip_cache"
 CACHE_FILE = "fip_cache.json"
 
-PROXY_USERNAME = os.getenv("PROXY_USERNAME")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
-RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
-PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
-
-async def run_fip_scraper():
-    print("Initializing Async Playwright FanGraphs Scraper (Bypassing pybaseball 403)...")
+def run_fip_scraper():
+    print("Initializing Direct API FanGraphs Scraper (Bypassing Cloudflare 403)...")
     season = datetime.now().year
     
-    fg_data = None
+    url = "https://www.fangraphs.com/api/leaders/major-league/data"
+    params = {
+        "age": "",
+        "pos": "all",
+        "stats": "pit",
+        "lg": "all",
+        "qual": "0",
+        "season": str(season),
+        "season1": str(season),
+        "month": "0",
+        "team": "0,ts",
+        "pageitems": "2000000000",
+        "pagenum": "1",
+        "ind": "0",
+        "rost": "0",
+        "players": "",
+        "type": "8"
+    }
     
-    async with async_playwright() as p:
-        proxy_settings = None
-        if PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD:
-            chosen_ip = random.choice(PROXY_IPS)
-            proxy_settings = {
-                "server": f"http://{chosen_ip}",
-                "username": PROXY_USERNAME,
-                "password": PROXY_PASSWORD,
-            }
-
-        browser = await p.chromium.launch(headless=True, proxy=proxy_settings)
-        context = await browser.new_context(
-            ignore_https_errors=True,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080}
-        )
-        page = await context.new_page()
-        
-        try:
-            url = f"https://www.fangraphs.com/leaders/major-league?pos=all&stats=pit&lg=all&qual=0&type=8&season={season}&month=0"
-            async with page.expect_response(
-                lambda res: "api/leaders/major-league/data" in res.url,
-                timeout=30000,
-            ) as response_info:
-                await page.goto(url, wait_until="networkidle", timeout=40000)
-            json_response = await response_info.value.json()
-            if "data" in json_response:
-                fg_data = json_response["data"]
-        except Exception as e:
-            print(f"FanGraphs DOM timeout/intercept caught: {e}. Checking for intercepted API data...")
-            if not fg_data:
-                try:
-                    await page.reload(wait_until="networkidle", timeout=20000)
-                except Exception:
-                    pass
-            
-        await browser.close()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.fangraphs.com/leaders/major-league?pos=all&stats=pit&lg=all&qual=0&type=8&season=2026&month=0",
+        "Origin": "https://www.fangraphs.com",
+        "Connection": "keep-alive"
+    }
+    
+    fg_data = None
+    try:
+        session = requests.Session()
+        response = session.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        json_response = response.json()
+        if "data" in json_response:
+            fg_data = json_response["data"]
+    except Exception as e:
+        print(f"Direct API request failed: {e}")
 
     if not fg_data:
-        print("Error: Could not intercept FanGraphs API data via Playwright.")
+        print("Error: Could not retrieve FanGraphs API data directly.")
         return {"detail": "fangraphs scrape error: no data", "count": 0, "label": "updates"}
 
     try:
@@ -87,11 +80,11 @@ async def run_fip_scraper():
         save_tracker_state(STATE_KEY, fip_cache, CACHE_FILE)
         print(f"Successfully scraped and cached Actual FIP for {len(fip_cache)} MLB pitchers.")
         
-        return {"detail": "playwright fip scrape complete", "count": len(fip_cache), "label": "updates"}
+        return {"detail": "direct api fip scrape complete", "count": len(fip_cache), "label": "updates"}
         
     except Exception as exc:
         print(f"Error processing FanGraphs data: {exc}")
         return {"detail": f"fangraphs processing error: {exc}", "count": 0, "label": "updates"}
 
 if __name__ == "__main__":
-    asyncio.run(run_fip_scraper())
+    run_fip_scraper()
