@@ -14,7 +14,7 @@ def fetch_sharp_ev_opportunities(sport="baseball_mlb"):
         print("Error: SHARPAPI_KEY environment variable is missing or empty.")
         return None
 
-    url = "https://api.sharpapi.io/v1/odds" 
+    url = "https://api.sharpapi.io/v1/odds"
     
     headers = {
         "X-API-Key": SHARP_API_KEY,
