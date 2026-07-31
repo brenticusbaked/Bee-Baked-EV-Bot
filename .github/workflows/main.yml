@@ -130,4 +130,5 @@ jobs:
           python wnba_model.py
           python model_nrfi.py
           python scraper_mlb_statcast_hr.py
+          python sharp_ev_alerts.py
           python daily_slips_report.py
