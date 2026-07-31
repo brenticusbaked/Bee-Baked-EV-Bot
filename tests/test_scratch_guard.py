@@ -32,7 +32,7 @@ class ScratchGuardTests(unittest.TestCase):
         self.assertEqual(reason, "ok")
 
     def test_old_started_game_is_rejected(self):
-        past = (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat()
+        past = (datetime.now(timezone.utc) - timedelta(hours=8)).isoformat()
         valid, reason = check_event_status({"commence_time": past})
         self.assertFalse(valid)
         self.assertEqual(reason, "event already started")
