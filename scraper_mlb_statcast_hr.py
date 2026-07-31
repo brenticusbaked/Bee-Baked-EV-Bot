@@ -13,7 +13,7 @@ def fetch_todays_mlb_slate():
     url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today_str}"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json"
     }
     
@@ -43,8 +43,17 @@ def fetch_todays_mlb_slate():
         
     return games_list
 
+def _safe_float(val, default=0.0):
+    """Safely parses float values from MLB Stats API strings like '.250'."""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
 def fetch_batter_power_stats(season=2026):
-    """Pulls league-wide hitting stats (HR, slugging, ISO) from the official MLB Stats API."""
+    """Pulls league-wide hitting stats (HR, Slugging, ISO) from the official MLB Stats API."""
     url = "https://statsapi.mlb.com/api/v1/stats"
     params = {
         "stats": "season",
@@ -73,10 +82,11 @@ def fetch_batter_power_stats(season=2026):
             player_id = str(player.get("id"))
             hr = int(stat.get("homeRuns", 0))
             ab = int(stat.get("atBats", 0))
-            slg = float(stat.get("sluggingPercentage", 0.0) if stat.get("sluggingPercentage") else 0.0)
-            iso = float(stat.get("iso", slg - float(stat.get("battingAverage", 0.0))))
+            slg = _safe_float(stat.get("slg", stat.get("sluggingPercentage", 0.0)))
+            avg = _safe_float(stat.get("avg", stat.get("battingAverage", 0.0)))
+            iso = slg - avg
             
-            if ab > 20:
+            if ab >= 30:  # Minimum sample size threshold
                 batter_cache[player_id] = {
                     "name": player.get("fullName"),
                     "home_runs": hr,
@@ -93,34 +103,44 @@ def fetch_batter_power_stats(season=2026):
 
 def calculate_hr_units(batter_stats, base_unit_size=3.0, kelly_fraction=0.25):
     """
-    Evaluates cached batters and computes recommended unit sizes based on 
-    isolated power (ISO) and HR rate metrics relative to baseline odds thresholds.
+    Evaluates cached batters and computes recommended unit sizes using 
+    a Quarter-Kelly formula based on ISO and HR/AB rate thresholds.
     """
     recommendations = []
     for player_id, stats in batter_stats.items():
         iso = stats.get("iso", 0.0)
         hr_per_ab = stats.get("hr_per_ab", 0.0)
         
-        # Simple threshold model for elite power profile match
-        if iso > 0.250 and hr_per_ab > 0.06:
-            # Model estimated probability based on ISO power scale
-            implied_prob = min(0.35, hr_per_ab * 1.5)
-            # Simulated sportsbook American odds representation (+350 baseline mapping)
-            decimal_odds = 4.50 
+        # Tier 1 Elite Power Match (ISO >= .210 or HR/AB >= 0.048)
+        # Tier 2 Strong Power Match (ISO >= .180 and HR/AB >= 0.038)
+        is_tier_1 = (iso >= 0.210 or hr_per_ab >= 0.048)
+        is_tier_2 = (iso >= 0.180 and hr_per_ab >= 0.038)
+        
+        if is_tier_1 or is_tier_2:
+            # Model estimated probability based on power rate
+            implied_prob = min(0.32, max(0.12, hr_per_ab * 2.2))
+            decimal_odds = 4.25  # Baseline prop odds reference (~+325)
             
-            # Kelly Criterion formula: f* = (bp - q) / b
+            # Kelly Criterion: f* = (bp - q) / b
             b = decimal_odds - 1.0
             q = 1.0 - implied_prob
-            kelly_stake_pct = (b * implied_prob - q) / b
+            kelly_pct = (b * implied_prob - q) / b
             
-            if kelly_stake_pct > 0:
-                recommended_units = round(kelly_stake_pct * kelly_fraction * 100, 2)
+            if kelly_pct > 0:
+                tier_multiplier = 1.0 if is_tier_1 else 0.65
+                raw_units = round(kelly_pct * kelly_fraction * 100 * tier_multiplier, 2)
+                final_units = max(0.5, round(raw_units * (base_unit_size / 3.0), 2))
+                
                 recommendations.append({
                     "name": stats["name"],
-                    "iso": iso,
-                    "recommended_units": max(0.5, recommended_units * (base_unit_size / 3.0))
+                    "iso": round(iso, 3),
+                    "hr_per_ab": round(hr_per_ab, 3),
+                    "tier": "Tier 1" if is_tier_1 else "Tier 2",
+                    "recommended_units": final_units
                 })
                 
+    # Sort recommendations by highest unit sizing
+    recommendations.sort(key=lambda x: x["recommended_units"], reverse=True)
     return recommendations
 
 def run_hr_pipeline():
@@ -137,7 +157,12 @@ def run_hr_pipeline():
     recommendations = calculate_hr_units(batter_stats)
     print(f"Generated unit sizing recommendations for {len(recommendations)} high-value power hitters.")
     
-    return {"detail": "hr model execution complete", "count": len(batter_stats), "recommendations": recommendations, "label": "updates"}
+    return {
+        "detail": "hr model execution complete",
+        "count": len(batter_stats),
+        "recommendations": recommendations,
+        "label": "updates"
+    }
 
 if __name__ == "__main__":
     run_hr_pipeline()
