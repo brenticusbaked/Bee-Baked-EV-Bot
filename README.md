@@ -103,6 +103,8 @@ The GitHub Actions `Tests` workflow runs the same command on pushes and pull req
 * `ODDS_API_KEY_3` (Optional: 500-credit/mo reserve — failover only)
 * `ODDS_API_KEY_4` (Optional: 500-credit/mo reserve — failover only)
 * `SGO_API_KEY`
+* `SGO_API_KEY_2` (Optional: SportsGameOdds reserve key for ingest/grading failover)
+* `SGO_API_KEY_3` (Optional: SportsGameOdds reserve key for ingest/grading failover)
 * `DISCORD_WEBHOOK_URL`
 * `DISCORD_BET_ALERTS_WEBHOOK_URL` (Optional: dedicated positive-EV/scraper-alerts channel; falls back to `DISCORD_WEBHOOK_URL`)
 * `DISCORD_ARBITRAGE_WEBHOOK_URL` (Optional: dedicated arbitrage channel; falls back to bet alerts/default)
@@ -159,8 +161,9 @@ The GitHub Actions `Tests` workflow runs the same command on pushes and pull req
 * `BETMGM_WAIT_MS`
 * `BETMGM_ENABLE_BROWSER_FALLBACK`
 * `BETMGM_PREFERRED_STATE`
-* `SGO_GRADER_MAX_FETCHES`
-* `SGO_GRADER_FETCH_DELAY_SECONDS`
+* `SGO_GRADER_MAX_FETCHES` (Default: `4`)
+* `SGO_GRADER_FETCH_DELAY_SECONDS` (Default: `1.25`)
+* `SGO_LEAGUE_STAGGER_SECONDS` (Default: `1.5`)
 * `CLV_LOOKBACK_DAYS`
 * `EXECUTION_EV_THRESHOLD`
 * `EXECUTION_CALIBRATION_ORDERS` (Optional paper-only proof-of-write routes when live opportunities do not clear threshold. Default: `0`)

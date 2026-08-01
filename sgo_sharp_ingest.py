@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -10,6 +11,7 @@ SGO_API_KEY_3 = os.environ.get("SGO_API_KEY_3")
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SGO_LEAGUE_STAGGER_SECONDS = float(os.environ.get("SGO_LEAGUE_STAGGER_SECONDS", "1.5"))
 
 TARGET_BOOKS = ["circa", "pinnacle", "draftkings"]
 LEAGUE_MAP = {
@@ -54,7 +56,8 @@ def fetch_sgo_sharp_lines():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     odds_rows = []
     
-    for sgo_league, odds_api_sport in LEAGUE_MAP.items():
+    league_items = list(LEAGUE_MAP.items())
+    for league_index, (sgo_league, odds_api_sport) in enumerate(league_items):
         print(f"Fetching mapping and SGO sharp odds for {sgo_league}...")
         
         # 1. Build the ID Map for this league
@@ -128,6 +131,9 @@ def fetch_sgo_sharp_lines():
 
         if not league_success:
             print(f"No usable SGO response for {sgo_league} after trying {len(sgo_keys)} key(s).")
+
+        if league_index < len(league_items) - 1 and SGO_LEAGUE_STAGGER_SECONDS > 0:
+            time.sleep(SGO_LEAGUE_STAGGER_SECONDS)
 
     # 3. Upsert mapped data to Supabase
     if odds_rows:
