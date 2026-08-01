@@ -35,7 +35,8 @@ def fetch_sharp_ev_opportunities(sport="baseball_mlb"):
             print("SharpAPI rate limit reached (429). Skipping this cycle.")
             return None
             
-        response.raise_for_status()
+        # This will trigger the exception block below if the status code is 400
+        response.raise_for_status() 
         data = response.json()
         
         opportunities = []
@@ -58,6 +59,9 @@ def fetch_sharp_ev_opportunities(sport="baseball_mlb"):
         
     except requests.exceptions.RequestException as e:
         print(f"Error fetching from SharpAPI: {e}")
+        # Print the exact error message returned by SharpAPI's server
+        if getattr(e, 'response', None) is not None:
+            print(f"SharpAPI Server Response: {e.response.text}")
         return None
     except Exception as e:
         print(f"Unexpected error in SharpAPI fetch: {e}")
