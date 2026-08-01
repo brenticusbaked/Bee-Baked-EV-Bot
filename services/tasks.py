@@ -27,7 +27,7 @@ def get_refresh_tasks() -> List[PipelineTask]:
         # on manual/off-hours runs that fall outside the pg_cron schedule
         # (otherwise hydrate reads odds older than the freshness cutoff and the
         # cache looks empty). Disable with ENABLE_INGEST_TRIGGER=false.
-        if env_flag("ENABLE_INGEST_TRIGGER", True):
+        if env_flag("ENABLE_INGEST_TRIGGER", False):
             from services.ingest_trigger import trigger_odds_ingest
 
             tasks.append(PipelineTask(name="trigger_odds_ingest", func=trigger_odds_ingest))

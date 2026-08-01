@@ -100,6 +100,7 @@ const BURN_UNTIL = (Deno.env.get("ODDS_BURN_UNTIL") ?? "").trim();
 const BURN_ACTIVE = BURN_UNTIL !== "" && new Date().toISOString().slice(0, 10) <= BURN_UNTIL;
 const BURN_MAX_CREDITS_PER_RUN = Number(Deno.env.get("ODDS_BURN_MAX_CREDITS_PER_RUN") ?? "150");
 const BURN_MAX_EVENTS_PER_ENRICH = Number(Deno.env.get("ODDS_BURN_MAX_EVENTS_PER_ENRICH") ?? "6");
+const MONTHLY_CREDIT_CAP = Number(Deno.env.get("ODDS_MONTHLY_CREDIT_CAP") ?? "2000");
 
 const MAX_CREDITS_PER_RUN = BURN_ACTIVE
   ? BURN_MAX_CREDITS_PER_RUN
@@ -308,6 +309,19 @@ function currentSlot(): number {
 const UPCOMING_HORIZON_HOURS = Number(
   Deno.env.get("ODDS_UPCOMING_HORIZON_HOURS") ?? "72",
 );
+
+async function currentMonthCreditsUsed(): Promise<number> {
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+  const { data, error } = await supabase
+    .from("odds_ingest_runs")
+    .select("credits_used")
+    .gte("started_at", monthStart)
+    .lt("started_at", nextMonth);
+  if (error || !data) return 0;
+  return data.reduce((total, row) => total + Number((row as { credits_used?: number | null }).credits_used ?? 0), 0);
+}
 
 async function getUpcomingFixtureIds(sportKey: string): Promise<string[]> {
   const lookbackHours = 6;
@@ -676,6 +690,29 @@ serve(async (request) => {
         slot,
         reason: "no sport due this slot (proximity throttle)",
         proximity: proximityBySport,
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  const monthCredits = MONTHLY_CREDIT_CAP > 0 ? await currentMonthCreditsUsed() : 0;
+  if (MONTHLY_CREDIT_CAP > 0 && monthCredits >= MONTHLY_CREDIT_CAP) {
+    await supabase.from("odds_ingest_runs").insert({
+      status: "skipped",
+      sports_requested: sportsToRun,
+      rotation_slot: slot,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+      credits_used: 0,
+      api_requests: 0,
+    });
+    return new Response(
+      JSON.stringify({
+        status: "skipped",
+        slot,
+        reason: "monthly credit cap reached",
+        monthCredits,
+        monthlyCreditCap: MONTHLY_CREDIT_CAP,
       }),
       { headers: { "Content-Type": "application/json" } },
     );
