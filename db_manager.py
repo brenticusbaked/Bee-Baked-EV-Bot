@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import time
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 
@@ -238,14 +239,21 @@ def _stat_lookup(row: Dict[str, Any], key: str) -> Optional[float]:
     return None
 
 
-def _safe_execute(action, fallback):
+def _safe_execute(action, fallback, retries: int = 3, delay: float = 2.0):
     if not supabase:
         return fallback
-    try:
-        return action()
-    except Exception as e:
-        logger.error(f"Supabase execution error: {e}")
-        return fallback
+    
+    for attempt in range(retries):
+        try:
+            return action()
+        except Exception as e:
+            logger.warning(f"Supabase execution error (attempt {attempt + 1}/{retries}): {e}")
+            if attempt < retries - 1:
+                time.sleep(delay * (attempt + 1))
+            else:
+                logger.error(f"Supabase execution failed permanently after {retries} attempts: {e}")
+                return fallback
+    return fallback
 
 
 def _extract_cache_blob(rows: Any) -> Dict[str, Any]:
@@ -420,20 +428,27 @@ def log_bet_to_db(*args, **kwargs) -> bool:
 
     bet_data = _normalize_bet_payload(*args, **kwargs)
     try:
-        supabase.table("bets_log").insert(bet_data).execute()
-        _RUNTIME_DB_STATS["bet_log_success"] += 1
-        return True
+        def action():
+            supabase.table("bets_log").insert(bet_data).execute()
+            return True
+        if _safe_execute(action, False):
+            _RUNTIME_DB_STATS["bet_log_success"] += 1
+            return True
     except Exception as first_error:
         logger.warning(f"bets_log insert failed, retrying legacy payload: {first_error}")
         legacy_payload = _legacy_bets_log_payload(bet_data)
         try:
-            supabase.table("bets_log").insert(legacy_payload).execute()
-            _RUNTIME_DB_STATS["bet_log_success"] += 1
-            return True
+            def legacy_action():
+                supabase.table("bets_log").insert(legacy_payload).execute()
+                return True
+            if _safe_execute(legacy_action, False):
+                _RUNTIME_DB_STATS["bet_log_success"] += 1
+                return True
         except Exception as second_error:
             logger.error(f"bets_log insert failed after legacy retry: {second_error}")
-            _RUNTIME_DB_STATS["bet_log_failure"] += 1
-            return False
+
+    _RUNTIME_DB_STATS["bet_log_failure"] += 1
+    return False
 
 
 def is_already_logged(*args) -> bool:
