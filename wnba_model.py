@@ -29,6 +29,16 @@ def get_dynamic_link(bookmaker: str, target_string: str) -> str:
     return sportsbook_search_link(bookmaker, target_string)
 
 
+def _format_point_string(point_val) -> str:
+    if point_val is None or point_val == "":
+        return ""
+    try:
+        val = float(point_val)
+        return f"+{val:.1f}" if val > 0 else f"{val:.1f}"
+    except (ValueError, TypeError):
+        return str(point_val)
+
+
 def get_best_spread(target_team: str):
     cache = get_master_cache()
     if not cache:
@@ -59,10 +69,11 @@ def get_best_spread(target_team: str):
                         event_id = str(game.get("id", ""))
 
     if best_price > 0:
+        formatted_point = _format_point_string(best_point)
         return (
             best_title,
             decimal_to_american(best_price),
-            str(best_point),
+            formatted_point,
             get_dynamic_link(best_book, target_team),
             event_id,
         )
@@ -107,7 +118,7 @@ def run_wnba_model():
             seen_matchups.add(matchup)
 
             book, odds, line, link, event_id = get_best_spread(home)
-            selection = f"{home} {line}"
+            selection = f"{home} {line}".strip()
             if not book or is_already_logged(matchup, "MODEL_WNBA_SPREAD", selection):
                 continue
 
@@ -123,7 +134,9 @@ def run_wnba_model():
             model_probability = min(0.55 + (spread_abs * 0.0045), 0.61)
             fair_price = fair_american_from_probability(model_probability)
             edge = model_edge_from_probability(model_probability, odds)
-            units = model_units_from_probability(model_probability, odds)
+            raw_units = model_units_from_probability(model_probability, odds)
+            units = max(0.25, min(2.0, round(raw_units, 2)))
+            
             if edge < WNBA_MODEL_EDGE_THRESHOLD or units <= 0:
                 continue
 
@@ -148,8 +161,9 @@ def run_wnba_model():
                     "embeds": [
                         {
                             "description": (
-                                f"**WNBA SPREAD ALERT**\n"
+                                f"**WNBA SPREAD ALERT**\n\n"
                                 f"**Game:** {matchup}\n"
+                                f"**Bet:** {selection}\n"
                                 f"**Advantage:** {home} vs {away}\n"
                                 f"**Odds:** [{book}]({link}) @ {odds}\n"
                                 f"**Pinnacle:** {pinnacle_reference}\n"

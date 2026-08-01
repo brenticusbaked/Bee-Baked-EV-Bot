@@ -84,7 +84,6 @@ UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", 0.015)
 ENABLE_HISTORY_EV_FLOOR_RAISE = os.getenv("ENABLE_HISTORY_EV_FLOOR_RAISE", "false").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_HISTORY_PROP_TYPE_OVERLAY = os.getenv("ENABLE_HISTORY_PROP_TYPE_OVERLAY", "true").strip().lower() in {"1", "true", "yes", "on"}
 PROP_DEVIG_METHOD = "multiplicative"
-# Default to Quarter-Kelly (0.25) sizing for player props
 PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.25)
 PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
 UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(1, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 1))
@@ -97,7 +96,6 @@ UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVE
 DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
 ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_TIME_DECAY = os.getenv("ENABLE_TIME_DECAY", "true").strip().lower() in {"1", "true", "yes", "on"}
-# Hardcoded to False to completely remove the 25-unit cap constraint
 ENABLE_CORRELATION_LIMITS = False
 ENABLE_MARKET_EFFICIENCY = os.getenv("ENABLE_MARKET_EFFICIENCY", "true").strip().lower() in {"1", "true", "yes", "on"}
 MIN_EFFICIENCY_SCORE = env_float("MIN_EFFICIENCY_SCORE", 0.30)
@@ -140,7 +138,6 @@ def _player_prop_sharp_reference(sharp_by_book: dict, side: str) -> str:
 def _format_prop_stat_label(market_key: str) -> str:
     key = str(market_key).strip().lower()
     mapping = {
-        # MLB Batting
         "batter_hits": "Hits",
         "batter_single": "Singles",
         "batter_singles": "Singles",
@@ -157,7 +154,6 @@ def _format_prop_stat_label(market_key: str) -> str:
         "batter_strikeouts": "Strikeouts",
         "batter_total_bases": "Total Bases",
         "batter_hits_runs_rbis": "Hits + Runs + RBIs",
-        # MLB Pitching
         "pitcher_strikeouts": "Strikeouts",
         "pitcher_strike_outs": "Strikeouts",
         "pitcher_outs": "Outs Recorded",
@@ -166,7 +162,6 @@ def _format_prop_stat_label(market_key: str) -> str:
         "pitcher_hits_allowed": "Hits Allowed",
         "pitcher_walks": "Walks Allowed",
         "pitcher_walks_allowed": "Walks Allowed",
-        # Basketball (NBA / WNBA)
         "player_points": "Points",
         "player_rebounds": "Rebounds",
         "player_assists": "Assists",
@@ -180,7 +175,6 @@ def _format_prop_stat_label(market_key: str) -> str:
         "player_points_rebounds": "Pts + Reb",
         "player_points_assists": "Pts + Ast",
         "player_rebounds_assists": "Reb + Ast",
-        # Football (NFL)
         "player_passing_yds": "Passing Yards",
         "player_passing_yards": "Passing Yards",
         "player_passing_tds": "Passing Touchdowns",
@@ -191,7 +185,6 @@ def _format_prop_stat_label(market_key: str) -> str:
         "player_receiving_yds": "Receiving Yards",
         "player_receiving_yards": "Receiving Yards",
         "player_receiving_tds": "Receiving Touchdowns",
-        # Hockey (NHL)
         "player_goals": "Goals",
         "player_shots_on_goal": "Shots on Goal",
         "player_blocked_shots": "Blocked Shots",
@@ -525,6 +518,7 @@ def evaluate_player_props(
             units = prop_kelly_units(
                 offer["edge"], offer["price"], fraction=PROP_KELLY_FRACTION, cap=PROP_MAX_UNITS,
             )
+            units = max(0.25, min(2.0, round(units, 2)))
             if units <= 0:
                 continue
 
@@ -797,14 +791,13 @@ def scan_markets(
                         else "**Pinnacle:** unavailable\n"
                     )
                     
-                    # Enforce strict Quarter-Kelly sizing with a safe max cap to prevent oversized 5u bets
                     try:
                         b = float(offered_price) - 1.0
                         kelly_pct = ((b * fair_probability) - (1.0 - fair_probability)) / b if b > 0 else 0.0
-                        raw_units = max(0.0, kelly_pct) * 0.25 * 10.0  # 0.25 = Quarter-Kelly fraction
+                        raw_units = max(0.0, kelly_pct) * 0.25 * 10.0
                         units = max(0.25, min(1.75, round(raw_units, 2)))
                     except Exception:
-                        units = 0.5
+                        units = 0.50
 
                     fair_price_american = decimal_to_american(fair_decimal)
 
@@ -859,7 +852,6 @@ def scan_markets(
                     eff_text = f"\n**Mkt Efficiency:** {eff.score:.0%}" if eff else ""
                     td_text = f"\n**Time Phase:** {td.phase} ({td.hours_to_event:.1f}h)" if td else ""
                     
-                    # Added L10 Context Line for Main Markets (Spreads, Totals, H2H)
                     opponent_team = None
                     if final["name"] == event.get("home_team"):
                         opponent_team = event.get("away_team")

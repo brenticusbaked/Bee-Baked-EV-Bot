@@ -1,3 +1,4 @@
+import math
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db, load_tracker_state
 from services.alerts import send_discord_alert
 from services.http_client import get_json as _http_get_json
@@ -10,11 +11,10 @@ from utils.odds import decimal_to_american, quarter_kelly_units, american_to_dec
 from utils.thresholds import env_float
 from utils.time import get_local_now
 
-import math
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
-MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.00) # Tightened threshold for xERA
-MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.015) # Raised to 1.5% minimum edge
+MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.00)
+MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.015)
 F5_MARKET_PRIORITY = {"h2h_1st_5_innings": 2, "h2h_1st_half": 2, "h2h": 1}
 
 LEAGUE_AVG_XERA = 4.00
@@ -106,7 +106,6 @@ def get_best_f5_moneyline(target_team):
 
 
 def get_advanced_pitcher_stats(pitcher_id, api_cache, fip_cache):
-    """Retrieves Pitcher metrics favoring Statcast xERA / FIP over raw ERA."""
     if pitcher_id in api_cache:
         return api_cache[pitcher_id]
         
@@ -139,27 +138,17 @@ def get_advanced_pitcher_stats(pitcher_id, api_cache, fip_cache):
 
 
 def _calculate_f5_win_probability(pitcher_a_xera: float, pitcher_b_xera: float) -> float:
-    """
-    Replaces static linear probability with an Expected Runs (Pythagenpat) model for F5.
-    Calculates expected runs over 5 innings based on opposing xERA baselines.
-    """
-    # Convert 9-inning xERA to 5-inning expected runs
-    exp_runs_against_b = (pitcher_b_xera / 9.0) * 5.0  # Runs scored by Team A
-    exp_runs_against_a = (pitcher_a_xera / 9.0) * 5.0  # Runs scored by Team B
+    exp_runs_against_b = (pitcher_b_xera / 9.0) * 5.0
+    exp_runs_against_a = (pitcher_a_xera / 9.0) * 5.0
 
-    # Pythagenpat exponent for baseball
     total_exp_runs = exp_runs_against_a + exp_runs_against_b
     if total_exp_runs <= 0:
         return 0.50
 
     pythag_exp = (total_exp_runs) ** 0.287
-    
-    # Expected win probability for Team A
     prob_a = (exp_runs_against_b ** pythag_exp) / (
         (exp_runs_against_b ** pythag_exp) + (exp_runs_against_a ** pythag_exp)
     )
-    
-    # Clamp bounds to safe limits
     return max(0.35, min(0.68, prob_a))
 
 
@@ -198,11 +187,9 @@ def run_mlb_model():
 
             if a_mod_fip < h_mod_fip:
                 better_team, adv_p, disadv_p = away_team, away_p['fullName'], home_p['fullName']
-                # Away team has the better pitcher
                 prob = _calculate_f5_win_probability(a_mod_fip, h_mod_fip)
             else:
                 better_team, adv_p, disadv_p = home_team, home_p['fullName'], away_p['fullName']
-                # Home team has the better pitcher (+3% home field advantage adjustment for F5)
                 prob = _calculate_f5_win_probability(h_mod_fip, a_mod_fip) + 0.03
 
             if is_already_logged(matchup, "MODEL_MLB_F5", better_team): continue
@@ -222,9 +209,10 @@ def run_mlb_model():
             if edge < MLB_MODEL_EDGE_THRESHOLD:
                 continue
             
-            # Precise Quarter-Kelly sizing
             dec_odds = american_to_decimal(odds)
-            u_size = quarter_kelly_units(edge, dec_odds)
+            raw_u = quarter_kelly_units(edge, dec_odds)
+            u_size = max(0.25, min(2.0, round(raw_u, 2)))
+            
             if u_size <= 0:
                 continue
 
@@ -248,14 +236,14 @@ def run_mlb_model():
                 print(f"Skipping MLB model alert because DB log failed for {better_team}.")
                 continue
 
-            secondary_u = max(0.5, round(u_size * 0.75, 1))
+            secondary_u = max(0.25, round(u_size * 0.75, 2))
 
             angles_text = (
                 f"**🎯 Suggested Angles to Shop:**\n"
-                f"• **F5 ML or -0.5:** {better_team} ({u_size:.1f}u)\n"
-                f"• **Team Total:** {better_team} OVER ({secondary_u}u)\n"
-                f"• **Strikeout Props:** {adv_p} OVER ({secondary_u}u)\n"
-                f"• **Earned Runs:** {disadv_p} OVER ({secondary_u}u)"
+                f"• **F5 ML or -0.5:** {better_team} ({u_size:.2f}u)\n"
+                f"• **Team Total:** {better_team} OVER ({secondary_u:.2f}u)\n"
+                f"• **Strikeout Props:** {adv_p} OVER ({secondary_u:.2f}u)\n"
+                f"• **Earned Runs:** {disadv_p} OVER ({secondary_u:.2f}u)"
             )
 
             alerts.append(
@@ -280,6 +268,7 @@ def run_mlb_model():
         return {"detail": "mlb model complete", "count": len(alerts), "label": "alerts"}
     except Exception as exc:
         return {"detail": f"error: {exc}", "count": 0, "label": "alerts"}
+
 
 if __name__ == "__main__":
     run_mlb_model()
