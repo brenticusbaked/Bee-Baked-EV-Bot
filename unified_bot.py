@@ -87,11 +87,20 @@ PROP_DEVIG_METHOD = "multiplicative"
 PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.25)
 PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
 UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(1, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 1))
+
+# Sharp hierarchy to evaluate odds if Pinnacle hasn't posted a line
+SHARP_BOOK_HIERARCHY = [
+    b.strip().lower() 
+    for b in os.getenv("SHARP_BOOK_HIERARCHY", "pinnacle,circa,bookmaker,cris,draftkings").split(",") 
+    if b.strip()
+]
+
 SHARP_PROP_BOOKS = {
     book.strip().lower()
-    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris,draftkings").split(",")
     if book.strip()
 }
+
 UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVENT_MARKET", 3))
 DEVIG_METHOD = os.getenv("DEVIG_METHOD", "power")
 ENABLE_SHIN_DEVIG = os.getenv("ENABLE_SHIN_DEVIG", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -615,50 +624,68 @@ def scan_markets(
             matchup = f"{event['away_team']} @ {event['home_team']}"
             markets = {}
 
+            # Group outcomes by market and bookmaker
             for bookmaker in event.get("bookmakers", []):
                 if not validate_bookmaker_outcomes(bookmaker):
                     continue
+                book_key = str(bookmaker["key"]).lower().strip()
+                
                 for market in bookmaker.get("markets", []):
                     market_key = market["key"]
-                    markets.setdefault(market_key, {"sharp": {}, "soft": []})
+                    markets.setdefault(market_key, {})
+                    markets[market_key].setdefault(book_key, {
+                        "title": bookmaker["title"],
+                        "outcomes": market.get("outcomes", [])
+                    })
 
-                    if bookmaker["key"] == "pinnacle":
-                        for outcome in market.get("outcomes", []):
-                            outcome_key = (
-                                str(outcome["name"]).lower().strip(),
-                                str(outcome.get("point", "")),
-                            )
-                            markets[market_key]["sharp"][outcome_key] = float(outcome["price"])
-                    elif bookmaker["key"] in soft_books:
-                        for outcome in market.get("outcomes", []):
-                            markets[market_key]["soft"].append(
-                                {
-                                    "book": bookmaker["title"],
-                                    "book_key": bookmaker["key"],
-                                    "name": outcome["name"],
-                                    "price": float(outcome["price"]),
-                                    "point": outcome.get("point", ""),
-                                    "id": outcome.get("id"),
-                                }
-                            )
-
-            for market_type, data in markets.items():
+            for market_type, book_data in markets.items():
                 if not _market_allowed_for_sport(sport, market_type):
                     continue
 
-                market_threshold = _market_ev_threshold(market_type)
+                # Fallback to alternative reference books if Pinnacle is missing
+                active_sharp_book = None
+                for sharp_candidate in SHARP_BOOK_HIERARCHY:
+                    if sharp_candidate in book_data:
+                        active_sharp_book = sharp_candidate
+                        break
 
-                sharp = data["sharp"]
+                if not active_sharp_book:
+                    continue 
+
+                sharp = {}
+                for outcome in book_data[active_sharp_book]["outcomes"]:
+                    outcome_key = (
+                        str(outcome["name"]).lower().strip(),
+                        str(outcome.get("point", "")),
+                    )
+                    sharp[outcome_key] = float(outcome["price"])
+
                 if not sharp:
                     continue
 
+                market_threshold = _market_ev_threshold(market_type)
                 devig_method = "shin" if ENABLE_SHIN_DEVIG else DEVIG_METHOD
                 fair_probabilities = fair_probabilities_from_prices(sharp, method=devig_method)
-
                 time_decay = compute_time_decay(event.get("commence_time")) if ENABLE_TIME_DECAY else None
                 sharp_prices_list = list(sharp.values())
                 candidates = []
-                for soft_bet in data["soft"]:
+
+                soft_candidates = []
+                for b_key, b_val in book_data.items():
+                    if b_key == active_sharp_book:
+                        continue 
+                    if b_key in soft_books:
+                        for outcome in b_val["outcomes"]:
+                            soft_candidates.append({
+                                "book": b_val["title"],
+                                "book_key": b_key,
+                                "name": outcome["name"],
+                                "price": float(outcome["price"]),
+                                "point": outcome.get("point", ""),
+                                "id": outcome.get("id"),
+                            })
+
+                for soft_bet in soft_candidates:
                     outcome_key = (
                         str(soft_bet["name"]).lower().strip(),
                         str(soft_bet.get("point", "")),
@@ -701,7 +728,7 @@ def scan_markets(
 
                     efficiency = None
                     if ENABLE_MARKET_EFFICIENCY:
-                        soft_prices_for_market = [s["price"] for s in data["soft"]]
+                        soft_prices_for_market = [s["price"] for s in soft_candidates]
                         efficiency = score_market_efficiency(
                             sharp_prices_list, soft_prices_for_market, max(edge, 0.0),
                         )
@@ -752,6 +779,7 @@ def scan_markets(
                                 "outcome_key": outcome_key,
                                 "efficiency": efficiency,
                                 "time_decay": time_decay,
+                                "sharp_reference_book": active_sharp_book,
                             }
                         )
 
@@ -785,10 +813,12 @@ def scan_markets(
                     fair_probability = candidate["fair_probability"]
                     book_weight = candidate["book_weight"]
                     pinnacle_price = candidate.get("pinnacle_price")
+                    active_sharp = candidate.get("sharp_reference_book", "pinnacle")
+                    
                     pinnacle_text = (
-                        f"**Pinnacle:** {decimal_to_american(pinnacle_price)}\n"
+                        f"**{active_sharp.capitalize()}:** {decimal_to_american(pinnacle_price)}\n"
                         if pinnacle_price
-                        else "**Pinnacle:** unavailable\n"
+                        else f"**{active_sharp.capitalize()}:** unavailable\n"
                     )
                     
                     try:
@@ -824,7 +854,7 @@ def scan_markets(
                         notes=(
                             f"book={final['book']};book_key={final['book_key']};"
                             f"book_weight={book_weight:.4f};fair_probability={fair_probability:.4f};"
-                            f"fair_decimal={fair_decimal:.4f}"
+                            f"fair_decimal={fair_decimal:.4f};devig_baseline={active_sharp}"
                         ),
                     )
                     if not was_logged:
