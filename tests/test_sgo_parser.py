@@ -27,19 +27,21 @@ def _mlb_event():
                 "sideID": "over",
                 "byBookmaker": {
                     "pinnacle": {"odds": -110, "overUnder": "5.5", "available": True},
-                    "draftkings": {"odds": 120, "overUnder": "5.5", "available": True},
+                    "draftkings": {"odds": 130, "overUnder": "5.5", "available": True},
                 },
             },
             "strikeouts-DUSTIN_MAY_1_MLB-game-ou-under": {
+                "oddID": "strikeouts-DUSTIN_MAY_1_MLB-game-ou-under",
                 "statID": "strikeouts",
                 "statEntityID": "DUSTIN_MAY_1_MLB",
+                "periodID": "game",
                 "betTypeID": "ou",
                 "sideID": "under",
                 "byBookmaker": {
                     "pinnacle": {"odds": -110, "overUnder": "5.5", "available": True},
+                    "draftkings": {"odds": -110, "overUnder": "5.5", "available": True},
                 },
             },
-            # Team moneyline — must be ignored (not a player prop).
             "points-away-game-ml-away": {
                 "statID": "points",
                 "statEntityID": "away",
@@ -160,7 +162,9 @@ class LeagueFetchToleranceTests(unittest.TestCase):
     def _run(self, leagues, responder):
         with mock.patch.object(prop_bot, "SGO_API_KEY", "test-key"), \
              mock.patch.object(prop_bot, "PLAYER_PROP_LEAGUES", leagues), \
-             mock.patch.object(prop_bot, "get_book_weights", return_value={}), \
+             mock.patch.object(prop_bot, "get_book_weights", return_value={"draftkings": 1.0}), \
+             mock.patch.object(prop_bot, "is_already_logged", return_value=False), \
+             mock.patch.object(prop_bot, "log_bet_to_db", return_value=True), \
              mock.patch.object(prop_bot, "request", side_effect=responder):
             return prop_bot.get_sgo_edges()
 
@@ -176,12 +180,10 @@ class LeagueFetchToleranceTests(unittest.TestCase):
             fake.json.return_value = {"success": True, "data": [_mlb_event()]}
             return fake
 
-        # WNBA first so, under the old single-try loop, it would have aborted MLB.
         picks, _near, stats = self._run(["WNBA", "MLB"], responder)
         self.assertGreater(stats["parsed_props"], 0)
         self.assertGreater(stats["events"], 0)
-        
-        # Verify the unsupported league was gracefully skipped and NOT added to errored_leagues
+        self.assertEqual(len(picks), 1)
         self.assertNotIn("WNBA:400", stats.get("errored_leagues", []))
         self.assertNotIn("reason", stats)
 
@@ -196,6 +198,7 @@ class LeagueFetchToleranceTests(unittest.TestCase):
 
         picks, _near, stats = self._run(["NBA", "MLB"], responder)
         self.assertGreater(stats["events"], 0)
+        self.assertEqual(len(picks), 1)
         self.assertIn("NBA:retry", stats.get("soft_skipped_leagues", []))
         self.assertNotIn("NBA:RetryError", stats.get("errored_leagues", []))
 
