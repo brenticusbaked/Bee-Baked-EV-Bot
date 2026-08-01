@@ -2,12 +2,13 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # Morning check (7:00 AM CDT / 12:00 UTC) & Night cap (10:30 PM CDT / 03:30 UTC)
-    - cron: '0 12 * * *'
+    # 1. Morning Prop Release Window (8:00 AM - 11:30 AM CDT / 13:00 - 16:30 UTC) - Every 30 mins
+    - cron: '0,30 13-16 * * *'
+    # 2. Peak Pre-Game Action Window (1:00 PM - 9:30 PM CDT / 18:00 - 02:30 UTC) - Every 30 mins
+    - cron: '0,30 18-23 * * *'
+    - cron: '0,30 0-2 * * *'
+    # 3. Night Cap & Audit (10:30 PM CDT / 03:30 UTC)
     - cron: '30 3 * * *'
-    # Peak window sweeps every 2 hours (1:00 PM - 9:00 PM CDT / 18:00 - 02:00 UTC)
-    - cron: '0 18,20,22 * * *'
-    - cron: '0 0,2 * * *'
   workflow_dispatch:
     inputs:
       scratch_guard_trace:
@@ -83,6 +84,8 @@ jobs:
           DISCORD_WATCHLIST_WEBHOOK_URL: ${{ secrets.DISCORD_WATCHLIST_WEBHOOK_URL }}
           ENABLE_NEWS: "true"
           ENABLE_NBA_PROP_BOT: "true"
+          ENABLE_WNBA_PROP_BOT: "false"
+          ENABLE_PLAYER_PROPS_PULL: "true"
           ENABLE_NBA_MODEL: "true"
           ENABLE_NHL_MODEL: "true"
           ENABLE_MLB_MODEL: "true"
@@ -128,7 +131,8 @@ jobs:
           EXECUTION_MAX_ORDER_UNITS: "0"
           EXECUTION_MAX_NOTIONAL: "0"
           EXECUTION_MAX_SYMBOL_EXPOSURE: "0"
-          PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,betonline,fanduel,draftkings"
+          SHARP_BOOK_HIERARCHY: "pinnacle,circa,bookmaker,cris,draftkings"
+          PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,betonline"
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}

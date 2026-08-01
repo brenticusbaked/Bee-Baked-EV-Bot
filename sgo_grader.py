@@ -24,7 +24,7 @@ def _sgo_keys():
 
 def get_sgo_results(league_id, date_str, api_key):
     if not api_key:
-        return {"players": {}, "events": [], "rate_limited": False}
+        return {"players": {}, "events": [], "rate_limited": False, "unsupported": False}
 
     url = "https://api.sportsgameodds.com/v2/events"
     params = {"apiKey": api_key, "leagueID": league_id, "date": date_str}
@@ -42,25 +42,30 @@ def get_sgo_results(league_id, date_str, api_key):
                 events = events.get("events") or events.get("data")
             if not isinstance(events, list):
                 print(f"SGO API returned unexpected format for {league_id} on {date_str}: {data}")
-                return {"players": {}, "events": [], "rate_limited": False}
+                return {"players": {}, "events": [], "rate_limited": False, "unsupported": False}
         else:
             print(f"SGO API returned unexpected format for {league_id} on {date_str}: {data}")
-            return {"players": {}, "events": [], "rate_limited": False}
+            return {"players": {}, "events": [], "rate_limited": False, "unsupported": False}
 
         players = {}
         for event in events:
             for player_name, player_stats in event.get("boxscore", {}).items():
                 players[normalize_text(player_name)] = player_stats
-        return {"players": players, "events": events, "rate_limited": False}
+        return {"players": players, "events": events, "rate_limited": False, "unsupported": False}
     except requests.HTTPError as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)
         print(f"SGO fetch failed for {league_id} on {date_str}: {exc}")
+        
+        # Identify rate limits vs hard rejections (like unsupported leagues)
         if status_code == 429:
-            return {"players": {}, "events": [], "rate_limited": True}
-        return {"players": {}, "events": [], "rate_limited": False}
+            return {"players": {}, "events": [], "rate_limited": True, "unsupported": False}
+        if status_code == 400 or "unsupported" in str(exc).lower():
+            return {"players": {}, "events": [], "rate_limited": False, "unsupported": True}
+            
+        return {"players": {}, "events": [], "rate_limited": False, "unsupported": False}
     except Exception as exc:
         print(f"SGO fetch failed for {league_id} on {date_str}: {exc}")
-        return {"players": {}, "events": [], "rate_limited": False}
+        return {"players": {}, "events": [], "rate_limited": False, "unsupported": False}
 
 
 def _match_event_by_name(events, matchup: str):
@@ -105,25 +110,40 @@ def run_grader():
     cache = {}
     cache_fetches = 0
     hit_rate_limit = False
-    league_map = {"basketball_nba": "NBA", "icehockey_nhl": "NHL", "baseball_mlb": "MLB"}
+    unsupported_leagues = set() # Track leagues that throw a 400 error
+    league_map = {"basketball_nba": "NBA", "icehockey_nhl": "NHL", "baseball_mlb": "MLB", "basketball_wnba": "WNBA"}
 
     print(f"Grading {len(ungraded_bets)} bets...")
 
     for bet in ungraded_bets:
         league = league_map.get(bet.get("sport"))
-        if not league:
+        
+        # Instantly skip if we already know this league is unsupported on your API plan
+        if not league or league in unsupported_leagues:
             continue
 
         cache_key = f"{league}_{bet['date']}"
         if cache_key not in cache:
             if cache_fetches >= SGO_GRADER_MAX_FETCHES:
                 continue
-            result = {"players": {}, "events": [], "rate_limited": False}
+            
+            result = {"players": {}, "events": [], "rate_limited": False, "unsupported": False}
             for key_index, api_key in enumerate(sgo_keys, start=1):
                 result = get_sgo_results(league, bet["date"], api_key)
+                
+                if result.get("unsupported"):
+                    print(f"League {league} is unsupported on this plan. Skipping for remainder of run.")
+                    unsupported_leagues.add(league)
+                    break # Break the key loop; don't waste backup keys on a 400 error
+                    
                 if not result.get("rate_limited"):
-                    break
+                    break # Success! Break the key loop
+                    
                 print(f"SGO rate-limited for {league} on key #{key_index}; trying next key.")
+                
+            if result.get("unsupported"):
+                continue # Skip grading this bet
+                
             cache[cache_key] = result
             cache_fetches += 1
             if cache[cache_key].get("rate_limited"):

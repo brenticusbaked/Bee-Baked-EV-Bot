@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Dict, List
 
 from db_manager import save_master_cache
@@ -10,6 +11,16 @@ from utils.seasons import filter_config_in_season
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 ODDS_API_KEY_2 = os.getenv("ODDS_API_KEY_2")
 ODDS_API_KEY_3 = os.getenv("ODDS_API_KEY_3")
+ODDS_API_KEY_4 = os.getenv("ODDS_API_KEY_4") # Added based on your F5/NRFI config
+
+# Define your most profitable prop markets
+PLAYER_PROP_CONFIG = {
+    "baseball_mlb": "batter_total_bases,batter_hits,batter_home_runs,pitcher_strikeouts",
+    "basketball_nba": "player_points,player_rebounds,player_assists,player_points_rebounds_assists,player_threes",
+    "basketball_wnba": "player_points,player_rebounds,player_assists",
+    "americanfootball_nfl": "player_pass_yds,player_rush_yds,player_receptions,player_receiving_yds"
+}
+ENABLE_PLAYER_PROPS_PULL = env_flag("ENABLE_PLAYER_PROPS_PULL", True)
 
 # Primary key stays on the low-cost core scan.
 PRIMARY_CONFIG = {
@@ -20,7 +31,6 @@ PRIMARY_CONFIG = {
 }
 
 # Secondary key is used only on full-game markets that add the most useful upside.
-# WNBA H2H/totals add more bet candidates during summer without the cost of alternate ladders.
 SECONDARY_CONFIG = {
     "basketball_nba": "h2h,totals",
     "basketball_wnba": "h2h,totals",
@@ -28,8 +38,6 @@ SECONDARY_CONFIG = {
 }
 
 # Tertiary key expands the scan into totals and MLB run-line style markets
-# that the unified scanner can actually alert on.
-# Cost: NHL 2 + MLB 4 = 6 credits/run, 12/day at two runs per day.
 TERTIARY_CONFIG = {
     "icehockey_nhl": "totals",
     "baseball_mlb": "spreads,totals",
@@ -53,8 +61,6 @@ PARTIAL_GAME_CONFIG = {
     "americanfootball_nfl": "alternate_spreads,alternate_totals,spreads_q1,totals_q1,h2h_q1,spreads_h1,totals_h1,h2h_h1",
 }
 
-# Dedicated MLB first-five pull so the model can keep using F5 markets without
-# reintroducing them into the shared main ingest defaults.
 MLB_F5_CONFIG = {
     "baseball_mlb": "h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings",
 }
@@ -120,6 +126,40 @@ def _merge_cache(cache: Dict[str, List[dict]], sport: str, events: List[dict]) -
         _merge_bookmakers(event_index[event_id], event)
 
 
+def _fetch_props_for_events(api_key: str, sport: str, events: List[dict], region: str, bookmakers: str) -> None:
+    """Iterates through events and fetches player props individually."""
+    if sport not in PLAYER_PROP_CONFIG or not ENABLE_PLAYER_PROPS_PULL:
+        return
+
+    prop_markets = PLAYER_PROP_CONFIG[sport]
+    print(f"Fetching {prop_markets} props for {len(events)} {sport} events in region {region}...")
+    
+    for event in events:
+        event_id = event["id"]
+        # The Odds API requires hitting the events endpoint for player props
+        url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds"
+        params = {
+            "apiKey": api_key,
+            "regions": region,
+            "markets": prop_markets,
+            "bookmakers": bookmakers,
+            "oddsFormat": "decimal",
+        }
+
+        try:
+            response = request("GET", url, params=params, timeout=20)
+            response.raise_for_status()
+            prop_data = response.json()
+            
+            # Merge the newly fetched prop bookmakers back into the main event object
+            _merge_bookmakers(event, prop_data)
+            
+            # Rate limit protection: The Odds API limits requests per second based on your tier
+            time.sleep(0.5) 
+        except Exception as exc:
+            print(f"Error fetching props for event {event_id} ({sport}): {exc}")
+
+
 def _fetch_config(
     cache: Dict[str, List[dict]],
     api_key: str,
@@ -143,9 +183,13 @@ def _fetch_config(
             response = request("GET", url, params=params, timeout=20)
             response.raise_for_status()
             events = response.json()
+            
+            # If enabled, fetch props and append them to these events BEFORE caching
+            _fetch_props_for_events(api_key, sport, events, region, bookmakers)
+            
             _merge_cache(cache, sport, events)
             request_credits = len(markets.split(",")) * 2
-            print(f"Cached {sport} ({markets}) via {label}. Credits used this request: {request_credits}")
+            print(f"Cached {sport} ({markets}) via {label}. Credits used this main request: {request_credits}")
             success_count += 1
         except Exception as exc:
             print(f"Error fetching {sport} via {label}: {exc}")
@@ -160,13 +204,7 @@ def run_fetcher():
 
     primary_sharp = 0
     primary_soft = 0
-    secondary_sharp = 0
-    secondary_soft = 0
-    tertiary_sharp = 0
-    tertiary_soft = 0
-    partial_sharp = 0
-    partial_soft = 0
-
+    
     active_primary = filter_config_in_season(PRIMARY_CONFIG)
     skipped_primary = set(PRIMARY_CONFIG) - set(active_primary)
     if skipped_primary:
