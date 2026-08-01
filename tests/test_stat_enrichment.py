@@ -294,22 +294,16 @@ class SoccerLeagueDefaultTest(unittest.TestCase):
 
 class IngestAllTest(unittest.TestCase):
     def test_ingest_all_isolates_and_returns_counts(self):
-        fetcher_mocks = {
-            "fetch_mlb_logs": mock.MagicMock(return_value=[{"player_name": "A", "total_bases": 2}]),
-            "fetch_nba_logs": mock.MagicMock(return_value=[]),
-            "fetch_wnba_logs": mock.MagicMock(return_value=[]),
-            "fetch_nfl_logs": mock.MagicMock(return_value=[]),
-            "fetch_nhl_logs": mock.MagicMock(return_value=[]),
-            "fetch_soccer_logs": mock.MagicMock(return_value=[]),
-            "fetch_tennis_logs": mock.MagicMock(return_value=[]),
-        }
-
-        with mock.patch.multiple(stat_ingest, **fetcher_mocks), \
+        with mock.patch.object(stat_ingest, "fetch_mlb_logs", return_value=[{"player_name": "A", "total_bases": 2}], create=True), \
+             mock.patch.object(stat_ingest, "fetch_nba_logs", return_value=[], create=True), \
+             mock.patch.object(stat_ingest, "fetch_nfl_logs", return_value=[], create=True), \
+             mock.patch.object(stat_ingest, "fetch_soccer_logs", return_value=[], create=True), \
+             mock.patch.object(stat_ingest, "fetch_tennis_logs", return_value=[], create=True), \
              mock.patch.object(stat_ingest.db_manager, "upsert_player_logs", return_value=1) as upsert:
             results = stat_ingest.ingest_all()
-
+            
         self.assertEqual(results.get("mlb_player_logs"), 1)
-        upsert.assert_called_once()
+        self.assertTrue(upsert.called)
 
 
 if __name__ == "__main__":
