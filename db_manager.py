@@ -440,7 +440,12 @@ def log_bet_to_db(*args, **kwargs) -> bool:
             return True
     except Exception as first_error:
         logger.warning(f"bets_log insert failed, retrying legacy payload: {first_error}")
-        legacy_payload = _legacy_bets_log_payload(bet_data)
+        # Create an unmutated/clean dictionary copy for legacy fallback to satisfy test assertions
+        legacy_payload = {
+            key: bet_data[key]
+            for key in _LEGACY_BETS_LOG_FIELDS
+            if key in bet_data and bet_data[key] is not None
+        }
         try:
             def legacy_action():
                 supabase.table("bets_log").insert(legacy_payload).execute()
