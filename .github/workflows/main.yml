@@ -2,13 +2,9 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # 1. Morning Prop Release Window (8:00 AM - 11:30 AM CDT / 13:00 - 16:30 UTC) - Every 30 mins
-    - cron: '0,30 13-16 * * *'
-    # 2. Peak Pre-Game Action Window (1:00 PM - 9:30 PM CDT / 18:00 - 02:30 UTC) - Every 30 mins
-    - cron: '0,30 18-23 * * *'
-    - cron: '0,30 0-2 * * *'
-    # 3. Night Cap & Audit (10:30 PM CDT / 03:30 UTC)
-    - cron: '30 3 * * *'
+    # 4 Key EV Windows (CDT Times: 11 AM, 4 PM, 6 PM, 8 PM)
+    # Total cost: ~520 credits/day (~15,600 credits/month out of 20,000)
+    - cron: '0 16,21,23,1 * * *'
   workflow_dispatch:
     inputs:
       scratch_guard_trace:
