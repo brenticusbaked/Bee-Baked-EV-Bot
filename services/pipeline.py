@@ -26,12 +26,20 @@ DISCORD_STATUS_WEBHOOK_URL = STATUS_WEBHOOK_URL
 def _normalize_task_output(output) -> Tuple[str, int, str, Dict[str, str]]:
     if isinstance(output, dict):
         detail = str(output.get("detail", "finished"))
-        count = int(output.get("count", 0))
+        count = int(output.get("count", 1))
         label = str(output.get("label", "updates"))
-        meta = output.get("meta", {})
+        meta = output.get("meta", output) 
         return detail, count, label, meta if isinstance(meta, dict) else {}
+    
+    if isinstance(output, (list, tuple)):
+        return "finished", len(output), "updates", {"raw_data": str(output)}
+        
     if isinstance(output, int):
         return "finished", output, "updates", {}
+        
+    if isinstance(output, str):
+        return "finished", 1, "updates", {"raw_string": output}
+        
     return "finished", 0, "updates", {}
 
 
