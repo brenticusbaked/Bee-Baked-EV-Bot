@@ -203,7 +203,7 @@ PROP_EV_THRESHOLD = env_float("PROP_EV_THRESHOLD", 0.01)
 PROP_NEAR_MISS_THRESHOLD = env_float("PROP_NEAR_MISS_THRESHOLD", 0.005)
 PROP_CONSENSUS_MIN_BOOKS = max(1, int(os.getenv("PROP_CONSENSUS_MIN_BOOKS", "1")))
 PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "multiplicative")
-PROP_KELLY_FRACTION = env_float("PROP_KELLY_FRACTION", 0.125)
+PROP_KELLY_FRACTION = env_float("PROP_KELLY_FRACTION", 0.25)
 PROP_MAX_UNITS = env_float("PROP_MAX_UNITS", 2.0)
 PROP_CONFIDENCE_FULL_BOOKS = max(1.0, env_float("PROP_CONFIDENCE_FULL_BOOKS", 3.0))
 PROP_UNCERTAINTY_Z = env_float("PROP_UNCERTAINTY_Z", 0.35)
@@ -284,11 +284,16 @@ TARGET_STATS = _parse_target_stats()
 
 def _parse_player_prop_leagues() -> List[str]:
     raw = os.getenv("PLAYER_PROP_LEAGUES", "NBA,MLB,NFL")
+    allow_wnba = os.getenv("ENABLE_WNBA_PROP_BOT", "").strip().lower() in {"1", "true", "yes", "on"}
     leagues = []
     for item in raw.split(","):
         league = item.strip().upper()
+        if league == "WNBA" and not allow_wnba:
+            continue
         if league in LEAGUE_SPORT_KEYS:
             leagues.append(league)
+    if allow_wnba and "WNBA" not in leagues:
+        leagues.insert(1 if "NBA" in leagues else 0, "WNBA")
     return leagues or ["NBA"]
 
 PLAYER_PROP_LEAGUES = _parse_player_prop_leagues()

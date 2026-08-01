@@ -44,6 +44,7 @@ ENABLE_ODDS_SECONDARY_PULL = env_flag("ENABLE_ODDS_SECONDARY_PULL", True)
 ENABLE_ODDS_TERTIARY_PULL = env_flag("ENABLE_ODDS_TERTIARY_PULL", True)
 ENABLE_ODDS_PARTIAL_MARKET_PULL = env_flag("ENABLE_ODDS_PARTIAL_MARKET_PULL", False)
 ENABLE_MLB_F5_PULL = env_flag("ENABLE_MLB_F5_PULL", True)
+ENABLE_MLB_NRFI_PULL = env_flag("ENABLE_MLB_NRFI_PULL", True)
 
 PARTIAL_GAME_CONFIG = {
     "basketball_nba": "alternate_spreads,alternate_totals,spreads_q1,totals_q1,h2h_q1,spreads_h1,totals_h1,h2h_h1",
@@ -56,6 +57,10 @@ PARTIAL_GAME_CONFIG = {
 # reintroducing them into the shared main ingest defaults.
 MLB_F5_CONFIG = {
     "baseball_mlb": "h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings",
+}
+
+MLB_NRFI_CONFIG = {
+    "baseball_mlb": "runs_1st_inning",
 }
 
 
@@ -246,6 +251,24 @@ def run_fetcher():
     else:
         print("ODDS_API_KEY_4 not set. Skipping dedicated MLB first-five pull.")
 
+    active_mlb_nrfi = filter_config_in_season(MLB_NRFI_CONFIG)
+    mlb_nrfi_sharp = 0
+    mlb_nrfi_soft = 0
+    if ODDS_API_KEY_4 and ENABLE_MLB_NRFI_PULL:
+        skipped_mlb_nrfi = set(MLB_NRFI_CONFIG) - set(active_mlb_nrfi)
+        if skipped_mlb_nrfi:
+            print(f"BEE-BAKED FETCH: Skipping off-season sports (mlb_nrfi): {', '.join(sorted(skipped_mlb_nrfi))}")
+        print(
+            "BEE-BAKED FETCH: Running dedicated MLB NRFI pull"
+            f" ({_credits_for_config(active_mlb_nrfi) * 2} credits/run)"
+        )
+        mlb_nrfi_sharp = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_nrfi, "mlb nrfi sharp eu", SHARP_REGION, SHARP_BOOKS)
+        mlb_nrfi_soft = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_nrfi, "mlb nrfi soft us", SOFT_REGION, SOFT_BOOKS)
+    elif not ENABLE_MLB_NRFI_PULL:
+        print("ENABLE_MLB_NRFI_PULL=false. Skipping dedicated MLB NRFI pull.")
+    else:
+        print("ODDS_API_KEY_4 not set. Skipping dedicated MLB NRFI pull.")
+
     save_master_cache(cache)
 
     primary_denom = len(active_primary)
@@ -253,6 +276,7 @@ def run_fetcher():
     tertiary_denom = len(active_tertiary) if (ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL) else 0
     partial_denom = len(active_partial) if (ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL) else 0
     mlb_f5_denom = len(active_mlb_f5) if (ODDS_API_KEY_4 and ENABLE_MLB_F5_PULL) else 0
+    mlb_nrfi_denom = len(active_mlb_nrfi) if (ODDS_API_KEY_4 and ENABLE_MLB_NRFI_PULL) else 0
 
     detail = (
         f"fetch complete"
@@ -261,6 +285,7 @@ def run_fetcher():
         f" | tertiary sharp: {tertiary_sharp}/{tertiary_denom} soft: {tertiary_soft}/{tertiary_denom}"
         f" | partial/alternate sharp: {partial_sharp}/{partial_denom} soft: {partial_soft}/{partial_denom}"
         f" | mlb_f5 sharp: {mlb_f5_sharp}/{mlb_f5_denom} soft: {mlb_f5_soft}/{mlb_f5_denom}"
+        f" | mlb_nrfi sharp: {mlb_nrfi_sharp}/{mlb_nrfi_denom} soft: {mlb_nrfi_soft}/{mlb_nrfi_denom}"
     )
     return {"detail": detail, "count": len(cache), "label": "updates"}
 

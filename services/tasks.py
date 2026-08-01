@@ -47,17 +47,18 @@ def get_parallel_tasks() -> List[PipelineTask]:
 
         tasks.append(PipelineTask(name="injury_news", func=scrape_news))
     if env_flag("ENABLE_PLAYER_PROP_BOT", env_flag("ENABLE_NBA_PROP_BOT", True)):
-        active_prop_sports = [
-            sport
-            for sport in ("basketball_nba", "baseball_mlb")
-            if is_sport_in_season(sport)
-        ]
+        active_prop_sports = []
+        for sport in ("basketball_nba", "baseball_mlb"):
+            if is_sport_in_season(sport):
+                active_prop_sports.append(sport)
+        if env_flag("ENABLE_WNBA_PROP_BOT", False) and is_sport_in_season("basketball_wnba"):
+            active_prop_sports.append("basketball_wnba")
         if active_prop_sports:
             from bot_propodds_nba import main as run_player_prop_bot
 
             tasks.append(PipelineTask(name="player_prop_bot", func=run_player_prop_bot))
         else:
-            print("[seasons] Skipping player_prop_bot (NBA/MLB off-season)")
+            print("[seasons] Skipping player_prop_bot (NBA/MLB off-season or WNBA disabled)")
     if env_flag("ENABLE_NBA_MODEL", True):
         if is_sport_in_season("basketball_nba"):
             from model_nba import run_nba_model
@@ -65,6 +66,13 @@ def get_parallel_tasks() -> List[PipelineTask]:
             tasks.append(PipelineTask(name="model_nba", func=run_nba_model))
         else:
             print("[seasons] Skipping model_nba (NBA off-season)")
+    if env_flag("ENABLE_NRFI_MODEL", True):
+        if is_sport_in_season("baseball_mlb"):
+            from model_nrfi import run_nrfi_model
+
+            tasks.append(PipelineTask(name="model_nrfi", func=run_nrfi_model))
+        else:
+            print("[seasons] Skipping model_nrfi (MLB off-season)")
     if env_flag("ENABLE_NHL_MODEL", True):
         if is_sport_in_season("icehockey_nhl"):
             from model_nhl import run_nhl_model
@@ -89,6 +97,14 @@ def get_scan_tasks() -> List[PipelineTask]:
         from unified_bot import scan_markets
 
         tasks.append(PipelineTask(name="unified_market_scan", func=scan_markets))
+    if env_flag("ENABLE_OPENING_SCAN", True):
+        from continuous_scan import run_opener_scan
+
+        tasks.append(PipelineTask(name="opener_scan", func=run_opener_scan))
+    if env_flag("ENABLE_PREGAME_SCAN", True):
+        from pregame_scan import run_pregame_scan
+
+        tasks.append(PipelineTask(name="pregame_scan", func=run_pregame_scan))
     if env_flag("ENABLE_ARBITRAGE_SCAN", True):
         from arbitrage_scanner import run_arbitrage_scan
 

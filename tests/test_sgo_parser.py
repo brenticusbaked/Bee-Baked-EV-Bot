@@ -116,6 +116,20 @@ class SgoParserTests(unittest.TestCase):
     def test_player_falls_back_to_deslugged_id(self):
         self.assertEqual(prop_bot._resolve_player_name("RHETT_LOWDER_1_MLB", {}), "Rhett Lowder")
 
+    def test_wnba_is_opt_in_by_default(self):
+        with mock.patch.dict(prop_bot.os.environ, {"PLAYER_PROP_LEAGUES": "NBA,WNBA,MLB,NFL"}, clear=False):
+            leagues = prop_bot._parse_player_prop_leagues()
+        self.assertNotIn("WNBA", leagues)
+
+    def test_wnba_is_included_when_explicitly_enabled(self):
+        with mock.patch.dict(
+            prop_bot.os.environ,
+            {"PLAYER_PROP_LEAGUES": "NBA,WNBA,MLB,NFL", "ENABLE_WNBA_PROP_BOT": "true"},
+            clear=False,
+        ):
+            leagues = prop_bot._parse_player_prop_leagues()
+        self.assertIn("WNBA", leagues)
+
 
 class SgoConsensusTests(unittest.TestCase):
     def test_pinnacle_first_uses_pinnacle_alone(self):
