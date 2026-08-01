@@ -146,9 +146,9 @@ def _normalize_bet_payload(*args, **kwargs) -> Dict[str, Any]:
 
 def _legacy_bets_log_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        key: value 
-        for key, value in payload.items() 
-        if key in _LEGACY_BETS_LOG_FIELDS and value is not None
+        key: payload[key]
+        for key in _LEGACY_BETS_LOG_FIELDS
+        if key in payload and payload[key] is not None
     }
 
 
@@ -984,7 +984,7 @@ def get_l10_hit_rate(
         return None
 
     over = sum(1 for v in values if v > line_value)
-    under = sum(1 for v in values if v < line_value)
+    under = sum(1 for v in values if b < line_value)
     last_game = game_details[0] if game_details else None
 
     return {
