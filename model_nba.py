@@ -1,4 +1,3 @@
-import os
 from datetime import timedelta
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
@@ -60,86 +59,88 @@ def get_espn_schedule(date_str):
         return []
 
 
+def _is_pregame_game(game):
+    try:
+        return game["competitions"][0]["status"]["type"]["state"] == "pre"
+    except Exception:
+        return False
+
+
 def run_nba_model():
     today = get_local_now()
-    today_str = today.strftime("%Y%m%d")
-    yesterday_str = (today - timedelta(days=1)).strftime("%Y%m%d")
+    dates = [today, today + timedelta(days=1)]
     alerts_sent = 0
 
-    teams_yesterday = {}
-    for game in get_espn_schedule(yesterday_str):
-        for competitor in game.get("competitions", [{}])[0].get("competitors", []):
-            teams_yesterday[competitor["team"]["displayName"]] = competitor["homeAway"]
+    for day in dates:
+        for game in get_espn_schedule(day.strftime("%Y%m%d")):
+            if not _is_pregame_game(game):
+                continue
 
-    for game in get_espn_schedule(today_str):
-        competition = game["competitions"][0]
-        away = next(item for item in competition["competitors"] if item["homeAway"] == "away")["team"]["displayName"]
-        home = next(item for item in competition["competitors"] if item["homeAway"] == "home")["team"]["displayName"]
+            competition = game["competitions"][0]
+            away = next(item for item in competition["competitors"] if item["homeAway"] == "away")["team"]["displayName"]
+            home = next(item for item in competition["competitors"] if item["homeAway"] == "home")["team"]["displayName"]
 
-        if away not in teams_yesterday or home in teams_yesterday:
-            continue
+            book, odds, line, link, event_id = get_best_spread(home)
+            selection = f"{home} {line}"
+            if not book or is_already_logged(f"{away} @ {home}", "MODEL_NBA_SPREAD", selection):
+                continue
+            pinnacle_reference = format_pinnacle_reference(
+                get_master_cache() or {},
+                "basketball_nba",
+                event_id,
+                "MODEL_NBA_SPREAD",
+                selection,
+            )
 
-        book, odds, line, link, event_id = get_best_spread(home)
-        selection = f"{home} {line}"
-        if not book or is_already_logged(f"{away} @ {home}", "MODEL_NBA_SPREAD", selection):
-            continue
-        pinnacle_reference = format_pinnacle_reference(
-            get_master_cache() or {},
-            "basketball_nba",
-            event_id,
-            "MODEL_NBA_SPREAD",
-            selection,
-        )
+            # Baseline rested-home-vs-road-B2B edge with a small home spread bump.
+            spread_abs = abs(float(line)) if line not in (None, "") else 0.0
+            model_probability = min(0.54 + (spread_abs * 0.005), 0.60)
+            fair_price = fair_american_from_probability(model_probability)
+            edge = model_edge_from_probability(model_probability, odds)
+            units = model_units_from_probability(model_probability, odds)
+            if edge < NBA_MODEL_EDGE_THRESHOLD or units <= 0:
+                continue
 
-        # Baseline rested-home-vs-road-B2B edge with a small home spread bump.
-        spread_abs = abs(float(line)) if line not in (None, "") else 0.0
-        model_probability = min(0.54 + (spread_abs * 0.005), 0.60)
-        fair_price = fair_american_from_probability(model_probability)
-        edge = model_edge_from_probability(model_probability, odds)
-        units = model_units_from_probability(model_probability, odds)
-        if edge < NBA_MODEL_EDGE_THRESHOLD or units <= 0:
-            continue
-
-        was_logged = log_bet_to_db(
-            f"{away} @ {home}",
-            "MODEL_NBA_SPREAD",
-            selection,
-            odds,
-            edge,
-            f"{units:.2f}",
-            fair_price,
-            "basketball_nba",
-            event_id,
-            notes=f"book={book};model=nba_fatigue;probability={model_probability:.4f}",
-        )
-        if not was_logged:
-            print(f"Skipping NBA model alert because DB log failed for {selection}.")
-            continue
-        send_discord_alert(
-            {
-                "embeds": [
-                    {
-                        "description": (
-                            f"**NBA FATIGUE ALERT**\n"
-                            f"Advantage: **{home}** vs {away} (Road B2B)\n"
-                            f"Odds: [{book}]({link}) @ {odds}\n"
-                            f"**Pinnacle:** {pinnacle_reference}\n"
-                            f"**Fair Value:** {fair_price}\n"
-                            f"**Model Edge:** {edge * 100:.2f}%\n"
-                            f"**Suggested:** {units:.2f} Units"
-                            f"{build_last_ten_context_line(home, 'spreads', line, 'over', 'basketball_nba', opponent=away)}"
-                        ),
-                        "color": 16734003,
-                    }
-                ]
-            },
-            source="model_nba",
-            alert_type="bet_alert",
-            dedupe_key=f"{away} @ {home}::{selection}",
-            webhook_url=DISCORD_WEBHOOK_URL,
-            add_bee_image=True,
-        )
-        alerts_sent += 1
+            was_logged = log_bet_to_db(
+                f"{away} @ {home}",
+                "MODEL_NBA_SPREAD",
+                selection,
+                odds,
+                edge,
+                f"{units:.2f}",
+                fair_price,
+                "basketball_nba",
+                event_id,
+                notes=f"book={book};model=nba_fatigue;probability={model_probability:.4f};slate={day.strftime('%Y%m%d')}",
+            )
+            if not was_logged:
+                print(f"Skipping NBA model alert because DB log failed for {selection}.")
+                continue
+            send_discord_alert(
+                {
+                    "embeds": [
+                        {
+                            "description": (
+                                f"**NBA FATIGUE ALERT**\n"
+                                f"Advantage: **{home}** vs {away} (pregame only)\n"
+                                f"Odds: [{book}]({link}) @ {odds}\n"
+                                f"**Pinnacle:** {pinnacle_reference}\n"
+                                f"**Fair Value:** {fair_price}\n"
+                                f"**Model Edge:** {edge * 100:.2f}%\n"
+                                f"**Suggested:** {units:.2f} Units"
+                                f"{build_last_ten_context_line(home, 'spreads', line, 'over', 'basketball_nba', opponent=away)}"
+                            ),
+                            "color": 16734003,
+                        }
+                    ]
+                },
+                source="model_nba",
+                alert_type="bet_alert",
+                dedupe_key=f"{away} @ {home}::{selection}",
+                webhook_url=DISCORD_WEBHOOK_URL,
+                add_bee_image=True,
+            )
+            alerts_sent += 1
 
     return {"detail": "nba model complete", "count": alerts_sent, "label": "alerts"}
 

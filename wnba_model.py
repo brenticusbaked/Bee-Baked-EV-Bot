@@ -1,138 +1,177 @@
-"""First Inning Run (NRFI / YRFI) predictive model utilizing 
-starting pitcher first-inning WHIP, strikeout rates, and top-of-the-order wOBA.
+"""WNBA spread model for identifying pregame misprices.
+
+This mirrors the NBA model shape, but targets WNBA games and scans both
+today's and tomorrow's slates so late-day runs can still catch the next slate.
 """
 
-import logging
-from typing import Any, Dict, Optional
+from __future__ import annotations
+
+from datetime import timedelta
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
-from services.http_client import get_json as _http_get_json
-from services.odds_reference import format_pinnacle_reference
+from services.http_client import get_json
 from services.last_ten import build_last_ten_context_line
+from services.odds_reference import format_pinnacle_reference
 from utils.links import sportsbook_search_link
-from utils.model_pricing import fair_american_from_probability, model_edge_from_probability
-from utils.odds import decimal_to_american, quarter_kelly_units, american_to_decimal
+from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
+from utils.odds import decimal_to_american
 from utils.thresholds import env_float
 from utils.time import get_local_now
 
-logger = logging.getLogger(__name__)
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
-NRFI_MODEL_EDGE_THRESHOLD = env_float("NRFI_MODEL_EDGE_THRESHOLD", 0.02)
+WNBA_MODEL_EDGE_THRESHOLD = env_float("WNBA_MODEL_EDGE_THRESHOLD", 0.01)
 
 
-def get_dynamic_link(bookmaker, target_string):
+def get_dynamic_link(bookmaker: str, target_string: str) -> str:
     return sportsbook_search_link(bookmaker, target_string)
 
 
-def get_best_nrfi_odds(event_id, target_selection):
+def get_best_spread(target_team: str):
     cache = get_master_cache()
     if not cache:
-        return None, None, None, None
+        print("Cloud cache is empty or failed to load.")
+        return None, None, None, None, None
 
-    for game in cache.get("baseball_mlb", []):
-        if str(game["id"]) != str(event_id):
+    best_price = 0.0
+    best_point = ""
+    best_book = "Unknown"
+    best_title = "Unknown"
+    event_id = ""
+
+    for game in cache.get("basketball_wnba", []):
+        if target_team not in game.get("home_team", "") and target_team not in game.get("away_team", ""):
             continue
         for bookmaker in game.get("bookmakers", []):
-            if bookmaker["key"] == "pinnacle":
+            if bookmaker.get("key") == "pinnacle":
                 continue
             for market in bookmaker.get("markets", []):
-                if market["key"] != "runs_1st_inning":
+                if market.get("key") != "spreads":
                     continue
-                for outcome in market["outcomes"]:
-                    if target_selection.lower() in outcome["name"].lower():
-                        return (
-                            bookmaker["title"],
-                            decimal_to_american(float(outcome["price"])),
-                            get_dynamic_link(bookmaker["key"], f"NRFI {event_id}"),
-                            market["key"],
-                        )
-    return None, None, None, None
+                for outcome in market.get("outcomes", []):
+                    if target_team in str(outcome.get("name", "")) and float(outcome.get("price", 0)) > best_price:
+                        best_price = float(outcome["price"])
+                        best_point = outcome.get("point", "")
+                        best_book = bookmaker.get("key", "Unknown")
+                        best_title = bookmaker.get("title", "Unknown")
+                        event_id = str(game.get("id", ""))
+
+    if best_price > 0:
+        return (
+            best_title,
+            decimal_to_american(best_price),
+            str(best_point),
+            get_dynamic_link(best_book, target_team),
+            event_id,
+        )
+    return None, None, None, None, None
 
 
-def run_nrfi_model():
-    today = get_local_now().strftime("%Y-%m-%d")
-    url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}&hydrate=probablePitcher"
-
+def get_espn_schedule(date_str: str):
+    url = f"https://site.api.espn.com/apis/v2/sports/basketball/wnba/scoreboard?dates={date_str}"
     try:
-        data = _http_get_json(url)
-        dates = data.get("dates", [])
-        if not dates:
-            return {"detail": "no mlb games scheduled", "count": 0, "label": "alerts"}
+        return get_json(url).get("events", [])
+    except Exception as exc:
+        print(f"ESPN WNBA schedule fetch failed: {exc}")
+        return []
 
-        alerts = []
-        for game in dates[0].get("games", []):
-            away_team = game["teams"]["away"]["team"]["name"]
-            home_team = game["teams"]["home"]["team"]["name"]
-            matchup = f"{away_team} @ {home_team}"
 
-            away_p = game["teams"]["away"].get("probablePitcher")
-            home_p = game["teams"]["home"].get("probablePitcher")
-            if not away_p or not home_p:
+def _is_pregame_game(game: dict) -> bool:
+    try:
+        state = game["competitions"][0]["status"]["type"]["state"]
+    except Exception:
+        return False
+    return state == "pre"
+
+
+def run_wnba_model():
+    now = get_local_now()
+    dates = [now, now + timedelta(days=1)]
+    seen_matchups: set[str] = set()
+    alerts_sent = 0
+
+    for day in dates:
+        day_str = day.strftime("%Y%m%d")
+        for game in get_espn_schedule(day_str):
+            if not _is_pregame_game(game):
                 continue
 
-            # Model heuristic estimation for NRFI probability based on elite starting pitching profiles
-            nrfi_probability = 0.58  # Baseline league average NRFI probability sits around 56-58%
-            
-            target_bet = "No" # NRFI selection
-            book, odds, link, selected_market = get_best_nrfi_odds(game["id"], target_bet)
-            if not book:
+            competition = game["competitions"][0]
+            away = next(item for item in competition["competitors"] if item["homeAway"] == "away")["team"]["displayName"]
+            home = next(item for item in competition["competitors"] if item["homeAway"] == "home")["team"]["displayName"]
+            matchup = f"{away} @ {home}"
+            if matchup in seen_matchups:
                 continue
+            seen_matchups.add(matchup)
 
-            if is_already_logged(matchup, "MODEL_NRFI", target_bet):
+            book, odds, line, link, event_id = get_best_spread(home)
+            selection = f"{home} {line}"
+            if not book or is_already_logged(matchup, "MODEL_WNBA_SPREAD", selection):
                 continue
 
             pinnacle_reference = format_pinnacle_reference(
                 get_master_cache() or {},
-                "baseball_mlb",
-                game["id"],
-                "MODEL_NRFI",
-                target_bet,
+                "basketball_wnba",
+                event_id,
+                "MODEL_WNBA_SPREAD",
+                selection,
             )
 
-            fair_p = fair_american_from_probability(nrfi_probability)
-            edge = model_edge_from_probability(nrfi_probability, odds)
-            if edge < NRFI_MODEL_EDGE_THRESHOLD:
-                continue
-
-            dec_odds = american_to_decimal(odds)
-            u_size = quarter_kelly_units(edge, dec_odds)
-            if u_size <= 0:
+            spread_abs = abs(float(line)) if line not in (None, "") else 0.0
+            model_probability = min(0.55 + (spread_abs * 0.0045), 0.61)
+            fair_price = fair_american_from_probability(model_probability)
+            edge = model_edge_from_probability(model_probability, odds)
+            units = model_units_from_probability(model_probability, odds)
+            if edge < WNBA_MODEL_EDGE_THRESHOLD or units <= 0:
                 continue
 
             was_logged = log_bet_to_db(
                 matchup,
-                "MODEL_NRFI",
-                target_bet,
+                "MODEL_WNBA_SPREAD",
+                selection,
                 odds,
                 edge,
-                f"{u_size:.2f}",
-                fair_p,
-                "baseball_mlb",
-                game["id"],
-                notes=f"book={book};market=runs_1st_inning;model=nrfi_pitcher_profile;edge={edge:.4f}",
+                f"{units:.2f}",
+                fair_price,
+                "basketball_wnba",
+                event_id,
+                notes=f"book={book};model=wnba_fatigue;probability={model_probability:.4f};slate={day_str}",
             )
             if not was_logged:
+                print(f"Skipping WNBA model alert because DB log failed for {selection}.")
                 continue
 
-            alerts.append(
-                f"**MLB NRFI MODEL ALERT**\n"
-                f"**Game:** {matchup}\n"
-                f"**Selection:** Run Scored in 1st Inning -> {target_bet} (NRFI)\n"
-                f"**Price:** [{book}]({link}) @ {odds}\n"
-                f"**Pinnacle:** {pinnacle_reference}\n"
-                f"**Model Edge:** {edge * 100:.2f}% | **Fair:** {fair_p}\n"
-                f"**Size:** {u_size:.2f} Units"
-                f"{build_last_ten_context_line(home_team, 'h2h', '', 'over', 'basketball_wnba')}"
+            send_discord_alert(
+                {
+                    "embeds": [
+                        {
+                            "description": (
+                                f"**WNBA SPREAD ALERT**\n"
+                                f"**Game:** {matchup}\n"
+                                f"**Advantage:** {home} vs {away}\n"
+                                f"**Odds:** [{book}]({link}) @ {odds}\n"
+                                f"**Pinnacle:** {pinnacle_reference}\n"
+                                f"**Fair Value:** {fair_price}\n"
+                                f"**Model Edge:** {edge * 100:.2f}%\n"
+                                f"**Suggested:** {units:.2f} Units"
+                                f"{build_last_ten_context_line(home, 'spreads', line, 'over', 'basketball_wnba', opponent=away)}"
+                            ),
+                            "color": 10038562,
+                        }
+                    ]
+                },
+                source="model_wnba",
+                alert_type="bet_alert",
+                dedupe_key=f"{matchup}::{selection}",
+                webhook_url=DISCORD_WEBHOOK_URL,
+                add_bee_image=True,
             )
+            alerts_sent += 1
 
-        for index, message in enumerate(alerts):
-            send_discord_alert({"embeds": [{"description": message, "color": 3066993}]}, "model_nrfi", "bet_alert", message[:200], DISCORD_WEBHOOK_URL, index == len(alerts)-1)
-        return {"detail": "nrfi model complete", "count": len(alerts), "label": "alerts"}
-    except Exception as exc:
-        return {"detail": f"error: {exc}", "count": 0, "label": "alerts"}
+    return {"detail": "wnba model complete", "count": alerts_sent, "label": "alerts"}
+
 
 if __name__ == "__main__":
-    run_nrfi_model()
+    run_wnba_model()

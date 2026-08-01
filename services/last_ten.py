@@ -88,4 +88,22 @@ def build_last_ten_context_line(
             g_val = last_game.get("value")
             body += f" Last played {g_date}: recorded {g_val:g}."
 
+    if str(market_key).strip().lower() in {"batter_home_runs", "batter_home_run"}:
+        if str(side).strip().lower() == "over":
+            body = (
+                f"{target_label} has hit a home run in {cleared}/{games} of their last {games} games."
+            )
+        else:
+            body = (
+                f"{target_label} has been held without a home run in {cleared}/{games} of their last {games} games."
+            )
+        if opponent and last_vs_game and last_vs_game.get("game_date") is not None:
+            vs_date = last_vs_game.get("game_date")
+            vs_val = last_vs_game.get("value")
+            body += f" Last vs {opponent}: {vs_val:g} HR on {vs_date}."
+        elif last_game and last_game.get("game_date") is not None:
+            g_date = last_game.get("game_date")
+            g_val = last_game.get("value")
+            body += f" Last played {g_date}: recorded {g_val:g} HR."
+
     return prefix + body

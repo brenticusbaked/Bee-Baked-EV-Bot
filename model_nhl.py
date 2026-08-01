@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
@@ -56,91 +57,106 @@ def get_best_puckline(target_team):
     return None, None, None, None
 
 
+def _is_pregame_game(game):
+    try:
+        return game["gameState"] == "FUT" or game["gameState"] == "PRE"
+    except Exception:
+        try:
+            return game["status"]["type"]["state"] == "pre"
+        except Exception:
+            return False
+
+
 def run_nhl_model():
     try:
         standings = get_json("https://api-web.nhle.com/v1/standings/now")
         team_goal_diff = {team["teamName"]["default"]: team["goalDifferential"] for team in standings.get("standings", [])}
 
-        today = get_local_now().strftime("%Y-%m-%d")
-        schedule = get_json(f"https://api-web.nhle.com/v1/schedule/{today}")
         alerts = []
 
-        if "gameWeek" not in schedule or not schedule["gameWeek"]:
-            return {"detail": "no nhl games scheduled", "count": 0, "label": "alerts"}
+        for day in (get_local_now(), get_local_now() + timedelta(days=1)):
+            today = day.strftime("%Y-%m-%d")
+            schedule = get_json(f"https://api-web.nhle.com/v1/schedule/{today}")
 
-        for game in schedule["gameWeek"][0].get("games", []):
-            away = game["awayTeam"]["placeName"]["default"]
-            home = game["homeTeam"]["placeName"]["default"]
-            matchup = f"{away} @ {home}"
-
-            away_gd = next((gd for name, gd in team_goal_diff.items() if away in name), None)
-            home_gd = next((gd for name, gd in team_goal_diff.items() if home in name), None)
-            if away_gd is None or home_gd is None:
+            if "gameWeek" not in schedule or not schedule["gameWeek"]:
                 continue
 
-            gd_diff = abs(away_gd - home_gd)
-            if gd_diff < NHL_GD_GAP_THRESHOLD:
-                continue
+            for game in schedule["gameWeek"][0].get("games", []):
+                if not _is_pregame_game(game):
+                    continue
 
-            better_team = away if away_gd > home_gd else home
-            better_gd = max(away_gd, home_gd)
-            worse_team = home if away_gd > home_gd else away
-            worse_gd = min(away_gd, home_gd)
-            selection = f"{better_team} -1.5"
+                away = game["awayTeam"]["placeName"]["default"]
+                home = game["homeTeam"]["placeName"]["default"]
+                matchup = f"{away} @ {home}"
 
-            if is_already_logged(matchup, "MODEL_NHL_PUCKLINE", selection):
-                continue
+                away_gd = next((gd for name, gd in team_goal_diff.items() if away in name), None)
+                home_gd = next((gd for name, gd in team_goal_diff.items() if home in name), None)
+                if away_gd is None or home_gd is None:
+                    continue
 
-            best_book, best_odds, bet_link, event_id = get_best_puckline(better_team)
-            if not best_book or not event_id:
-                continue
-            pinnacle_reference = format_pinnacle_reference(
-                get_master_cache() or {},
-                "icehockey_nhl",
-                event_id,
-                "MODEL_NHL_PUCKLINE",
-                selection,
-            )
+                gd_diff = abs(away_gd - home_gd)
+                if gd_diff < NHL_GD_GAP_THRESHOLD:
+                    continue
 
-            excess_gap = max(gd_diff - NHL_GD_GAP_THRESHOLD, 0.0)
-            model_probability = min(0.54 + (excess_gap * 0.0025), 0.62)
-            fair_price = fair_american_from_probability(model_probability)
-            edge = model_edge_from_probability(model_probability, best_odds)
-            units = model_units_from_probability(model_probability, best_odds)
-            if edge < NHL_MODEL_EDGE_THRESHOLD or units <= 0:
-                continue
+                better_team = away if away_gd > home_gd else home
+                better_gd = max(away_gd, home_gd)
+                worse_team = home if away_gd > home_gd else away
+                worse_gd = min(away_gd, home_gd)
+                selection = f"{better_team} -1.5"
 
-            was_logged = log_bet_to_db(
-                matchup,
-                "MODEL_NHL_PUCKLINE",
-                selection,
-                best_odds,
-                edge,
-                f"{units:.2f}",
-                fair_price,
-                "icehockey_nhl",
-                event_id,
-                notes=f"book={best_book};model=nhl_goal_diff;probability={model_probability:.4f};gap={gd_diff}",
-            )
-            if not was_logged:
-                print(f"Skipping NHL model alert because DB log failed for {selection}.")
-                continue
-            alerts.append(
-                (
-                    f"**NHL MODEL MISMATCH DETECTED**\n"
-                    f"**Game:** {matchup}\n"
-                    f"**Advantage:** {better_team}\n"
-                    f"{better_team} GD: **{better_gd}**\n"
-                    f"{worse_team} GD: **{worse_gd}**\n"
-                    f"**Net Gap:** {gd_diff} Goals\n"
-                    f"**Best Puck Line:** [{best_book}]({bet_link}) | **-1.5 ({best_odds})**\n"
-                    f"**Pinnacle:** {pinnacle_reference}\n"
-                    f"**Fair Value:** {fair_price}\n"
-                    f"**Model Edge:** {edge * 100:.2f}%\n"
-                    f"**Suggested:** {units:.2f} Units"
-                    f"{build_last_ten_context_line(better_team, 'spreads', '-1.5', 'over', 'icehockey_nhl', opponent=worse_team)}"
+                if is_already_logged(matchup, "MODEL_NHL_PUCKLINE", selection):
+                    continue
+
+                best_book, best_odds, bet_link, event_id = get_best_puckline(better_team)
+                if not best_book or not event_id:
+                    continue
+                pinnacle_reference = format_pinnacle_reference(
+                    get_master_cache() or {},
+                    "icehockey_nhl",
+                    event_id,
+                    "MODEL_NHL_PUCKLINE",
+                    selection,
                 )
-            )
+
+                excess_gap = max(gd_diff - NHL_GD_GAP_THRESHOLD, 0.0)
+                model_probability = min(0.54 + (excess_gap * 0.0025), 0.62)
+                fair_price = fair_american_from_probability(model_probability)
+                edge = model_edge_from_probability(model_probability, best_odds)
+                units = model_units_from_probability(model_probability, best_odds)
+                if edge < NHL_MODEL_EDGE_THRESHOLD or units <= 0:
+                    continue
+
+                was_logged = log_bet_to_db(
+                    matchup,
+                    "MODEL_NHL_PUCKLINE",
+                    selection,
+                    best_odds,
+                    edge,
+                    f"{units:.2f}",
+                    fair_price,
+                    "icehockey_nhl",
+                    event_id,
+                    notes=f"book={best_book};model=nhl_goal_diff;probability={model_probability:.4f};gap={gd_diff};slate={today}",
+                )
+                if not was_logged:
+                    print(f"Skipping NHL model alert because DB log failed for {selection}.")
+                    continue
+                alerts.append(
+                    (
+                        f"**NHL MODEL MISMATCH DETECTED**\n"
+                        f"**Game:** {matchup}\n"
+                        f"**Advantage:** {better_team}\n"
+                        f"{better_team} GD: **{better_gd}**\n"
+                        f"{worse_team} GD: **{worse_gd}**\n"
+                        f"**Net Gap:** {gd_diff} Goals\n"
+                        f"**Best Puck Line:** [{best_book}]({bet_link}) | **-1.5 ({best_odds})**\n"
+                        f"**Pinnacle:** {pinnacle_reference}\n"
+                        f"**Fair Value:** {fair_price}\n"
+                        f"**Model Edge:** {edge * 100:.2f}%\n"
+                        f"**Suggested:** {units:.2f} Units"
+                        f"{build_last_ten_context_line(better_team, 'spreads', '-1.5', 'over', 'icehockey_nhl', opponent=worse_team)}"
+                    )
+                )
 
         for index, message in enumerate(alerts):
             send_discord_alert(

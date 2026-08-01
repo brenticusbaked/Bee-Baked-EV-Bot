@@ -66,6 +66,13 @@ def get_parallel_tasks() -> List[PipelineTask]:
             tasks.append(PipelineTask(name="model_nba", func=run_nba_model))
         else:
             print("[seasons] Skipping model_nba (NBA off-season)")
+    if env_flag("ENABLE_WNBA_MODEL", True):
+        if is_sport_in_season("basketball_wnba"):
+            from wnba_model import run_wnba_model
+
+            tasks.append(PipelineTask(name="model_wnba", func=run_wnba_model))
+        else:
+            print("[seasons] Skipping model_wnba (WNBA off-season)")
     if env_flag("ENABLE_NRFI_MODEL", True):
         if is_sport_in_season("baseball_mlb"):
             from model_nrfi import run_nrfi_model
