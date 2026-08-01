@@ -7,6 +7,9 @@ from db_manager import save_tracker_state, load_tracker_state
 STATE_KEY = "mlb_hr_model_cache"
 CACHE_FILE = "hr_cache.json"
 
+# Discord Webhook configuration
+DISCORD_WEBHOOK_URL = (os.environ.get("DAILY_SLIPS_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL") or "").strip()
+
 def fetch_todays_mlb_slate():
     """Fetches today's games and starting rosters using the official MLB Stats API."""
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -117,12 +120,9 @@ def calculate_hr_units(batter_stats, base_unit_size=3.0, kelly_fraction=0.25):
         is_tier_2 = (iso >= 0.180 and hr_per_ab >= 0.038)
         
         if is_tier_1 or is_tier_2:
-            # Model estimated probability based on power rate
-            # Multiply by 4.2 to simulate average Plate Appearances per game
             implied_prob = min(0.35, max(0.12, hr_per_ab * 4.2))
             decimal_odds = 4.00  # Baseline prop odds reference (~+300)
             
-            # Kelly Criterion: f* = (bp - q) / b
             b = decimal_odds - 1.0
             q = 1.0 - implied_prob
             kelly_pct = (b * implied_prob - q) / b
@@ -140,9 +140,43 @@ def calculate_hr_units(batter_stats, base_unit_size=3.0, kelly_fraction=0.25):
                     "recommended_units": final_units
                 })
                 
-    # Sort recommendations by highest unit sizing
     recommendations.sort(key=lambda x: x["recommended_units"], reverse=True)
     return recommendations
+
+def format_discord_message(recommendations):
+    """Formats the top home run recommendations into a Discord embed payload."""
+    if not recommendations:
+        return None
+        
+    fields = []
+    for rec in recommendations[:10]:  # Top 10 to fit cleanly in a single Discord message limit
+        fields.append({
+            "name": f"⚾ {rec['name']} ({rec['tier']})",
+            "value": f"Recommended Sizing: **{rec['recommended_units']}u**\nISO: `{rec['iso']}` | HR/AB: `{rec['hr_per_ab']}`",
+            "inline": False
+        })
+        
+    embed = {
+        "title": "🚨 Daily MLB Home Run Model Recommendations",
+        "color": 16734296,  # Orange/Gold Hex
+        "fields": fields,
+        "footer": {"text": f"Bee-Baked Model Engine • {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}"}
+    }
+    
+    return {"content": "📊 **New MLB Home Run Model Slips Generated!**", "embeds": [embed]}
+
+def send_to_discord(payload):
+    """POSTs the formatted payload to your Discord webhook."""
+    if not payload or not DISCORD_WEBHOOK_URL:
+        print("No payload generated or Discord webhook URL is missing.")
+        return
+        
+    try:
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
+        response.raise_for_status()
+        print(f"Successfully sent Home Run model alerts to Discord.")
+    except Exception as e:
+        print(f"Discord webhook failed for HR model: {e}")
 
 def run_hr_pipeline():
     print("Initializing Free-Data Home Run Model Pipeline with Sizing...")
@@ -157,6 +191,10 @@ def run_hr_pipeline():
         
     recommendations = calculate_hr_units(batter_stats)
     print(f"Generated unit sizing recommendations for {len(recommendations)} high-value power hitters.")
+    
+    if recommendations:
+        payload = format_discord_message(recommendations)
+        send_to_discord(payload)
     
     return {
         "detail": "hr model execution complete",
