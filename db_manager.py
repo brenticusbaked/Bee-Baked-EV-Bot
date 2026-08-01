@@ -432,27 +432,16 @@ def log_bet_to_db(*args, **kwargs) -> bool:
 
     bet_data = _normalize_bet_payload(*args, **kwargs)
     try:
-        def action():
-            supabase.table("bets_log").insert(bet_data).execute()
-            return True
-        if _safe_execute(action, False):
-            _RUNTIME_DB_STATS["bet_log_success"] += 1
-            return True
+        supabase.table("bets_log").insert(bet_data).execute()
+        _RUNTIME_DB_STATS["bet_log_success"] += 1
+        return True
     except Exception as first_error:
         logger.warning(f"bets_log insert failed, retrying legacy payload: {first_error}")
-        # Create an unmutated/clean dictionary copy for legacy fallback to satisfy test assertions
-        legacy_payload = {
-            key: bet_data[key]
-            for key in _LEGACY_BETS_LOG_FIELDS
-            if key in bet_data and bet_data[key] is not None
-        }
         try:
-            def legacy_action():
-                supabase.table("bets_log").insert(legacy_payload).execute()
-                return True
-            if _safe_execute(legacy_action, False):
-                _RUNTIME_DB_STATS["bet_log_success"] += 1
-                return True
+            legacy_payload = _legacy_bets_log_payload(bet_data)
+            supabase.table("bets_log").insert(legacy_payload).execute()
+            _RUNTIME_DB_STATS["bet_log_success"] += 1
+            return True
         except Exception as second_error:
             logger.error(f"bets_log insert failed after legacy retry: {second_error}")
 
