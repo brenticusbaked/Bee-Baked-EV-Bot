@@ -88,16 +88,17 @@ PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.25)
 PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
 UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(1, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 1))
 
-# Sharp hierarchy to evaluate odds if Pinnacle hasn't posted a line
+# Sharp hierarchy to evaluate main market odds if Pinnacle hasn't posted a line
 SHARP_BOOK_HIERARCHY = [
     b.strip().lower() 
     for b in os.getenv("SHARP_BOOK_HIERARCHY", "pinnacle,circa,bookmaker,cris,draftkings").split(",") 
     if b.strip()
 ]
 
+# Sharp reference books for player props (DraftKings excluded so it remains a target soft book)
 SHARP_PROP_BOOKS = {
     book.strip().lower()
-    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris,draftkings").split(",")
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
     if book.strip()
 }
 
@@ -169,8 +170,8 @@ def _format_prop_stat_label(market_key: str) -> str:
         "pitcher_pitch_outs": "Outs Recorded",
         "pitcher_earned_runs": "Earned Runs",
         "pitcher_hits_allowed": "Hits Allowed",
-        "pitcher_walks": "Walks Allowed",
         "pitcher_walks_allowed": "Walks Allowed",
+        "pitcher_walks": "Walks Allowed",
         "player_points": "Points",
         "player_rebounds": "Rebounds",
         "player_assists": "Assists",
