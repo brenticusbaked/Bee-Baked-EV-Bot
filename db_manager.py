@@ -73,6 +73,7 @@ _LEGACY_BETS_LOG_FIELDS = {
     "closing_line_pinnacle",
     "result",
     "created_at",
+    "edge_val",
 }
 
 
