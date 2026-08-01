@@ -241,14 +241,12 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
     groups: [
       "pitcher_strikeouts,pitcher_outs,pitcher_hits_allowed,pitcher_earned_runs",
       "batter_hits,batter_total_bases,batter_home_runs,batter_rbis,batter_runs_scored",
-      "batter_strikeouts,batter_walks", // Removed batter_stolen_bases
-      "alternate_spreads,alternate_totals",
+      "batter_strikeouts",
     ],
   },
   basketball_wnba: {
     groups: [
       WNBA_PROP_MARKETS,
-      "alternate_spreads,alternate_totals",
       "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
     ],
   },
@@ -257,14 +255,12 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
       "player_points,player_rebounds,player_assists,player_threes,player_points_rebounds_assists",
       "player_points_rebounds,player_points_assists,player_rebounds_assists,player_blocks,player_steals",
       "player_turnovers",
-      "alternate_spreads,alternate_totals",
       "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
     ],
   },
   americanfootball_nfl: {
     groups: [
       NFL_PROP_MARKETS,
-      "alternate_spreads,alternate_totals",
       "h2h_q1,spreads_q1,h2h_h1,spreads_h1",
     ],
   },
@@ -272,7 +268,6 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
     groups: [
       "player_points,player_goals,player_assists,player_shots_on_goal,player_total_saves",
       "player_blocked_shots,player_power_play_points",
-      "alternate_spreads,alternate_totals",
     ],
   },
 };
@@ -280,7 +275,7 @@ const SPORT_EXTRAS: Record<string, SportExtras> = {
 const SOCCER_PROP_MARKETS = Deno.env.get("ODDS_API_SOCCER_PROP_MARKETS") ??
   "player_shots_on_target,player_shots";
 const SOCCER_EXTRAS: SportExtras = {
-  groups: [SOCCER_PROP_MARKETS, "alternate_totals"],
+  groups: [SOCCER_PROP_MARKETS],
 };
 
 function extrasFor(sportKey: string): SportExtras | undefined {
@@ -310,7 +305,7 @@ function currentSlot(): number {
 }
 
 const UPCOMING_HORIZON_HOURS = Number(
-  Deno.env.get("ODDS_UPCOMING_HORIZON_HOURS") ?? "48",
+  Deno.env.get("ODDS_UPCOMING_HORIZON_HOURS") ?? "72",
 );
 
 async function getUpcomingFixtureIds(sportKey: string): Promise<string[]> {

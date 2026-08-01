@@ -6,7 +6,7 @@ from datetime import datetime
 SHARP_API_KEY = (os.environ.get("SHARPAPI_KEY") or "").strip()
 DISCORD_WEBHOOK_URL = (os.environ.get("DAILY_SLIPS_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL") or "").strip()
 
-def fetch_sharp_ev_opportunities(sport="baseball_mlb"):
+def fetch_sharp_ev_opportunities(sport="baseball"):
     """
     Fetches odds data with built-in +EV signals from SharpAPI via their REST endpoint.
     """
@@ -14,7 +14,6 @@ def fetch_sharp_ev_opportunities(sport="baseball_mlb"):
         print("Error: SHARPAPI_KEY environment variable is missing or empty.")
         return None
 
-    # Corrected URL path based on SharpAPI documentation
     url = "https://api.sharpapi.io/api/v1/odds" 
     
     headers = {
@@ -35,7 +34,6 @@ def fetch_sharp_ev_opportunities(sport="baseball_mlb"):
             print("SharpAPI rate limit reached (429). Skipping this cycle.")
             return None
             
-        # This will trigger the exception block below if the status code is 400
         response.raise_for_status() 
         data = response.json()
         
@@ -59,7 +57,6 @@ def fetch_sharp_ev_opportunities(sport="baseball_mlb"):
         
     except requests.exceptions.RequestException as e:
         print(f"Error fetching from SharpAPI: {e}")
-        # Print the exact error message returned by SharpAPI's server
         if getattr(e, 'response', None) is not None:
             print(f"SharpAPI Server Response: {e.response.text}")
         return None
@@ -107,7 +104,7 @@ def send_to_discord(payload):
 
 if __name__ == "__main__":
     try:
-        raw_opportunities = fetch_sharp_ev_opportunities(sport="baseball_mlb")
+        raw_opportunities = fetch_sharp_ev_opportunities(sport="baseball")
         if raw_opportunities:
             print(f"Found {len(raw_opportunities)} opportunities.")
             discord_payload = format_discord_message(raw_opportunities)
