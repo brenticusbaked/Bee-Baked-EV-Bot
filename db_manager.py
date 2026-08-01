@@ -148,7 +148,7 @@ def _legacy_bets_log_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: payload[key]
         for key in _LEGACY_BETS_LOG_FIELDS
-        if key in payload and payload[key] is not None
+        if key in payload and payload[key] is not None and key not in {"odds_decimal", "fair_price_decimal", "edge_pct", "market_type"}
     }
 
 
