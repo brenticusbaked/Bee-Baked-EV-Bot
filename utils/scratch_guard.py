@@ -1,9 +1,8 @@
 """Late-scratch and game-status exception handling for the scanning pipeline."""
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
-from utils.time import get_local_now
 from utils.thresholds import env_float
 import os
 
@@ -35,49 +34,25 @@ def check_event_status(event: dict) -> Tuple[bool, str]:
         return False, "missing commence_time"
 
     try:
-        commence = datetime.fromisoformat(str(commence_time_str).replace("Z", "+00:00"))
+        # Explicitly enforce UTC awareness on the parsed API string
+        commence_utc = datetime.fromisoformat(str(commence_time_str).replace("Z", "+00:00"))
+        if commence_utc.tzinfo is None:
+            commence_utc = commence_utc.replace(tzinfo=timezone.utc)
+        else:
+            commence_utc = commence_utc.astimezone(timezone.utc)
     except (ValueError, TypeError):
         return False, "unparseable commence_time"
 
-    if commence.tzinfo is None:
-        local_tz = get_local_now().tzinfo or timezone.utc
-        naive = commence
-        local_candidate = naive.replace(tzinfo=local_tz)
-        utc_candidate = naive.replace(tzinfo=timezone.utc)
-        now_utc = datetime.now(timezone.utc)
-
-        candidates = [local_candidate, utc_candidate]
-        future_candidates = [
-            candidate
-            for candidate in candidates
-            if candidate.astimezone(timezone.utc) > now_utc
-        ]
-        if future_candidates:
-            commence = min(
-                future_candidates,
-                key=lambda candidate: candidate.astimezone(timezone.utc),
-            )
-        else:
-            commence = max(
-                candidates,
-                key=lambda candidate: candidate.astimezone(timezone.utc),
-            )
-
-    now = datetime.now(timezone.utc)
-    commence_utc = commence.astimezone(timezone.utc)
-    minutes_past_start = (now - commence_utc).total_seconds() / 60.0
+    now_utc = datetime.now(timezone.utc)
+    minutes_past_start = (now_utc - commence_utc).total_seconds() / 60.0
 
     if status in STARTED_STATUSES:
         if minutes_past_start > START_GRACE_MINUTES:
             return False, f"event {status}"
         return True, "ok"
 
-    commence_local = commence_utc.astimezone(get_local_now().tzinfo or timezone.utc).date()
-    today_local = get_local_now().date()
-
-    if commence_local < today_local:
-        return False, "event already started"
-
+    # Strict fallback for un-updated API statuses.
+    # If the game is scheduled strictly in the past by more than the grace period, skip it.
     if minutes_past_start > SCHEDULE_GRACE_MINUTES:
         return False, "event already started"
 
@@ -132,6 +107,9 @@ def safe_parse_commence_time(raw: str) -> Optional[datetime]:
     if not raw:
         return None
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
     except (ValueError, TypeError, AttributeError):
         return None
