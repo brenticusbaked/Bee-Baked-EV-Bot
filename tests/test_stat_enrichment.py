@@ -144,8 +144,7 @@ class MlbBoxscoreParseTest(unittest.TestCase):
         by_name = {r["player_name"]: r for r in rows}
         self.assertIn("Wyatt Langford", by_name)
         self.assertIn("Logan Gilbert", by_name)
-        self.assertNotIn("Nobody", by_name)  # no batting/pitching -> skipped
-        # TB = hits + doubles + 2*triples + 3*HR = 2 + 1 + 0 + 3 = 6
+        self.assertNotIn("Nobody", by_name)
         self.assertEqual(by_name["Wyatt Langford"]["total_bases"], 6)
         self.assertEqual(by_name["Wyatt Langford"]["home_runs"], 1)
         self.assertEqual(by_name["Logan Gilbert"]["strikeouts"], 8)
@@ -206,12 +205,12 @@ class EspnBasketballParseTest(unittest.TestCase):
         )
         by_name = {r["player_name"]: r for r in rows}
         self.assertIn("A'ja Wilson", by_name)
-        self.assertNotIn("Did Not Play", by_name)  # DNP skipped
+        self.assertNotIn("Did Not Play", by_name)
         row = by_name["A'ja Wilson"]
         self.assertEqual(row["points"], 27.0)
         self.assertEqual(row["rebounds"], 10.0)
         self.assertEqual(row["assists"], 4.0)
-        self.assertEqual(row["threes_made"], 1.0)  # from "1-2"
+        self.assertEqual(row["threes_made"], 1.0)
         self.assertEqual(row["team"], "LV")
         self.assertEqual(row["league"], "basketball_wnba")
 
@@ -289,21 +288,26 @@ class SoccerLeagueDefaultTest(unittest.TestCase):
 
         with mock.patch.dict("os.environ", {"SOCCER_STAT_LEAGUES": ""}, clear=False):
             reloaded = importlib.reload(stat_ingest)
-            self.assertTrue(reloaded.SOCCER_STAT_LEAGUES)  # not wiped by blank env
-        importlib.reload(stat_ingest)  # restore module state for other tests
+            self.assertTrue(reloaded.SOCCER_STAT_LEAGUES)
+        importlib.reload(stat_ingest)
 
 
 class IngestAllTest(unittest.TestCase):
     def test_ingest_all_isolates_and_returns_counts(self):
-        # All library-backed fetchers return [] when the lib is absent; force it
-        # so the job is deterministic and upsert is exercised for one table.
-        with mock.patch.object(stat_ingest, "fetch_mlb_logs", return_value=[{"player_name": "A", "total_bases": 2}]), \
-             mock.patch.object(stat_ingest, "fetch_nba_logs", return_value=[]), \
-             mock.patch.object(stat_ingest, "fetch_nfl_logs", return_value=[]), \
-             mock.patch.object(stat_ingest, "fetch_soccer_logs", return_value=[]), \
-             mock.patch.object(stat_ingest, "fetch_tennis_logs", return_value=[]), \
+        fetcher_mocks = {
+            "fetch_mlb_logs": mock.MagicMock(return_value=[{"player_name": "A", "total_bases": 2}]),
+            "fetch_nba_logs": mock.MagicMock(return_value=[]),
+            "fetch_wnba_logs": mock.MagicMock(return_value=[]),
+            "fetch_nfl_logs": mock.MagicMock(return_value=[]),
+            "fetch_nhl_logs": mock.MagicMock(return_value=[]),
+            "fetch_soccer_logs": mock.MagicMock(return_value=[]),
+            "fetch_tennis_logs": mock.MagicMock(return_value=[]),
+        }
+
+        with mock.patch.multiple(stat_ingest, **fetcher_mocks), \
              mock.patch.object(stat_ingest.db_manager, "upsert_player_logs", return_value=1) as upsert:
             results = stat_ingest.ingest_all()
+
         self.assertEqual(results.get("mlb_player_logs"), 1)
         upsert.assert_called_once()
 
