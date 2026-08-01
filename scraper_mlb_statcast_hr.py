@@ -7,8 +7,8 @@ from db_manager import save_tracker_state, load_tracker_state
 STATE_KEY = "mlb_hr_model_cache"
 CACHE_FILE = "hr_cache.json"
 
-# Discord Webhook configuration
-DISCORD_WEBHOOK_URL = (os.environ.get("DAILY_SLIPS_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL") or "").strip()
+# Discord Webhook configuration (targets your MLB or Daily Slips webhook)
+DISCORD_WEBHOOK_URL = (os.environ.get("DISCORD_MLB_UPDATES_WEBHOOK_URL") or os.environ.get("DAILY_SLIPS_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL") or "").strip()
 
 def fetch_todays_mlb_slate():
     """Fetches today's games and starting rosters using the official MLB Stats API."""
@@ -114,8 +114,6 @@ def calculate_hr_units(batter_stats, base_unit_size=3.0, kelly_fraction=0.25):
         iso = stats.get("iso", 0.0)
         hr_per_ab = stats.get("hr_per_ab", 0.0)
         
-        # Tier 1 Elite Power Match (ISO >= .210 or HR/AB >= 0.048)
-        # Tier 2 Strong Power Match (ISO >= .180 and HR/AB >= 0.038)
         is_tier_1 = (iso >= 0.210 or hr_per_ab >= 0.048)
         is_tier_2 = (iso >= 0.180 and hr_per_ab >= 0.038)
         
@@ -149,7 +147,7 @@ def format_discord_message(recommendations):
         return None
         
     fields = []
-    for rec in recommendations[:10]:  # Top 10 to fit cleanly in a single Discord message limit
+    for rec in recommendations[:10]:  # Top 10 to fit cleanly in a single Discord message
         fields.append({
             "name": f"⚾ {rec['name']} ({rec['tier']})",
             "value": f"Recommended Sizing: **{rec['recommended_units']}u**\nISO: `{rec['iso']}` | HR/AB: `{rec['hr_per_ab']}`",
