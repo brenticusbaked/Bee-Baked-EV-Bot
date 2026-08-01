@@ -117,6 +117,38 @@ def calculate_hr_units(batter_stats, base_unit_size=3.0, kelly_fraction=0.25):
         is_tier_2 = (iso >= 0.180 and hr_per_ab >= 0.038)
         
         if is_tier_1 or is_tier_2:
+            # FIX: Multiply by 4.2 to simulate average Plate Appearances per game
+            implied_prob = min(0.35, max(0.12, hr_per_ab * 4.2))
+            decimal_odds = 4.00  # Baseline prop odds reference (~+300)
+            
+            # Kelly Criterion: f* = (bp - q) / b
+            b = decimal_odds - 1.0
+            q = 1.0 - implied_prob
+            kelly_pct = (b * implied_prob - q) / b
+            
+            if kelly_pct > 0:
+                tier_multiplier = 1.0 if is_tier_1 else 0.65
+                raw_units = round(kelly_pct * kelly_fraction * 100 * tier_multiplier, 2)
+                final_units = max(0.5, round(raw_units * (base_unit_size / 3.0), 2))
+                
+                recommendations.append({
+                    "name": stats["name"],
+                    "iso": round(iso, 3),
+                    "hr_per_ab": round(hr_per_ab, 3),
+                    "tier": "Tier 1" if is_tier_1 else "Tier 2",
+                    "recommended_units": final_units
+                })
+                
+    # Sort recommendations by highest unit sizing
+    recommendations.sort(key=lambda x: x["recommended_units"], reverse=True)
+    return recommendations
+        
+        # Tier 1 Elite Power Match (ISO >= .210 or HR/AB >= 0.048)
+        # Tier 2 Strong Power Match (ISO >= .180 and HR/AB >= 0.038)
+        is_tier_1 = (iso >= 0.210 or hr_per_ab >= 0.048)
+        is_tier_2 = (iso >= 0.180 and hr_per_ab >= 0.038)
+        
+        if is_tier_1 or is_tier_2:
             # Model estimated probability based on power rate
             implied_prob = min(0.32, max(0.12, hr_per_ab * 2.2))
             decimal_odds = 4.25  # Baseline prop odds reference (~+325)
