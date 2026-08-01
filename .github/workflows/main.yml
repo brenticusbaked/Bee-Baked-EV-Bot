@@ -2,8 +2,11 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # Run every 2 hours during peak betting windows to conserve credits
-    - cron: '0 12,14,16,18,20,22 * * *'
+    # Morning check (7:00 AM CDT / 12:00 UTC) & Night cap (10:30 PM CDT / 03:30 UTC)
+    - cron: '0 12 * * *'
+    - cron: '30 3 * * *'
+    # Peak window sweeps every 2 hours (1:00 PM - 9:00 PM CDT / 18:00 - 02:00 UTC)
+    - cron: '0 18,20,22 * * *'
     - cron: '0 0,2 * * *'
   workflow_dispatch:
     inputs:
@@ -52,6 +55,7 @@ jobs:
           ODDS_API_KEY_2: ${{ secrets.ODDS_API_KEY_2 }}
           ODDS_API_KEY_3: ${{ secrets.ODDS_API_KEY_3 }}
           ODDS_API_KEY_4: ${{ secrets.ODDS_API_KEY_4 }}
+          ODDS_API_KEY_5: ${{ secrets.ODDS_API_KEY_5 }}
           ODDSPAPI_KEY: ${{ secrets.ODDSPAPI_KEY }}
           SHARPAPI_KEY: ${{ secrets.SHARPAPI_KEY }}
           PARLAYAPI_KEY: ${{ secrets.PARLAYAPI_KEY }}
@@ -93,6 +97,8 @@ jobs:
           ENABLE_MLB_F5_PULL: "true"
           ENABLE_ALTERNATE_MARKET_ALERTS: "true"
           ENABLE_PARTIAL_GAME_MARKET_ALERTS: "true"
+          ODDS_MAX_CREDITS_PER_RUN: "48"
+          MAX_EVENTS_PER_ENRICH: "3"
           SCRATCH_GUARD_START_GRACE_MINUTES: "180"
           SCRATCH_GUARD_SCHEDULE_GRACE_MINUTES: "360"
           SCRATCH_GUARD_TRACE: ${{ inputs.scratch_guard_trace || 'false' }}
