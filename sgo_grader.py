@@ -12,16 +12,22 @@ from utils.odds import profit_for_result
 
 DISCORD_WEBHOOK_URL = RESULTS_WEBHOOK_URL
 SGO_API_KEY = os.getenv("SGO_API_KEY")
+SGO_API_KEY_2 = os.getenv("SGO_API_KEY_2")
+SGO_API_KEY_3 = os.getenv("SGO_API_KEY_3")
 SGO_GRADER_MAX_FETCHES = int(os.getenv("SGO_GRADER_MAX_FETCHES", "6"))
 SGO_GRADER_FETCH_DELAY_SECONDS = float(os.getenv("SGO_GRADER_FETCH_DELAY_SECONDS", "1.25"))
 
 
-def get_sgo_results(league_id, date_str):
-    if not SGO_API_KEY:
+def _sgo_keys():
+    return [key for key in (SGO_API_KEY, SGO_API_KEY_2, SGO_API_KEY_3) if key]
+
+
+def get_sgo_results(league_id, date_str, api_key):
+    if not api_key:
         return {"players": {}, "events": [], "rate_limited": False}
 
     url = "https://api.sportsgameodds.com/v2/events"
-    params = {"apiKey": SGO_API_KEY, "leagueID": league_id, "date": date_str}
+    params = {"apiKey": api_key, "leagueID": league_id, "date": date_str}
     try:
         response = request("GET", url, params=params, timeout=15, retry_on_429=False)
         data = response.json()
@@ -85,8 +91,9 @@ def _grade_player_prop(bet, player_data):
 
 
 def run_grader():
-    if not SGO_API_KEY:
-        print("SGO_API_KEY missing. Skipping grader.")
+    sgo_keys = _sgo_keys()
+    if not sgo_keys:
+        print("No SGO API keys configured. Skipping grader.")
         return {"detail": "SGO_API_KEY missing", "count": 0, "label": "graded"}
 
     ungraded_bets = get_ungraded_past_bets()
@@ -111,7 +118,13 @@ def run_grader():
         if cache_key not in cache:
             if cache_fetches >= SGO_GRADER_MAX_FETCHES:
                 continue
-            cache[cache_key] = get_sgo_results(league, bet["date"])
+            result = {"players": {}, "events": [], "rate_limited": False}
+            for key_index, api_key in enumerate(sgo_keys, start=1):
+                result = get_sgo_results(league, bet["date"], api_key)
+                if not result.get("rate_limited"):
+                    break
+                print(f"SGO rate-limited for {league} on key #{key_index}; trying next key.")
+            cache[cache_key] = result
             cache_fetches += 1
             if cache[cache_key].get("rate_limited"):
                 hit_rate_limit = True
