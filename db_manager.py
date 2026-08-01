@@ -984,7 +984,7 @@ def get_l10_hit_rate(
         return None
 
     over = sum(1 for v in values if v > line_value)
-    under = sum(1 for v in values if b < line_value)
+    under = sum(1 for v in values if v < line_value)
     last_game = game_details[0] if game_details else None
 
     return {
