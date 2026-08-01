@@ -63,6 +63,8 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           ODDS_INGEST_FUNCTION_SECRET: ${{ secrets.ODDS_INGEST_FUNCTION_SECRET }}
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
+          SGO_API_KEY_2: ${{ secrets.SGO_API_KEY_2 }}
+          SGO_API_KEY_3: ${{ secrets.SGO_API_KEY_3 }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
           DISCORD_ARBITRAGE_WEBHOOK_URL: ${{ secrets.DISCORD_ARBITRAGE_WEBHOOK_URL }}

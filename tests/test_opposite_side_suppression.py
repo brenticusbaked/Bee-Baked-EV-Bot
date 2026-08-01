@@ -143,6 +143,28 @@ class MainMarketOppositeSuppressionTests(unittest.TestCase):
         # Control: with nothing logged, the away +EV side alerts normally.
         self.assertEqual(self._run(cache, today_bets=[])["count"], 1)
 
+    def test_quiet_run_emits_near_miss_digest(self):
+        cache = _wnba_h2h_cache(home_soft_price=2.03, away_soft_price=2.03)
+        with patch.object(unified_bot, "get_book_weights", return_value={}), \
+                patch.object(unified_bot, "get_all_graded_bets", return_value=[]), \
+                patch.object(unified_bot, "get_today_bets", return_value=[]), \
+                patch.object(unified_bot, "validated_ev_floor", return_value=None), \
+                patch.object(unified_bot, "_market_ev_threshold", return_value=0.02), \
+                patch.object(unified_bot, "compute_time_decay", return_value=None), \
+                patch.object(unified_bot, "is_already_logged", return_value=False), \
+                patch.object(unified_bot, "log_bet_to_db", return_value=True), \
+                patch.object(unified_bot, "send_discord_alert", return_value=None) as fake_send:
+            result = unified_bot.scan_markets(cache_override=cache)
+
+        self.assertEqual(result["count"], 0)
+        self.assertTrue(fake_send.called)
+        self.assertTrue(
+            any(
+                kwargs.get("alert_type") == "near_miss_digest"
+                for _, kwargs in fake_send.call_args_list
+            )
+        )
+
 
 class PropOppositeSuppressionTests(unittest.TestCase):
     def test_both_sides_prop_emits_single_best_side(self):

@@ -70,7 +70,7 @@ def get_best_spread(target_team: str):
 
 
 def get_espn_schedule(date_str: str):
-    url = f"https://site.api.espn.com/apis/v2/sports/basketball/wnba/scoreboard?dates={date_str}"
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard?dates={date_str}"
     try:
         return get_json(url).get("events", [])
     except Exception as exc:

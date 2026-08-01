@@ -42,6 +42,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
+          SGO_API_KEY_2: ${{ secrets.SGO_API_KEY_2 }}
+          SGO_API_KEY_3: ${{ secrets.SGO_API_KEY_3 }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           DISCORD_RESULTS_WEBHOOK_URL: ${{ secrets.DISCORD_RESULTS_WEBHOOK_URL }}
