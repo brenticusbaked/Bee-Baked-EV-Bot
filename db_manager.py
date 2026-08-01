@@ -73,7 +73,6 @@ _LEGACY_BETS_LOG_FIELDS = {
     "closing_line_pinnacle",
     "result",
     "created_at",
-    "edge_val",
 }
 
 
@@ -146,7 +145,11 @@ def _normalize_bet_payload(*args, **kwargs) -> Dict[str, Any]:
 
 
 def _legacy_bets_log_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return {key: value for key, value in payload.items() if key in _LEGACY_BETS_LOG_FIELDS and value is not None}
+    return {
+        key: value 
+        for key, value in payload.items() 
+        if key in _LEGACY_BETS_LOG_FIELDS and value is not None
+    }
 
 
 def _parse_cache_timestamp(row: Dict[str, Any]) -> Optional[datetime]:
