@@ -98,7 +98,7 @@ def _fetch_team_xstats() -> Dict[str, Dict[str, float]]:
                 "hard_hit_pct": float(row.get("HardHit%", 35.0)),
             })
     except Exception as exc:
-        logger.warning("Failed to fetch Statcast team batting stats: %s", exc)
+        logger.warning("Failed to fetch Statcast team batting stats due to Cloudflare block or network error: %s. Using default baseline metrics.", exc)
 
     return stats
 

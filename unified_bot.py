@@ -796,7 +796,16 @@ def scan_markets(
                         if pinnacle_price
                         else "**Pinnacle:** unavailable\n"
                     )
-                    units = dynamic_kelly_units(edge, offered_price, graded_bets, today_bets)
+                    
+                    # Enforce strict Quarter-Kelly sizing with a safe max cap to prevent oversized 5u bets
+                    try:
+                        b = float(offered_price) - 1.0
+                        kelly_pct = ((b * fair_probability) - (1.0 - fair_probability)) / b if b > 0 else 0.0
+                        raw_units = max(0.0, kelly_pct) * 0.25 * 10.0  # 0.25 = Quarter-Kelly fraction
+                        units = max(0.25, min(1.75, round(raw_units, 2)))
+                    except Exception:
+                        units = 0.5
+
                     fair_price_american = decimal_to_american(fair_decimal)
 
                     if exposure_tracker is not None:
