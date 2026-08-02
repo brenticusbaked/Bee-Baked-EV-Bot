@@ -68,13 +68,6 @@ def compute_time_decay(
     delta = parsed - current
     hours = delta.total_seconds() / 3600.0
 
-    if hours < (DECAY_LOCKOUT_MINUTES / 60.0):
-        return TimeDecayContext(
-            hours_to_event=round(hours, 4),
-            threshold_multiplier=0.0,
-            phase="lockout",
-        )
-
     if hours <= DECAY_CLOSE_HOURS:
         return TimeDecayContext(
             hours_to_event=round(hours, 4),
