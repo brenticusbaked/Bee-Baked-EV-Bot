@@ -429,64 +429,71 @@ def calculate_hr_units(batter_stats, slate_context, base_unit_size=1.0, kelly_fr
     return recommendations
 
 
+def _build_field(rec):
+    """Build a single Discord embed field for one HR recommendation."""
+    last_ten = build_last_ten_context_line(
+        rec["name"],
+        "batter_home_runs",
+        0,
+        "over",
+        "baseball_mlb",
+    )
+    statcast = rec.get("statcast") or {}
+    weather = rec.get("weather") or {}
+    statcast_bits = []
+    if statcast.get("launch_speed") is not None:
+        statcast_bits.append(f"EV `{statcast['launch_speed']}`")
+    if statcast.get("launch_angle") is not None:
+        statcast_bits.append(f"LA `{statcast['launch_angle']}`")
+    if statcast.get("barrel_rate") is not None:
+        statcast_bits.append(f"Barrel `{statcast['barrel_rate']}`")
+    weather_bits = []
+    if weather.get("temp_f") is not None:
+        weather_bits.append(f"{weather['temp_f']:.0f}F")
+    if weather.get("wind_mph") is not None:
+        weather_bits.append(f"Wind `{weather['wind_mph']:.0f} mph`")
+    if weather.get("condition"):
+        weather_bits.append(weather["condition"])
+    weather_line = " | ".join(weather_bits) if weather_bits else "Weather: unavailable"
+    statcast_line = " | ".join(statcast_bits) if statcast_bits else "Statcast: unavailable"
+
+    return {
+        "name": f"{rec['name']} ({rec['team']}) vs {rec['opponent']} - {rec['tier']}",
+        "value": (
+            f"Quarter-Kelly Sizing: **{rec['recommended_units']}u**\n"
+            f"ISO: `{rec['iso']}` | HR/AB: `{rec['hr_per_ab']}`\n"
+            f"Park Factor: `{rec['park_factor']}` | Implied HR Prob: `{rec['implied_prob']}`\n"
+            f"{weather_line}\n"
+            f"{statcast_line}\n"
+            f"{last_ten}"
+        ),
+        "inline": False,
+    }
+
+
 def format_discord_message(recommendations):
-    """Format the top home run recommendations into a Discord embed."""
+    """Format all home run recommendations into one or more Discord embeds."""
     if not recommendations:
         return None
 
-    fields = []
-    for rec in recommendations[:10]:
-        last_ten = build_last_ten_context_line(
-            rec["name"],
-            "batter_home_runs",
-            0,
-            "over",
-            "baseball_mlb",
-        )
-        statcast = rec.get("statcast") or {}
-        weather = rec.get("weather") or {}
-        statcast_bits = []
-        if statcast.get("launch_speed") is not None:
-            statcast_bits.append(f"EV `{statcast['launch_speed']}`")
-        if statcast.get("launch_angle") is not None:
-            statcast_bits.append(f"LA `{statcast['launch_angle']}`")
-        if statcast.get("barrel_rate") is not None:
-            statcast_bits.append(f"Barrel `{statcast['barrel_rate']}`")
-        weather_bits = []
-        if weather.get("temp_f") is not None:
-            weather_bits.append(f"{weather['temp_f']:.0f}F")
-        if weather.get("wind_mph") is not None:
-            weather_bits.append(f"Wind `{weather['wind_mph']:.0f} mph`")
-        if weather.get("condition"):
-            weather_bits.append(weather["condition"])
-        weather_line = " | ".join(weather_bits) if weather_bits else "Weather: unavailable"
-        statcast_line = " | ".join(statcast_bits) if statcast_bits else "Statcast: unavailable"
-
-        fields.append(
-            {
-                "name": f"{rec['name']} ({rec['team']}) vs {rec['opponent']} - {rec['tier']}",
-                "value": (
-                    f"Quarter-Kelly Sizing: **{rec['recommended_units']}u**\n"
-                    f"ISO: `{rec['iso']}` | HR/AB: `{rec['hr_per_ab']}`\n"
-                    f"Park Factor: `{rec['park_factor']}` | Implied HR Prob: `{rec['implied_prob']}`\n"
-                    f"{weather_line}\n"
-                    f"{statcast_line}\n"
-                    f"{last_ten}"
-                ),
-                "inline": False,
+    embeds = []
+    chunk_size = 25
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
+    for i in range(0, len(recommendations), chunk_size):
+        chunk = recommendations[i : i + chunk_size]
+        embed: dict = {
+            "color": 5763719,
+            "fields": [_build_field(rec) for rec in chunk],
+        }
+        if i == 0:
+            embed["title"] = "+EV MLB Home Run Model Recommendations"
+        if i + chunk_size >= len(recommendations):
+            embed["footer"] = {
+                "text": f"Bee-Baked Model Engine - Quarter-Kelly - {timestamp}"
             }
-        )
+        embeds.append(embed)
 
-    embed = {
-        "title": "+EV MLB Home Run Model Recommendations",
-        "color": 5763719,
-        "fields": fields,
-        "footer": {
-            "text": f"Bee-Baked Model Engine - Quarter-Kelly - {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}"
-        },
-    }
-
-    return {"content": "New +EV Home Run Model slips generated!", "embeds": [embed]}
+    return {"content": "New +EV Home Run Model slips generated!", "embeds": embeds}
 
 
 def send_to_discord(payload):
