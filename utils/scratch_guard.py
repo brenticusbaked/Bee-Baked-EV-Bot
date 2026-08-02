@@ -13,7 +13,7 @@ STARTED_STATUSES = {"in_progress", "live", "in_play", "started"}
 COMPLETED_STATUSES = {"completed", "final", "closed", "over", "ended"}
 # The cache keeps games around for live handling for roughly a few hours after
 # scheduled start, so we tolerate that window before calling a game started.
-START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 0.0)
+START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 180.0)
 # Scheduled fixtures can drift a bit in the cache or across time zones, but
 # anything more than this far past kickoff is considered stale and should not
 # be scanned.
@@ -113,3 +113,36 @@ def safe_parse_commence_time(raw: str) -> Optional[datetime]:
         return parsed
     except (ValueError, TypeError, AttributeError):
         return None
+
+
+def format_start_context(event: dict) -> str:
+    """Return a short, alert-friendly line describing when the event starts or started."""
+    status = str(event.get("status", "")).strip().lower()
+    if status in CANCELLED_STATUSES:
+        return "**Start:** Cancelled / Postponed"
+    if status in COMPLETED_STATUSES:
+        return "**Start:** Final"
+    if status in STARTED_STATUSES:
+        return "**Start:** LIVE"
+
+    commence_time_str = event.get("commence_time") or ""
+    if not commence_time_str:
+        return "**Start:** Unknown"
+
+    start = safe_parse_commence_time(commence_time_str)
+    if not start:
+        return "**Start:** Unknown"
+
+    now_utc = datetime.now(timezone.utc)
+    minutes = int(round((now_utc - start).total_seconds() / 60.0))
+    if minutes < -60:
+        hours = -minutes // 60
+        return f"**Start:** {hours}h {(-minutes) % 60}m to first pitch"
+    if minutes < 0:
+        return f"**Start:** {-minutes} minutes to first pitch"
+    if minutes == 0:
+        return "**Start:** Starting now"
+    if minutes < 60:
+        return f"**Start:** {minutes} minutes in (LIVE)"
+    hours = minutes // 60
+    return f"**Start:** {hours}h {minutes % 60}m in (LIVE)"

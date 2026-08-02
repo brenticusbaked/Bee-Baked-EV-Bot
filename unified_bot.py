@@ -28,7 +28,7 @@ from utils.odds import (
     fair_probabilities_from_prices,
 )
 from utils.prop_pricing import consensus_probabilities, prop_kelly_units
-from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
+from utils.scratch_guard import filter_valid_events, format_start_context, validate_bookmaker_outcomes
 from utils.thresholds import env_float, env_int
 from utils.time_decay import adjusted_threshold, compute_time_decay
 
@@ -905,6 +905,7 @@ def scan_markets(
                             "description": (
                                 f"**+EV {market_type.upper()} ALERT**\n\n"
                                 f"**Match:** {matchup}\n"
+                                f"{format_start_context(event)}\n"
                                 f"**Bet:** {selection}\n"
                                 f"**Book:** [{final['book']}]({app_link}) @ {decimal_to_american(offered_price)}\n"
                                 f"{pinnacle_text}"

@@ -23,7 +23,7 @@ from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL, DEFAULT_WEBHOOK_URL
 from utils.odds import decimal_to_american, fair_probabilities_from_prices, quarter_kelly_units
-from utils.scratch_guard import filter_valid_events, validate_bookmaker_outcomes
+from utils.scratch_guard import filter_valid_events, format_start_context, validate_bookmaker_outcomes
 from utils.thresholds import env_float, env_int
 
 
@@ -229,6 +229,8 @@ def run_execution_scan() -> dict:
                             "venues": venues,
                             "fair_decimal": fair_decimal,
                             "units": max(0.25, units),
+                            "commence_time": event.get("commence_time"),
+                            "status": event.get("status"),
                         }
                     )
 
@@ -320,6 +322,7 @@ def _execution_desk_alert_description(candidate: dict) -> str:
     return (
         f"**\U0001F41D EXECUTION DESK EDGE - {str(candidate['market_type']).upper()}**\n\n"
         f"**Match:** {candidate['matchup']}\n"
+        f"{format_start_context(candidate)}\n"
         f"**Bet:** {best['selection']}\n"
         f"**Book:** {best['book']} @ {offered_american}\n"
         f"**Fair Value (Pinnacle):** {fair_american}\n"

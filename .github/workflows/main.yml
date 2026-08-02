@@ -100,7 +100,7 @@ jobs:
           ENABLE_PARTIAL_GAME_MARKET_ALERTS: "true"
           ODDS_MAX_CREDITS_PER_RUN: "48"
           MAX_EVENTS_PER_ENRICH: "3"
-          SCRATCH_GUARD_START_GRACE_MINUTES: "0"
+          SCRATCH_GUARD_START_GRACE_MINUTES: "180"
           SCRATCH_GUARD_SCHEDULE_GRACE_MINUTES: "360"
           SCRATCH_GUARD_TRACE: ${{ inputs.scratch_guard_trace || 'false' }}
           ENABLE_MLB_H2H_ALERTS: "true"
