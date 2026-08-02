@@ -6,6 +6,23 @@ from datetime import datetime
 SHARP_API_KEY = (os.environ.get("SHARPAPI_KEY") or "").strip()
 DISCORD_WEBHOOK_URL = (os.environ.get("DAILY_SLIPS_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK_URL") or "").strip()
 
+
+def _numeric_ev(outcome: dict) -> float:
+    """Extract EV as a percentage, handling both percent and fraction formats."""
+    for key in ("ev_percent", "ev", "edge", "expected_value", "ev_value"):
+        raw = outcome.get(key)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        # If the value is in the (0,1) range, treat it as a fraction and convert to %
+        if 0 < abs(value) < 1.0:
+            value *= 100.0
+        return value
+    return 0.0
+
 def fetch_sharp_ev_opportunities(sport="baseball"):
     """
     Fetches odds data with built-in +EV signals from SharpAPI via their REST endpoint.
@@ -42,14 +59,15 @@ def fetch_sharp_ev_opportunities(sport="baseball"):
             for event in data:
                 for market in event.get("markets", []):
                     for outcome in market.get("outcomes", []):
-                        if outcome.get("ev_percent", 0) > 2.0:
+                        ev = _numeric_ev(outcome)
+                        if ev > 2.0:
                             opportunities.append({
                                 "event": event.get("event_name", "Unknown Event"),
-                                "selection": outcome.get("name", "Unknown Selection"),
-                                "market": market.get("market_name", "Unknown Market"),
-                                "sportsbook": outcome.get("sportsbook", "Unknown Book"),
-                                "odds": outcome.get("price", "N/A"),
-                                "ev_percent": outcome.get("ev_percent", 0.0)
+                                "selection": outcome.get("name", outcome.get("selection", "Unknown Selection")),
+                                "market": market.get("market_name", market.get("key", "Unknown Market")),
+                                "sportsbook": outcome.get("sportsbook", outcome.get("bookmaker", "Unknown Book")),
+                                "odds": outcome.get("price", outcome.get("odds", "N/A")),
+                                "ev_percent": ev,
                             })
         
         opportunities.sort(key=lambda x: x["ev_percent"], reverse=True)

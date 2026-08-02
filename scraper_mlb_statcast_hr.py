@@ -82,6 +82,48 @@ def _safe_float(val, default=0.0):
         return default
 
 
+def _team_name_variants(name: str | None) -> list[str]:
+    """Return normalized variants for team-name fuzzy matching."""
+    if not name:
+        return []
+    normalized = str(name).lower().replace(".", "").strip()
+    variants = {normalized}
+    words = normalized.split()
+    if words:
+        variants.add(words[-1])
+    # Common last-name aliases for shared-city/abbreviation teams
+    aliases = {
+        "arizona diamondbacks": {"dbacks", "diamondbacks"},
+        "chicago white sox": {"white sox"},
+        "chicago cubs": {"cubs"},
+        "boston red sox": {"red sox"},
+        "los angeles angels": {"angels"},
+        "los angeles dodgers": {"dodgers"},
+        "new york mets": {"mets"},
+        "new york yankees": {"yankees"},
+        "san francisco giants": {"giants"},
+        "st louis cardinals": {"cardinals"},
+        "tampa bay rays": {"rays"},
+    }
+    variants.update(aliases.get(normalized, set()))
+    return sorted(v for v in variants if v)
+
+
+def _find_team_context(team_name: str | None, slate_context: dict) -> dict | None:
+    """Look up a team's game context by any name variant."""
+    if not team_name or not slate_context:
+        return None
+    for variant in _team_name_variants(team_name):
+        if variant in slate_context:
+            return slate_context[variant]
+    # Final fallback: substring match against context keys
+    needle = str(team_name).lower()
+    for key, ctx in slate_context.items():
+        if needle in key or key in needle:
+            return ctx
+    return None
+
+
 def _season_start_for_year(year: int) -> str:
     # Conservative season start for statcast pull.
     return f"{year}-03-01"
@@ -192,7 +234,7 @@ def _build_team_context_map(slate_games):
         for team_name, opponent in ((game.get("home_team"), game.get("away_team")), (game.get("away_team"), game.get("home_team"))):
             if not team_name:
                 continue
-            context[team_name] = {
+            ctx = {
                 "matchup": matchup,
                 "opponent": opponent,
                 "venue": venue or "Unknown venue",
@@ -208,6 +250,9 @@ def _build_team_context_map(slate_games):
                     ),
                 ),
             }
+            context[team_name] = ctx
+            for variant in _team_name_variants(team_name):
+                context.setdefault(variant, ctx)
     return context
 
 
@@ -320,7 +365,7 @@ def calculate_hr_units(batter_stats, slate_context, base_unit_size=1.0, kelly_fr
         hr_per_ab = stats.get("hr_per_ab", 0.0)
         statcast = stats.get("statcast") or {}
         team_name = stats.get("team", "")
-        game_context = slate_context.get(team_name)
+        game_context = _find_team_context(team_name, slate_context)
 
         if not game_context:
             continue

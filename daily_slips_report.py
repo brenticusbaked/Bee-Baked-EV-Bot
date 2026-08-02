@@ -135,20 +135,19 @@ def build_daily_slips_report() -> str:
 
 def send_daily_slips_report():
     report = build_daily_slips_report()
-    post_discord(
+    ok = post_discord(
         {"embeds": [{"description": report, "color": 10181046}]},
         webhook_url=DISCORD_DAILY_SLIPS_WEBHOOK_URL,
         add_bee_image=True,
         bee_image_slot="daily_slips",
     )
-    return {"detail": "daily slips report complete", "count": 1, "label": "updates"}
+    return {"detail": "daily slips report complete", "count": 1, "label": "updates", "sent": ok}
 
 
 if __name__ == "__main__":
-    send_daily_slips_report()
-
-if __name__ == "__main__":
+    result = send_daily_slips_report()
     report_text = build_daily_slips_report()
     print("--- GENERATED REPORT PREVIEW ---")
     print(report_text)
     print("--------------------------------")
+    print(f"Discord send status: {result.get('detail', 'unknown')} | sent={result.get('sent', False)}")
