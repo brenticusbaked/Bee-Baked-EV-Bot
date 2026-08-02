@@ -70,8 +70,12 @@ def fetch_sgo_sharp_lines():
             try:
                 response = requests.get(url, timeout=20)
                 if response.status_code == 429:
-                    print(f"SGO rate limit reached (429) for {sgo_league} on key #{key_index}. Trying next key.")
+                    print(f"SGO rate limit reached (429) for {sgo_league} on key #{key_index}. Backing off and trying next key.")
+                    time.sleep(SGO_LEAGUE_STAGGER_SECONDS)
                     continue
+                if response.status_code == 400:
+                    print(f"SGO rejected {sgo_league} request (400). Skipping this league.")
+                    break
                 response.raise_for_status()
                 data = response.json()
 

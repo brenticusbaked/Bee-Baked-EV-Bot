@@ -14,16 +14,28 @@ class PipelineTask:
     func: TaskFunc
 
 
+def _hydrate_or_fetch() -> dict:
+    """Hydrate from Supabase first, then fall back to The Odds API if no odds data."""
+    from db_manager import hydrate_market_cache
+
+    result = hydrate_market_cache()
+    odds_count = result.get("meta", {}).get("odds_count", 0)
+    event_count = result.get("count", 0)
+    if event_count == 0 or odds_count == 0:
+        print("Supabase cache lacks fixtures or sharp odds. Falling back to The Odds API fetcher.")
+        from master_odds_fetcher import run_fetcher
+        return run_fetcher()
+    return result
+
+
 def get_refresh_tasks() -> List[PipelineTask]:
     if env_flag("ENABLE_SUPABASE_FIRST_INGESTION", True):
-        from db_manager import hydrate_market_cache
-
         tasks: List[PipelineTask] = []
         if env_flag("ENABLE_INGEST_TRIGGER", False):
             from services.ingest_trigger import trigger_odds_ingest
 
             tasks.append(PipelineTask(name="trigger_odds_ingest", func=trigger_odds_ingest))
-        tasks.append(PipelineTask(name="hydrate_market_cache", func=hydrate_market_cache))
+        tasks.append(PipelineTask(name="hydrate_market_cache", func=_hydrate_or_fetch))
         return tasks
 
     from master_odds_fetcher import run_fetcher

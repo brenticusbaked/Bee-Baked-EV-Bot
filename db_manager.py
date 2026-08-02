@@ -889,6 +889,7 @@ def hydrate_market_cache() -> Dict[str, Any]:
         save_master_cache(cache)
         sport_count = len(cache) if isinstance(cache, dict) else 0
         event_count = sum(len(events) for events in cache.values()) if isinstance(cache, dict) else 0
+        odds_count = len(historical_odds)
         return {
             "detail": "market cache hydrated from Supabase",
             "count": event_count,
@@ -896,6 +897,7 @@ def hydrate_market_cache() -> Dict[str, Any]:
             "meta": {
                 "cache_sports": sport_count,
                 "cache_events": event_count,
+                "odds_count": odds_count,
             },
         }
 
