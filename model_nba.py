@@ -14,7 +14,11 @@ from utils.time import get_local_now
 
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
-NBA_MODEL_EDGE_THRESHOLD = env_float("NBA_MODEL_EDGE_THRESHOLD", 0.01)
+NBA_MODEL_EDGE_THRESHOLD = env_float("NBA_MODEL_EDGE_THRESHOLD", 0.02)
+NBA_MODEL_BASE_PROB = env_float("NBA_MODEL_BASE_PROB", 0.52)
+NBA_MODEL_SPREAD_SLOPE = env_float("NBA_MODEL_SPREAD_SLOPE", 0.003)
+NBA_MODEL_PROB_CAP = env_float("NBA_MODEL_PROB_CAP", 0.58)
+NBA_MODEL_MAX_UNITS = env_float("NBA_MODEL_MAX_UNITS", 1.25)
 
 
 def get_dynamic_link(bookmaker, target_string):
@@ -94,10 +98,12 @@ def run_nba_model():
 
             # Baseline rested-home-vs-road-B2B edge with a small home spread bump.
             spread_abs = abs(float(line)) if line not in (None, "") else 0.0
-            model_probability = min(0.54 + (spread_abs * 0.005), 0.60)
+            model_probability = min(
+                NBA_MODEL_BASE_PROB + (spread_abs * NBA_MODEL_SPREAD_SLOPE), NBA_MODEL_PROB_CAP
+            )
             fair_price = fair_american_from_probability(model_probability)
             edge = model_edge_from_probability(model_probability, odds)
-            units = model_units_from_probability(model_probability, odds)
+            units = model_units_from_probability(model_probability, odds, cap=NBA_MODEL_MAX_UNITS)
             if edge < NBA_MODEL_EDGE_THRESHOLD or units <= 0:
                 continue
 

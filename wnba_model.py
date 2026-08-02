@@ -22,7 +22,11 @@ from utils.time import get_local_now
 
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
-WNBA_MODEL_EDGE_THRESHOLD = env_float("WNBA_MODEL_EDGE_THRESHOLD", 0.01)
+WNBA_MODEL_EDGE_THRESHOLD = env_float("WNBA_MODEL_EDGE_THRESHOLD", 0.02)
+WNBA_MODEL_BASE_PROB = env_float("WNBA_MODEL_BASE_PROB", 0.53)
+WNBA_MODEL_SPREAD_SLOPE = env_float("WNBA_MODEL_SPREAD_SLOPE", 0.003)
+WNBA_MODEL_PROB_CAP = env_float("WNBA_MODEL_PROB_CAP", 0.59)
+WNBA_MODEL_MAX_UNITS = env_float("WNBA_MODEL_MAX_UNITS", 1.25)
 
 
 def get_dynamic_link(bookmaker: str, target_string: str) -> str:
@@ -131,11 +135,15 @@ def run_wnba_model():
             )
 
             spread_abs = abs(float(line)) if line not in (None, "") else 0.0
-            model_probability = min(0.55 + (spread_abs * 0.0045), 0.61)
+            model_probability = min(
+                WNBA_MODEL_BASE_PROB + (spread_abs * WNBA_MODEL_SPREAD_SLOPE), WNBA_MODEL_PROB_CAP
+            )
             fair_price = fair_american_from_probability(model_probability)
             edge = model_edge_from_probability(model_probability, odds)
-            raw_units = model_units_from_probability(model_probability, odds)
-            units = max(0.25, min(2.0, round(raw_units, 2)))
+            units = max(
+                0.25,
+                round(model_units_from_probability(model_probability, odds, cap=WNBA_MODEL_MAX_UNITS), 2),
+            )
             
             if edge < WNBA_MODEL_EDGE_THRESHOLD or units <= 0:
                 continue

@@ -3,7 +3,7 @@ from datetime import timedelta
 import pandas as pd
 
 from db_manager import get_all_bets
-from services.discord_channels import DAILY_SLIPS_WEBHOOK_URL
+from services.discord_channels import DAILY_SLIPS_WEBHOOK_URL, STATUS_WEBHOOK_URL
 from services.http_client import post_discord
 from utils.odds import profit_for_result
 from utils.time import DEFAULT_TZ, get_local_now
@@ -108,6 +108,7 @@ def build_daily_slips_report() -> str:
     if placed_df.empty and settled_df.empty and clv_df.empty:
         return f"**BEE BAKED DAILY SLIPS**\nDate: {report_date}\nNo slip, settlement, or CLV activity found today."
 
+
     return (
         f"**BEE BAKED DAILY SLIPS**\n"
         f"Date: {report_date}\n"
@@ -144,6 +145,55 @@ def send_daily_slips_report():
     return {"detail": "daily slips report complete", "count": 1, "label": "updates", "sent": ok}
 
 
+def build_overall_status_summary() -> str:
+    """Compact lifetime win/loss/ROI summary for the moderator/status channel."""
+    all_bets = get_all_bets()
+    if not all_bets:
+        return "**BEE BAKED OVERALL RECORD**\nNo bets logged yet."
+
+    df = pd.DataFrame(all_bets)
+    lifetime_settled = df[df.get("result", "").astype(str).str.upper().isin(["WIN", "LOSS", "PUSH"])].copy()
+    lifetime_wins = int((lifetime_settled.get("result", "").astype(str).str.upper() == "WIN").sum())
+    lifetime_losses = int((lifetime_settled.get("result", "").astype(str).str.upper() == "LOSS").sum())
+    lifetime_pushes = int((lifetime_settled.get("result", "").astype(str).str.upper() == "PUSH").sum())
+
+    lifetime_net_units = sum(
+        profit_for_result(row.get("odds", 0), row.get("units", 0), row.get("result", ""))
+        for _, row in lifetime_settled.iterrows()
+    )
+    lifetime_risked = sum(abs(float(row.get("units", 0) or 0.0)) for _, row in lifetime_settled.iterrows())
+    lifetime_roi = (lifetime_net_units / lifetime_risked * 100.0) if lifetime_risked > 0 else 0.0
+    win_pct = (
+        (lifetime_wins / (lifetime_wins + lifetime_losses + lifetime_pushes)) * 100.0
+        if (lifetime_wins + lifetime_losses + lifetime_pushes) > 0
+        else 0.0
+    )
+    unit_base = 3.00
+    lifetime_profit_dollars = lifetime_net_units * unit_base
+
+    record = f"{lifetime_wins}-{lifetime_losses}"
+    if lifetime_pushes:
+        record += f"-{lifetime_pushes}"
+
+    return (
+        f"**BEE BAKED OVERALL RECORD**\n"
+        f"Record: {record}\n"
+        f"Win%: {win_pct:.1f}%\n"
+        f"ROI: {lifetime_roi:+.1f}%\n"
+        f"Net: {lifetime_net_units:+.2f}u (${lifetime_profit_dollars:+.2f})"
+    )
+
+
+def send_status_win_loss_report():
+    report = build_overall_status_summary()
+    ok = post_discord(
+        {"embeds": [{"description": report, "color": 10181046}]},
+        webhook_url=STATUS_WEBHOOK_URL,
+        add_bee_image=False,
+    )
+    return {"detail": "overall win/loss/roi status posted", "count": 1, "label": "updates", "sent": ok}
+
+
 if __name__ == "__main__":
     result = send_daily_slips_report()
     report_text = build_daily_slips_report()
@@ -151,3 +201,6 @@ if __name__ == "__main__":
     print(report_text)
     print("--------------------------------")
     print(f"Discord send status: {result.get('detail', 'unknown')} | sent={result.get('sent', False)}")
+
+    status_result = send_status_win_loss_report()
+    print(f"Status channel: {status_result.get('detail', 'unknown')} | sent={status_result.get('sent', False)}")

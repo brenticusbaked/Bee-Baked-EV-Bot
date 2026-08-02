@@ -13,8 +13,11 @@ from utils.time import get_local_now
 
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
-MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.00)
-MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.015)
+MLB_FIP_GAP_THRESHOLD = env_float("MLB_FIP_GAP_THRESHOLD", 1.25)
+MLB_MODEL_EDGE_THRESHOLD = env_float("MLB_MODEL_EDGE_THRESHOLD", 0.02)
+MLB_F5_MAX_UNITS = env_float("MLB_F5_MAX_UNITS", 1.0)
+MLB_F5_HOME_BUMP = env_float("MLB_F5_HOME_BUMP", 0.02)
+MLB_F5_SECONDARY_FRACTION = env_float("MLB_F5_SECONDARY_FRACTION", 0.5)
 F5_MARKET_PRIORITY = {"h2h_1st_5_innings": 2, "h2h_1st_half": 2, "h2h": 1}
 
 LEAGUE_AVG_XERA = 4.00
@@ -190,7 +193,7 @@ def run_mlb_model():
                 prob = _calculate_f5_win_probability(a_mod_fip, h_mod_fip)
             else:
                 better_team, adv_p, disadv_p = home_team, home_p['fullName'], away_p['fullName']
-                prob = _calculate_f5_win_probability(h_mod_fip, a_mod_fip) + 0.03
+                prob = _calculate_f5_win_probability(h_mod_fip, a_mod_fip) + MLB_F5_HOME_BUMP
 
             if is_already_logged(matchup, "MODEL_MLB_F5", better_team): continue
 
@@ -210,8 +213,8 @@ def run_mlb_model():
                 continue
             
             dec_odds = american_to_decimal(odds)
-            raw_u = quarter_kelly_units(edge, dec_odds)
-            u_size = max(0.25, min(2.0, round(raw_u, 2)))
+            raw_u = quarter_kelly_units(edge, dec_odds, cap=MLB_F5_MAX_UNITS)
+            u_size = max(0.25, round(raw_u, 2))
             
             if u_size <= 0:
                 continue
@@ -236,7 +239,7 @@ def run_mlb_model():
                 print(f"Skipping MLB model alert because DB log failed for {better_team}.")
                 continue
 
-            secondary_u = max(0.25, round(u_size * 0.75, 2))
+            secondary_u = max(0.25, round(u_size * MLB_F5_SECONDARY_FRACTION, 2))
 
             angles_text = (
                 f"**🎯 Suggested Angles to Shop:**\n"

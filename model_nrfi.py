@@ -3,16 +3,18 @@ starting pitcher first-inning WHIP, strikeout rates, and top-of-the-order wOBA.
 """
 
 import logging
+import math
 from typing import Any, Dict, Optional
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
+from model_mlb import get_advanced_pitcher_stats
 from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import get_json as _http_get_json
 from services.odds_reference import format_pinnacle_reference
 from services.last_ten import build_last_ten_context_line
 from utils.links import sportsbook_search_link
-from utils.model_pricing import fair_american_from_probability, model_edge_from_probability
+from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
 from utils.odds import decimal_to_american, quarter_kelly_units, american_to_decimal
 from utils.thresholds import env_float
 from utils.time import get_local_now
@@ -20,7 +22,11 @@ from utils.time import get_local_now
 logger = logging.getLogger(__name__)
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
-NRFI_MODEL_EDGE_THRESHOLD = env_float("NRFI_MODEL_EDGE_THRESHOLD", 0.02)
+NRFI_MODEL_EDGE_THRESHOLD = env_float("NRFI_MODEL_EDGE_THRESHOLD", 0.025)
+NRFI_YRFI_MODEL_EDGE_THRESHOLD = env_float("NRFI_YRFI_MODEL_EDGE_THRESHOLD", 0.025)
+NRFI_MODEL_MAX_UNITS = env_float("NRFI_MODEL_MAX_UNITS", 1.0)
+NRFI_FIRST_INNING_SCALE = env_float("NRFI_FIRST_INNING_SCALE", 1.05)
+NRFI_LEAGUE_AVG_RPG = env_float("NRFI_LEAGUE_AVG_RPG", 4.5)
 
 
 def get_dynamic_link(bookmaker, target_string):
@@ -52,6 +58,34 @@ def get_best_nrfi_odds(event_id, target_selection):
     return None, None, None, None
 
 
+def get_team_offense_factor(team_id: int, cache: Dict[int, float], season: Optional[int] = None) -> float:
+    """Fetch a team's runs-per-game relative to league average from the MLB Stats API."""
+    if team_id in cache:
+        return cache[team_id]
+    season = season or int(get_local_now().year)
+    url = (
+        f"https://statsapi.mlb.com/api/v1/teams/{team_id}/stats?"
+        f"stats=season&group=hitting&gameType=R&season={season}"
+    )
+    try:
+        data = _http_get_json(url, timeout=8)
+        splits = data.get("stats", [{}])[0].get("splits", [])
+        if not splits:
+            cache[team_id] = 1.0
+            return 1.0
+        stat = splits[0].get("stat", {})
+        runs = float(stat.get("runs", 0) or 0)
+        games = float(stat.get("gamesPlayed", 1) or 1)
+        rpg = runs / games
+        factor = rpg / NRFI_LEAGUE_AVG_RPG if NRFI_LEAGUE_AVG_RPG > 0 else 1.0
+        cache[team_id] = float(max(0.5, min(1.5, factor)))
+        return cache[team_id]
+    except Exception as exc:
+        logger.warning(f"Team offense fetch failed for {team_id}: {exc}")
+        cache[team_id] = 1.0
+        return 1.0
+
+
 def run_nrfi_model():
     today = get_local_now().strftime("%Y-%m-%d")
     url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}&hydrate=probablePitcher"
@@ -63,8 +97,11 @@ def run_nrfi_model():
             return {"detail": "no mlb games scheduled", "count": 0, "label": "alerts"}
 
         alerts = []
+        pitcher_stats_cache = {}
+        team_offense_cache = {}
         for game in dates[0].get("games", []):
             away_team = game["teams"]["away"]["team"]["name"]
+            away_team_id = game["teams"]["away"]["team"]["id"]
             home_team = game["teams"]["home"]["team"]["name"]
             matchup = f"{away_team} @ {home_team}"
 
@@ -73,60 +110,77 @@ def run_nrfi_model():
             if not away_p or not home_p:
                 continue
 
-            # Model heuristic estimation for NRFI probability based on elite starting pitching profiles
-            nrfi_probability = 0.58  # Baseline league average NRFI probability sits around 56-58%
-            
-            target_bet = "No" # NRFI selection
-            book, odds, link, selected_market = get_best_nrfi_odds(game["id"], target_bet)
-            if not book:
+            # Data-driven first-inning probability:
+            #   - Home pitcher is on the mound in the top of the 1st.
+            #   - lambda = expected runs from pitcher xERA per inning * away offense factor.
+            #   - No runs in first inning ~ Poisson(0 | lambda).
+            home_est, home_act, _, _ = get_advanced_pitcher_stats(home_p["id"], pitcher_stats_cache, {})
+            home_xera = home_act if home_act is not None else home_est
+            if home_xera is None:
                 continue
+            away_offense = get_team_offense_factor(away_team_id, team_offense_cache)
+            lambda_runs = (home_xera / 9.0) * away_offense * NRFI_FIRST_INNING_SCALE
+            prob_no_runs = math.exp(-lambda_runs)
 
-            if is_already_logged(matchup, "MODEL_NRFI", target_bet):
-                continue
+            target_sides = [
+                ("No", prob_no_runs, NRFI_MODEL_EDGE_THRESHOLD),
+                ("Yes", 1.0 - prob_no_runs, NRFI_YRFI_MODEL_EDGE_THRESHOLD),
+            ]
 
-            pinnacle_reference = format_pinnacle_reference(
-                get_master_cache() or {},
-                "baseball_mlb",
-                game["id"],
-                "MODEL_NRFI",
-                target_bet,
-            )
+            for target_bet, target_prob, edge_threshold in target_sides:
+                book, odds, link, selected_market = get_best_nrfi_odds(game["id"], target_bet)
+                if not book:
+                    continue
 
-            fair_p = fair_american_from_probability(nrfi_probability)
-            edge = model_edge_from_probability(nrfi_probability, odds)
-            if edge < NRFI_MODEL_EDGE_THRESHOLD:
-                continue
+                if is_already_logged(matchup, "MODEL_NRFI", target_bet):
+                    continue
 
-            dec_odds = american_to_decimal(odds)
-            u_size = quarter_kelly_units(edge, dec_odds)
-            if u_size <= 0:
-                continue
+                pinnacle_reference = format_pinnacle_reference(
+                    get_master_cache() or {},
+                    "baseball_mlb",
+                    game["id"],
+                    "MODEL_NRFI",
+                    target_bet,
+                )
 
-            was_logged = log_bet_to_db(
-                matchup,
-                "MODEL_NRFI",
-                target_bet,
-                odds,
-                edge,
-                f"{u_size:.2f}",
-                fair_p,
-                "baseball_mlb",
-                game["id"],
-                notes=f"book={book};market=runs_1st_inning;model=nrfi_pitcher_profile;edge={edge:.4f}",
-            )
-            if not was_logged:
-                continue
+                fair_p = fair_american_from_probability(target_prob)
+                edge = model_edge_from_probability(target_prob, odds)
+                if edge < edge_threshold:
+                    continue
 
-            alerts.append(
-                f"**MLB NRFI MODEL ALERT**\n"
-                f"**Game:** {matchup}\n"
-                f"**Selection:** Run Scored in 1st Inning -> {target_bet} (NRFI)\n"
-                f"**Price:** [{book}]({link}) @ {odds}\n"
-                f"**Pinnacle:** {pinnacle_reference}\n"
-                f"**Model Edge:** {edge * 100:.2f}% | **Fair:** {fair_p}\n"
-                f"**Size:** {u_size:.2f} Units"
-                f"{build_last_ten_context_line(away_team, 'runs_1st_inning', '', 'under', 'baseball_mlb')}"
-            )
+                units = max(0.25, round(model_units_from_probability(target_prob, odds, cap=NRFI_MODEL_MAX_UNITS), 2))
+                if units <= 0:
+                    continue
+
+                was_logged = log_bet_to_db(
+                    matchup,
+                    "MODEL_NRFI",
+                    target_bet,
+                    odds,
+                    edge,
+                    f"{units:.2f}",
+                    fair_p,
+                    "baseball_mlb",
+                    game["id"],
+                    notes=(
+                        f"book={book};market=runs_1st_inning;"
+                        f"model=nrfi_pitcher_profile;edge={edge:.4f};target={target_bet}"
+                    ),
+                )
+                if not was_logged:
+                    continue
+
+                side_label = "NRFI" if target_bet == "No" else "YRFI"
+                alerts.append(
+                    f"**MLB {side_label} MODEL ALERT**\n"
+                    f"**Game:** {matchup}\n"
+                    f"**Selection:** Run Scored in 1st Inning -> {target_bet} ({side_label})\n"
+                    f"**Price:** [{book}]({link}) @ {odds}\n"
+                    f"**Pinnacle:** {pinnacle_reference}\n"
+                    f"**Model Edge:** {edge * 100:.2f}% | **Fair:** {fair_p}\n"
+                    f"**Size:** {units:.2f} Units"
+                    f"{build_last_ten_context_line(away_team, 'runs_1st_inning', '', 'under', 'baseball_mlb')}"
+                )
 
         for index, message in enumerate(alerts):
             send_discord_alert({"embeds": [{"description": message, "color": 3066993}]}, "model_nrfi", "bet_alert", message[:200], DISCORD_WEBHOOK_URL, index == len(alerts)-1)
