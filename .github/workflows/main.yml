@@ -2,9 +2,9 @@ name: Bee-Baked-EV-Bot Pipeline
 
 on:
   schedule:
-    # 4 Key EV Windows (CDT Times: 11 AM, 4 PM, 6 PM, 8 PM)
+    # 4 Key EV Windows (CST Times: 10 AM, 4 PM, 5 PM, 7 PM)
     # Total cost: ~520 credits/day (~15,600 credits/month out of 20,000)
-    - cron: '0 16,21,23,1 * * *'
+    - cron: '0 16,22,23,1 * * *'
   workflow_dispatch:
     inputs:
       scratch_guard_trace:
