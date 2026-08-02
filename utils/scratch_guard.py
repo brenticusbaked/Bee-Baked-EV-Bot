@@ -13,7 +13,7 @@ STARTED_STATUSES = {"in_progress", "live", "in_play", "started"}
 COMPLETED_STATUSES = {"completed", "final", "closed", "over", "ended"}
 # The cache keeps games around for live handling for roughly a few hours after
 # scheduled start, so we tolerate that window before calling a game started.
-START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 180.0)
+START_GRACE_MINUTES = env_float("SCRATCH_GUARD_START_GRACE_MINUTES", 0.0)
 # Scheduled fixtures can drift a bit in the cache or across time zones, but
 # anything more than this far past kickoff is considered stale and should not
 # be scanned.

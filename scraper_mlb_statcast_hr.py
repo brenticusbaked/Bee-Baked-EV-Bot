@@ -45,6 +45,9 @@ def fetch_todays_mlb_slate():
             for game in date_item.get("games", []):
                 game_pk = game.get("gamePk")
                 status = game.get("status", {}).get("abstractGameState")
+                if str(status).strip().lower() not in {"preview", "warmup"}:
+                    continue
+
                 teams = game.get("teams", {})
                 home_team = teams.get("home", {}).get("team", {}).get("name")
                 away_team = teams.get("away", {}).get("team", {}).get("name")
