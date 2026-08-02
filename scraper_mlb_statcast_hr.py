@@ -12,7 +12,8 @@ from utils.thresholds import env_float
 STATE_KEY = "mlb_hr_model_cache"
 CACHE_FILE = "hr_cache.json"
 HR_MODEL_EDGE_THRESHOLD = env_float("HR_MODEL_EDGE_THRESHOLD", 0.02)
-HR_MODEL_MIN_UNITS = env_float("HR_MODEL_MIN_UNITS", 0.50)
+HR_MODEL_MIN_UNITS = env_float("HR_MODEL_MIN_UNITS", 0.25)
+HR_MODEL_BASE_DECIMAL_ODDS = env_float("HR_MODEL_BASE_DECIMAL_ODDS", 5.0)
 HR_MODEL_ONLY_TIER1 = env_flag("HR_MODEL_ONLY_TIER1", True)
 
 # Routed directly to your Positive EV / Bet Alerts Discord channel
@@ -393,10 +394,7 @@ def calculate_hr_units(batter_stats, slate_context, base_unit_size=1.0, kelly_fr
         statcast_boost += max(0.0, min(0.020, barrel_rate * 0.10))
         implied_prob = min(0.34, implied_prob + statcast_boost + game_context["context_boost"])
 
-        if implied_prob < 0.25:
-            continue
-
-        decimal_odds = 4.00
+        decimal_odds = HR_MODEL_BASE_DECIMAL_ODDS
         b = decimal_odds - 1.0
         q = 1.0 - implied_prob
         kelly_pct = (b * implied_prob - q) / b

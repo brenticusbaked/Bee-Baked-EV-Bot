@@ -15,8 +15,10 @@ class PipelineTask:
 
 
 def _hydrate_or_fetch() -> dict:
-    """Hydrate from Supabase first, then fall back to The Odds API if no odds data."""
-    from db_manager import hydrate_market_cache
+    """Hydrate from Supabase first, then fall back to The Odds API if cache is empty or stale."""
+    from datetime import datetime, timezone
+    from db_manager import hydrate_market_cache, get_master_cache
+    from utils.scratch_guard import safe_parse_commence_time, SCHEDULE_GRACE_MINUTES
 
     result = hydrate_market_cache()
     odds_count = result.get("meta", {}).get("odds_count", 0)
@@ -25,6 +27,25 @@ def _hydrate_or_fetch() -> dict:
         print("Supabase cache lacks fixtures or sharp odds. Falling back to The Odds API fetcher.")
         from master_odds_fetcher import run_fetcher
         return run_fetcher()
+
+    cache = get_master_cache() or {}
+    now = datetime.now(timezone.utc)
+    grace_seconds = float(SCHEDULE_GRACE_MINUTES) * 60.0
+    has_fresh = False
+    for events in cache.values():
+        for event in events or []:
+            start = safe_parse_commence_time(event.get("commence_time"))
+            if start and (now - start).total_seconds() <= grace_seconds:
+                has_fresh = True
+                break
+        if has_fresh:
+            break
+
+    if not has_fresh:
+        print("Supabase cache contains no upcoming or recent events. Falling back to The Odds API fetcher.")
+        from master_odds_fetcher import run_fetcher
+        return run_fetcher()
+
     return result
 
 
