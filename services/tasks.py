@@ -20,7 +20,7 @@ def _hydrate_or_fetch() -> dict:
     When ``ODDS_REFRESH_ON_MAIN`` is enabled, the main run pulls fresh odds up to
     ``ODDS_MAX_CREDITS_PER_RUN`` before falling back to the cache.
     """
-    if env_flag("ODDS_REFRESH_ON_MAIN", False):
+    if env_flag("ODDS_REFRESH_ON_MAIN", True):
         print("ODDS_REFRESH_ON_MAIN enabled; running capped odds refresh.")
         from master_odds_fetcher import run_fetcher
 

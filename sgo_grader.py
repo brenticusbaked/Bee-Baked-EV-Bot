@@ -111,7 +111,7 @@ def run_grader():
     cache_fetches = 0
     hit_rate_limit = False
     unsupported_leagues = set() # Track leagues that throw a 400 error
-    league_map = {"basketball_nba": "NBA", "icehockey_nhl": "NHL", "baseball_mlb": "MLB", "basketball_wnba": "WNBA"}
+    league_map = {"basketball_nba": "NBA", "icehockey_nhl": "NHL", "baseball_mlb": "MLB"}
 
     print(f"Grading {len(ungraded_bets)} bets...")
 

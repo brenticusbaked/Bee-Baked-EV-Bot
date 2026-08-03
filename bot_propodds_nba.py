@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from typing import Dict, List, Optional, Tuple
 import requests
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ SGO_API_KEY = os.getenv("SGO_API_KEY")
 SGO_API_KEY_2 = os.getenv("SGO_API_KEY_2")
 SGO_API_KEY_3 = os.getenv("SGO_API_KEY_3")
 SGO_MAX_EVENTS_PER_LEAGUE = max(0, int(os.getenv("SGO_MAX_EVENTS_PER_LEAGUE", "0")))
+SGO_LEAGUE_STAGGER_SECONDS = max(0.0, float(os.getenv("SGO_LEAGUE_STAGGER_SECONDS", "1.5")))
 
 
 def _sgo_keys():
@@ -677,6 +679,9 @@ def get_sgo_edges():
             print(f"[prop_bot] {league}: processing failed ({type(exc).__name__}); skipping league")
             scan_stats["errored_leagues"].append(f"{league}:{type(exc).__name__}")
             continue
+
+        if SGO_LEAGUE_STAGGER_SECONDS > 0:
+            time.sleep(SGO_LEAGUE_STAGGER_SECONDS)
 
     return picks, near_misses, scan_stats
 

@@ -16,7 +16,6 @@ SGO_LEAGUE_STAGGER_SECONDS = float(os.environ.get("SGO_LEAGUE_STAGGER_SECONDS", 
 TARGET_BOOKS = ["circa", "pinnacle", "draftkings"]
 LEAGUE_MAP = {
     "MLB": "baseball_mlb",
-    "WNBA": "basketball_wnba"
 }
 
 def similar(a, b):
@@ -59,7 +58,7 @@ def fetch_sgo_sharp_lines():
     league_items = list(LEAGUE_MAP.items())
     for league_index, (sgo_league, odds_api_sport) in enumerate(league_items):
         print(f"Fetching mapping and SGO sharp odds for {sgo_league}...")
-        
+
         # 1. Build the ID Map for this league
         odds_events = get_odds_api_schedule(odds_api_sport)
         league_success = False
