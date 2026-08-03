@@ -163,6 +163,9 @@ def _fetch_props_for_events(
     """Iterates through active events and fetches player props individually."""
     if sport not in PLAYER_PROP_CONFIG or not ENABLE_PLAYER_PROPS_PULL:
         return
+    if sport == "basketball_wnba":
+        print(f"BEE-BAKED FETCH: Skipping player prop enrichment for {sport}; high credit cost/low value.")
+        return
 
     prop_markets = PLAYER_PROP_CONFIG[sport]
     request_credits = len(prop_markets.split(",")) * 2

@@ -309,11 +309,12 @@ NEGATIVE_BINOMIAL_STATS = {
     if stat.strip()
 }
 
-SHARP_PROP_BOOKS = {
+SHARP_PROP_BOOK_ORDER = [
     book.strip().lower()
-    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris,draftkings").split(",")
     if book.strip()
-}
+]
+SHARP_PROP_BOOKS = set(SHARP_PROP_BOOK_ORDER)
 
 def _parse_target_stats() -> set:
     raw = os.getenv("PLAYER_PROP_STATS") or os.getenv("NBA_PROP_STATS", "")
@@ -509,16 +510,24 @@ def _parse_prop_offers(odd_obj: dict, players_map: dict) -> List[dict]:
     return offers
 
 def _consensus_from_sharp_books(sharp_by_book: Dict[str, Dict[str, dict]], stat_type: str, line_value: str) -> tuple[Dict[str, float], str, int]:
-    # Pinnacle is the only allowed sharp baseline for props.
-    pinnacle_sides = sharp_by_book.get("pinnacle")
-    if isinstance(pinnacle_sides, dict) and "over" in pinnacle_sides and "under" in pinnacle_sides:
-        book_pairs = [pinnacle_sides]
-        source = "pinnacle"
-    else:
+    # Pinnacle is the primary sharp baseline; fall back to other sharp books if Pinnacle is missing/incomplete.
+    book_pairs = []
+    source_books = []
+    for book in SHARP_PROP_BOOK_ORDER:
+        sides = sharp_by_book.get(book)
+        if isinstance(sides, dict) and "over" in sides and "under" in sides:
+            if book == "pinnacle":
+                book_pairs = [sides]
+                source_books = ["pinnacle"]
+                break
+            book_pairs.append(sides)
+            source_books.append(book)
+    if not book_pairs:
         return {}, "none", 0
     probabilities = consensus_probabilities(book_pairs, method=PROP_DEVIG_METHOD)
     if not probabilities:
         return {}, "none", len(book_pairs)
+    source = ",".join(source_books)
     if ENABLE_PROP_NEGATIVE_BINOMIAL and stat_type in NEGATIVE_BINOMIAL_STATS:
         try:
             line = float(line_value)
@@ -595,6 +604,9 @@ def _log_unparsed_event_shape(league: str, event: dict) -> None:
 
 def get_sgo_edges():
     sgo_keys = _sgo_keys()
+    print(f"[prop_bot] SGO keys loaded: {len(sgo_keys)}")
+    if len(sgo_keys) < 2:
+        print(f"[prop_bot] WARNING: only {len(sgo_keys)} SGO key(s) loaded. Set SGO_API_KEY_2 and SGO_API_KEY_3 secrets to avoid 429s.")
     if not sgo_keys:
         return [], [], {"reason": "SGO_API_KEY missing"}
 

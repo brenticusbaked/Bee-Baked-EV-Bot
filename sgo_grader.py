@@ -105,6 +105,12 @@ def _grade_player_prop(bet, player_data):
 
 def run_grader():
     sgo_keys = _sgo_keys()
+    print(
+        f"[sgo_grader] SGO keys loaded: {len(sgo_keys)} | "
+        f"SGO_API_KEY={'set' if SGO_API_KEY else 'empty'}, "
+        f"SGO_API_KEY_2={'set' if SGO_API_KEY_2 else 'empty'}, "
+        f"SGO_API_KEY_3={'set' if SGO_API_KEY_3 else 'empty'}"
+    )
     if not sgo_keys:
         print("No SGO API keys configured. Skipping grader.")
         return {"detail": "SGO_API_KEY missing", "count": 0, "label": "graded"}

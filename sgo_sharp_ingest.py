@@ -43,6 +43,12 @@ def get_odds_api_schedule(sport_key):
 
 def fetch_sgo_sharp_lines():
     sgo_keys = _sgo_keys()
+    print(
+        f"[sgo_sharp_ingest] SGO keys loaded: {len(sgo_keys)} | "
+        f"SGO_API_KEY={'set' if SGO_API_KEY else 'empty'}, "
+        f"SGO_API_KEY_2={'set' if SGO_API_KEY_2 else 'empty'}, "
+        f"SGO_API_KEY_3={'set' if SGO_API_KEY_3 else 'empty'}"
+    )
     if not sgo_keys or not ODDS_API_KEY:
         print("Error: at least one SGO_API_KEY and ODDS_API_KEY environment variable are required.")
         return

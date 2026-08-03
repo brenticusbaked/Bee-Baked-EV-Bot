@@ -28,6 +28,7 @@ def _mlb_event():
                 "byBookmaker": {
                     "pinnacle": {"odds": -110, "overUnder": "5.5", "available": True},
                     "draftkings": {"odds": 130, "overUnder": "5.5", "available": True},
+                    "fanduel": {"odds": 150, "overUnder": "5.5", "available": True},
                 },
             },
             "strikeouts-DUSTIN_MAY_1_MLB-game-ou-under": {
@@ -40,6 +41,7 @@ def _mlb_event():
                 "byBookmaker": {
                     "pinnacle": {"odds": -110, "overUnder": "5.5", "available": True},
                     "draftkings": {"odds": -110, "overUnder": "5.5", "available": True},
+                    "fanduel": {"odds": -110, "overUnder": "5.5", "available": True},
                 },
             },
             "points-away-game-ml-away": {
@@ -64,9 +66,9 @@ class SgoParserTests(unittest.TestCase):
         event = _mlb_event()
         odd_obj = event["odds"]["strikeouts-DUSTIN_MAY_1_MLB-game-ou-over"]
         offers = prop_bot._parse_prop_offers(odd_obj, event["players"])
-        self.assertEqual(len(offers), 2)
+        self.assertEqual(len(offers), 3)
         by_book = {offer["book"]: offer for offer in offers}
-        self.assertEqual(set(by_book), {"pinnacle", "draftkings"})
+        self.assertEqual(set(by_book), {"pinnacle", "draftkings", "fanduel"})
         self.assertEqual(by_book["pinnacle"]["player"], "Dustin May")
         self.assertEqual(by_book["pinnacle"]["stat"], "strikeouts")
         self.assertEqual(by_book["pinnacle"]["side"], "over")
@@ -140,7 +142,7 @@ class SgoConsensusTests(unittest.TestCase):
             "circa": {"over": {"price": 1.50}, "under": {"price": 2.50}},
         }
         probabilities, source, book_count = prop_bot._consensus_from_sharp_books(sharp, "points", "25.5")
-        self.assertEqual(source.split("_")[0], "pinnacle")
+        self.assertEqual(source, "pinnacle_negbin")
         self.assertEqual(book_count, 1)
         self.assertAlmostEqual(probabilities["over"], 0.5, places=6)
 
@@ -150,9 +152,9 @@ class SgoConsensusTests(unittest.TestCase):
             "cris": {"over": {"price": 1.90}, "under": {"price": 1.90}},
         }
         probabilities, source, book_count = prop_bot._consensus_from_sharp_books(sharp, "points", "25.5")
-        self.assertEqual(source, "none")
-        self.assertEqual(book_count, 0)
-        self.assertEqual(probabilities, {})
+        self.assertTrue(source.startswith("circa,cris"))
+        self.assertEqual(book_count, 2)
+        self.assertNotEqual(probabilities, {})
 
 
 class LeagueFetchToleranceTests(unittest.TestCase):
@@ -162,7 +164,7 @@ class LeagueFetchToleranceTests(unittest.TestCase):
     def _run(self, leagues, responder):
         with mock.patch.object(prop_bot, "SGO_API_KEY", "test-key"), \
              mock.patch.object(prop_bot, "PLAYER_PROP_LEAGUES", leagues), \
-             mock.patch.object(prop_bot, "get_book_weights", return_value={"draftkings": 1.0}), \
+             mock.patch.object(prop_bot, "get_book_weights", return_value={"draftkings": 1.0, "fanduel": 1.0}), \
              mock.patch.object(prop_bot, "is_already_logged", return_value=False), \
              mock.patch.object(prop_bot, "log_bet_to_db", return_value=True), \
              mock.patch.object(prop_bot, "request", side_effect=responder):
