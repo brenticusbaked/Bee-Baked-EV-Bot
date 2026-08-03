@@ -144,15 +144,15 @@ class SgoConsensusTests(unittest.TestCase):
         self.assertEqual(book_count, 1)
         self.assertAlmostEqual(probabilities["over"], 0.5, places=6)
 
-    def test_falls_back_to_sharp_consensus_without_pinnacle(self):
+    def test_no_pinnacle_returns_none(self):
         sharp = {
             "circa": {"over": {"price": 1.90}, "under": {"price": 1.90}},
             "cris": {"over": {"price": 1.90}, "under": {"price": 1.90}},
         }
         probabilities, source, book_count = prop_bot._consensus_from_sharp_books(sharp, "points", "25.5")
-        self.assertTrue(source.startswith("consensus"))
-        self.assertEqual(book_count, 2)
-        self.assertIn("over", probabilities)
+        self.assertEqual(source, "none")
+        self.assertEqual(book_count, 0)
+        self.assertEqual(probabilities, {})
 
 
 class LeagueFetchToleranceTests(unittest.TestCase):

@@ -29,7 +29,7 @@ class PropConsensusCloseTest(unittest.TestCase):
         self.assertEqual(label, "Pinnacle")
         self.assertGreater(fair_decimal, 1.0)
 
-    def test_multi_sharp_book_consensus(self):
+    def test_no_pinnacle_returns_none(self):
         game = {
             "bookmakers": [
                 {"key": "bookmaker", "markets": [_prop_market(1.87, 1.95)]},
@@ -39,10 +39,7 @@ class PropConsensusCloseTest(unittest.TestCase):
         }
         spec = parse_selection("batter_total_bases", "Wyatt Langford Over 1.5")
         result = clv_tracker._prop_consensus_close(game, ["batter_total_bases"], spec)
-        self.assertIsNotNone(result)
-        _, label = result
-        # draftkings is a recreational book and must be excluded from the baseline.
-        self.assertEqual(label, "Sharp consensus (2)")
+        self.assertIsNone(result)
 
     def test_no_sharp_book_returns_none(self):
         game = {"bookmakers": [{"key": "draftkings", "markets": [_prop_market(2.1, 1.72)]}]}
@@ -79,7 +76,7 @@ class RunClvTrackerTest(unittest.TestCase):
         base.update(kw)
         return base
 
-    def test_prop_bet_tracked_without_pinnacle(self):
+    def test_prop_bet_skipped_without_pinnacle(self):
         bet = self._bet(market="batter_total_bases", selection="Wyatt Langford Under 1.5")
         cache = {"baseball_mlb": [{
             "id": "evt1",
@@ -89,8 +86,8 @@ class RunClvTrackerTest(unittest.TestCase):
             ],
         }]}
         result, update = self._run([bet], cache)
-        self.assertEqual(result["count"], 1)
-        update.assert_called_once()
+        self.assertEqual(result["count"], 0)
+        update.assert_not_called()
 
     def test_prop_bet_with_pinnacle_tracked(self):
         bet = self._bet(market="pitcher_strikeouts", selection="Sonny Gray Over 4.5")

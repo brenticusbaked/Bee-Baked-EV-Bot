@@ -158,7 +158,7 @@ class PlayerPropEvaluationTests(unittest.TestCase):
         self.assertEqual(alert["sport"], "basketball_nba")
         self.assertIn("LeBron James", alert["description"])
         self.assertIn("PROP ALERT", alert["description"])
-        self.assertIn("multiplicative", alert["description"])
+        self.assertIn("power", alert["description"])
 
     def test_no_alert_when_soft_below_threshold(self):
         event = _prop_event()
