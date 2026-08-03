@@ -83,23 +83,24 @@ UNIFIED_PROP_EV_THRESHOLD = env_float("UNIFIED_PROP_EV_THRESHOLD", max(UNIFIED_E
 UNIFIED_EV_FLOOR = env_float("UNIFIED_EV_FLOOR", UNIFIED_EV_THRESHOLD)
 ENABLE_HISTORY_EV_FLOOR_RAISE = os.getenv("ENABLE_HISTORY_EV_FLOOR_RAISE", "false").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_HISTORY_PROP_TYPE_OVERLAY = os.getenv("ENABLE_HISTORY_PROP_TYPE_OVERLAY", "true").strip().lower() in {"1", "true", "yes", "on"}
-PROP_DEVIG_METHOD = "multiplicative"
+PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "power")
 PROP_KELLY_FRACTION = env_float("UNIFIED_PROP_KELLY_FRACTION", 0.25)
 PROP_MAX_UNITS = env_float("UNIFIED_PROP_MAX_UNITS", 2.0)
 UNIFIED_PROP_CONSENSUS_MIN_BOOKS = max(1, env_int("UNIFIED_PROP_CONSENSUS_MIN_BOOKS", 1))
 
-# Sharp hierarchy to evaluate main market odds if Pinnacle hasn't posted a line
+# Pinnacle is the only allowed sharp baseline for fair market pricing.
+# Do not fall back to other books; if Pinnacle is absent, no fair probability is derived.
 SHARP_BOOK_HIERARCHY = [
-    b.strip().lower() 
-    for b in os.getenv("SHARP_BOOK_HIERARCHY", "pinnacle,circa,bookmaker,cris,draftkings").split(",") 
-    if b.strip()
+    b.strip().lower()
+    for b in os.getenv("SHARP_BOOK_HIERARCHY", "pinnacle").split(",")
+    if b.strip() and b.strip().lower() in {"pinnacle"}
 ]
 
-# Sharp reference books for player props (DraftKings excluded so it remains a target soft book)
+# Player props must also use Pinnacle only as the sharp reference.
 SHARP_PROP_BOOKS = {
     book.strip().lower()
-    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
-    if book.strip()
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle").split(",")
+    if book.strip() and book.strip().lower() in {"pinnacle"}
 }
 
 UNIFIED_MAX_ALERTS_PER_EVENT_MARKET = max(1, env_int("UNIFIED_MAX_ALERTS_PER_EVENT_MARKET", 3))

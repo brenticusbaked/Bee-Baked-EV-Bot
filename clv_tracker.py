@@ -19,18 +19,17 @@ CLV_LOOKBACK_DAYS = int(os.getenv("CLV_LOOKBACK_DAYS", "2"))
 CLV_NOTIFY_MIN_CHANGE_PCT = float(os.getenv("CLV_NOTIFY_MIN_CHANGE_PCT", "0.75"))
 CLV_MAX_ALERTS = int(os.getenv("CLV_MAX_ALERTS", "10"))
 
-# Player props are priced against the SHARP-BOOK CONSENSUS.
-# Default strictly to sharp books matching test expectations.
+# Player props are priced against Pinnacle only.
 SHARP_PROP_BOOKS = {
     book.strip().lower()
-    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle,bookmaker,circa,cris").split(",")
-    if book.strip()
+    for book in os.getenv("PROP_SHARP_BOOKS", "pinnacle").split(",")
+    if book.strip() and book.strip().lower() in {"pinnacle"}
 }
-PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "multiplicative")
+PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "power")
 ENABLE_PROP_RETAIL_FALLBACK = env_flag("ENABLE_PROP_RETAIL_FALLBACK", False)
 
-# Priority list for non-prop sharp lines if Pinnacle is unposted/missing
-SHARP_GAME_BOOKS_PRIORITY = ["pinnacle", "bookmaker", "circa", "cris", "betonline"]
+# Pinnacle is the only allowed sharp baseline; no fallback.
+SHARP_GAME_BOOKS_PRIORITY = ["pinnacle"]
 
 
 def _fetch_historical_game_data(event_id: str) -> Optional[dict]:

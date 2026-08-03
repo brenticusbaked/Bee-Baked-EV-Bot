@@ -460,16 +460,18 @@ def _build_field(rec):
     weather_line = " | ".join(weather_bits) if weather_bits else "Weather: unavailable"
     statcast_line = " | ".join(statcast_bits) if statcast_bits else "Statcast: unavailable"
 
+    value = (
+        f"Quarter-Kelly Sizing: **{rec['recommended_units']}u**\n"
+        f"ISO: `{rec['iso']}` | HR/AB: `{rec['hr_per_ab']}`\n"
+        f"Park Factor: `{rec['park_factor']}` | Implied HR Prob: `{rec['implied_prob']}`\n"
+        f"{weather_line}\n"
+        f"{statcast_line}\n"
+        f"{last_ten}"
+    )
+    name = f"{rec['name']} ({rec['team']}) vs {rec['opponent']} - {rec['tier']}"
     return {
-        "name": f"{rec['name']} ({rec['team']}) vs {rec['opponent']} - {rec['tier']}",
-        "value": (
-            f"Quarter-Kelly Sizing: **{rec['recommended_units']}u**\n"
-            f"ISO: `{rec['iso']}` | HR/AB: `{rec['hr_per_ab']}`\n"
-            f"Park Factor: `{rec['park_factor']}` | Implied HR Prob: `{rec['implied_prob']}`\n"
-            f"{weather_line}\n"
-            f"{statcast_line}\n"
-            f"{last_ten}"
-        ),
+        "name": name[:256],
+        "value": value[:1024],
         "inline": False,
     }
 
@@ -479,8 +481,11 @@ def format_discord_message(recommendations):
     if not recommendations:
         return None
 
+    # Discord limits: 10 embeds per message and ~6000 embed characters total.
+    # Keep each embed small so we stay under the character cap and field limits.
+    recommendations = recommendations[:80]
     embeds = []
-    chunk_size = 25
+    chunk_size = 8
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
     for i in range(0, len(recommendations), chunk_size):
         chunk = recommendations[i : i + chunk_size]

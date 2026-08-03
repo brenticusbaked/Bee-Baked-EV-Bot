@@ -202,7 +202,7 @@ LEAGUE_SPORT_KEYS = {
 PROP_EV_THRESHOLD = env_float("PROP_EV_THRESHOLD", 0.01)
 PROP_NEAR_MISS_THRESHOLD = env_float("PROP_NEAR_MISS_THRESHOLD", 0.005)
 PROP_CONSENSUS_MIN_BOOKS = max(1, int(os.getenv("PROP_CONSENSUS_MIN_BOOKS", "1")))
-PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "multiplicative")
+PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "power")
 PROP_KELLY_FRACTION = env_float("PROP_KELLY_FRACTION", 0.25)
 PROP_MAX_UNITS = env_float("PROP_MAX_UNITS", 2.0)
 PROP_CONFIDENCE_FULL_BOOKS = max(1.0, env_float("PROP_CONFIDENCE_FULL_BOOKS", 3.0))
@@ -437,18 +437,13 @@ def _parse_prop_offers(odd_obj: dict, players_map: dict) -> List[dict]:
     return offers
 
 def _consensus_from_sharp_books(sharp_by_book: Dict[str, Dict[str, dict]], stat_type: str, line_value: str) -> tuple[Dict[str, float], str, int]:
+    # Pinnacle is the only allowed sharp baseline for props.
     pinnacle_sides = sharp_by_book.get("pinnacle")
     if isinstance(pinnacle_sides, dict) and "over" in pinnacle_sides and "under" in pinnacle_sides:
         book_pairs = [pinnacle_sides]
         source = "pinnacle"
     else:
-        book_pairs = [
-            sides for sides in sharp_by_book.values()
-            if "over" in sides and "under" in sides
-        ]
-        if len(book_pairs) < PROP_CONSENSUS_MIN_BOOKS:
-            return {}, "none", len(book_pairs)
-        source = f"consensus_{PROP_DEVIG_METHOD}"
+        return {}, "none", 0
     probabilities = consensus_probabilities(book_pairs, method=PROP_DEVIG_METHOD)
     if not probabilities:
         return {}, "none", len(book_pairs)

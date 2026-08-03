@@ -4,7 +4,7 @@ from typing import Dict, Iterable, Optional
 from utils.odds import decimal_implied_probability, devig_probabilities, quarter_kelly_units
 
 
-def no_vig_binary_probabilities(over_decimal: float, under_decimal: float, method: str = "multiplicative") -> Dict[str, float]:
+def no_vig_binary_probabilities(over_decimal: float, under_decimal: float, method: str = "power") -> Dict[str, float]:
     implied = [decimal_implied_probability(over_decimal), decimal_implied_probability(under_decimal)]
     fair = devig_probabilities(implied, method=method)
     if len(fair) != 2:
@@ -12,7 +12,7 @@ def no_vig_binary_probabilities(over_decimal: float, under_decimal: float, metho
     return {"over": fair[0], "under": fair[1]}
 
 
-def consensus_probabilities(book_pairs: Iterable[dict], method: str = "multiplicative") -> Dict[str, float]:
+def consensus_probabilities(book_pairs: Iterable[dict], method: str = "power") -> Dict[str, float]:
     over_values = []
     under_values = []
     for pair in book_pairs:
