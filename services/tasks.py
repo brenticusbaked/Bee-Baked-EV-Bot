@@ -15,7 +15,20 @@ class PipelineTask:
 
 
 def _hydrate_or_fetch() -> dict:
-    """Hydrate from Supabase first, then fall back to The Odds API if cache is empty or stale."""
+    """Hydrate from Supabase first, then fall back to The Odds API if cache is empty or stale.
+
+    When ``ODDS_REFRESH_ON_MAIN`` is enabled, the main run pulls fresh odds up to
+    ``ODDS_MAX_CREDITS_PER_RUN`` before falling back to the cache.
+    """
+    if env_flag("ODDS_REFRESH_ON_MAIN", False):
+        print("ODDS_REFRESH_ON_MAIN enabled; running capped odds refresh.")
+        from master_odds_fetcher import run_fetcher
+
+        fetched = run_fetcher()
+        if fetched.get("count"):
+            return fetched
+        print("Capped odds refresh returned no data; falling back to Supabase cache.")
+
     from datetime import datetime, timezone
     from db_manager import hydrate_market_cache, get_master_cache
     from utils.scratch_guard import safe_parse_commence_time, SCHEDULE_GRACE_MINUTES

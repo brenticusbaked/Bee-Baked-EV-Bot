@@ -13,6 +13,31 @@ ODDS_API_KEY_2 = os.getenv("ODDS_API_KEY_2")
 ODDS_API_KEY_3 = os.getenv("ODDS_API_KEY_3")
 ODDS_API_KEY_4 = os.getenv("ODDS_API_KEY_4")
 
+ODDS_MAX_CREDITS_PER_RUN = int(os.getenv("ODDS_MAX_CREDITS_PER_RUN", "48"))
+ODDS_MAX_EVENTS_PER_ENRICH = int(
+    os.getenv("ODDS_MAX_EVENTS_PER_ENRICH", os.getenv("MAX_EVENTS_PER_ENRICH", "3"))
+)
+
+
+class _CreditTracker:
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.used = 0
+
+    def charge(self, cost: int) -> bool:
+        if cost <= 0:
+            return True
+        if self.used + cost > self.limit:
+            print(f"BEE-BAKED CREDIT GUARD: blocked {cost} credits; {self.remaining} left.")
+            return False
+        self.used += cost
+        return True
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+
 # Define your most profitable prop markets
 PLAYER_PROP_CONFIG = {
     "baseball_mlb": "batter_total_bases,batter_hits,batter_home_runs,pitcher_strikeouts",
@@ -126,15 +151,32 @@ def _merge_cache(cache: Dict[str, List[dict]], sport: str, events: List[dict]) -
         _merge_bookmakers(event_index[event_id], event)
 
 
-def _fetch_props_for_events(api_key: str, sport: str, events: List[dict], region: str, bookmakers: str) -> None:
+def _fetch_props_for_events(
+    api_key: str,
+    sport: str,
+    events: List[dict],
+    region: str,
+    bookmakers: str,
+    credit_tracker: _CreditTracker,
+    max_enrich_events: int,
+) -> None:
     """Iterates through active events and fetches player props individually."""
     if sport not in PLAYER_PROP_CONFIG or not ENABLE_PLAYER_PROPS_PULL:
         return
 
     prop_markets = PLAYER_PROP_CONFIG[sport]
+    request_credits = len(prop_markets.split(",")) * 2
     print(f"BEE-BAKED FETCH: Pulling [{prop_markets}] props for {len(events)} {sport} events ({region})...")
 
+    enriched = 0
     for event in events:
+        if enriched >= max_enrich_events:
+            print(f"BEE-BAKED FETCH: prop enrichment cap reached ({max_enrich_events}) for {sport} ({region}).")
+            break
+        if credit_tracker.remaining < request_credits:
+            print(f"BEE-BAKED FETCH: prop credit budget exhausted ({credit_tracker.remaining} left); stopping {sport} ({region}) enrichment.")
+            break
+
         event_id = event.get("id")
         if not event_id:
             continue
@@ -153,6 +195,12 @@ def _fetch_props_for_events(api_key: str, sport: str, events: List[dict], region
             response.raise_for_status()
             prop_data = response.json()
             _merge_bookmakers(event, prop_data)
+            if not credit_tracker.charge(request_credits):
+                break
+            remaining = response.headers.get("x-requests-remaining")
+            if remaining is not None:
+                print(f"[odds] x-requests-remaining: {remaining}")
+            enriched += 1
             time.sleep(0.3)
         except Exception as exc:
             print(f"Error fetching props for event {event_id} ({sport}): {exc}")
@@ -166,9 +214,16 @@ def _fetch_config(
     region: str,
     bookmakers: str,
     fetched_props: Set[str],
+    credit_tracker: _CreditTracker,
+    max_enrich_events: int,
 ) -> int:
     success_count = 0
     for sport, markets in config.items():
+        request_credits = len(markets.split(",")) * 2
+        if credit_tracker.remaining < request_credits:
+            print(f"BEE-BAKED FETCH: credit budget too low for {sport} ({markets}) via {label}; skipping.")
+            continue
+
         url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds"
         params = {
             "apiKey": api_key,
@@ -179,19 +234,23 @@ def _fetch_config(
         }
 
         try:
-            response = request("GET", url, params=params, timeout=20)
+            response = requests.get(url, params=params, timeout=20)
             response.raise_for_status()
             events = response.json()
+            if not credit_tracker.charge(request_credits):
+                continue
 
             # Deduplicated prop fetch: Only pull player props ONCE per sport + region per run
             tracker_key = f"{sport}_{region}"
             if tracker_key not in fetched_props:
-                _fetch_props_for_events(api_key, sport, events, region, bookmakers)
+                _fetch_props_for_events(api_key, sport, events, region, bookmakers, credit_tracker, max_enrich_events)
                 fetched_props.add(tracker_key)
 
             _merge_cache(cache, sport, events)
-            request_credits = len(markets.split(",")) * 2
-            print(f"Cached {sport} ({markets}) via {label}. Credits used this main request: {request_credits}")
+            remaining = response.headers.get("x-requests-remaining")
+            if remaining is not None:
+                print(f"[odds] x-requests-remaining: {remaining}")
+            print(f"Cached {sport} ({markets}) via {label}. Credits used this main request: {request_credits} | total: {credit_tracker.used}/{credit_tracker.limit}")
             success_count += 1
         except Exception as exc:
             print(f"Error fetching {sport} via {label}: {exc}")
@@ -201,6 +260,9 @@ def _fetch_config(
 def run_fetcher():
     if not ODDS_API_KEY:
         return {"detail": "ODDS_API_KEY missing", "count": 0, "label": "updates"}
+
+    credit_tracker = _CreditTracker(ODDS_MAX_CREDITS_PER_RUN)
+    print(f"BEE-BAKED FETCH: starting with credit cap of {credit_tracker.limit}")
 
     cache: Dict[str, List[dict]] = {}
     fetched_props: Set[str] = set()
@@ -217,8 +279,8 @@ def run_fetcher():
         "BEE-BAKED FETCH: Running primary precision pull"
         f" ({_credits_for_config(active_primary) * 2} credits/run)"
     )
-    primary_sharp = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props)
-    primary_soft = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props)
+    primary_sharp = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
+    primary_soft = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
 
     active_secondary = filter_config_in_season(SECONDARY_CONFIG)
     secondary_sharp = 0
@@ -231,8 +293,8 @@ def run_fetcher():
             "BEE-BAKED FETCH: Running secondary expansion pull"
             f" ({_credits_for_config(active_secondary) * 2} credits/run)"
         )
-        secondary_sharp = _fetch_config(cache, ODDS_API_KEY_2, active_secondary, "secondary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props)
-        secondary_soft = _fetch_config(cache, ODDS_API_KEY_2, active_secondary, "secondary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props)
+        secondary_sharp = _fetch_config(cache, ODDS_API_KEY_2, active_secondary, "secondary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
+        secondary_soft = _fetch_config(cache, ODDS_API_KEY_2, active_secondary, "secondary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
     elif not ENABLE_ODDS_SECONDARY_PULL:
         print("ENABLE_ODDS_SECONDARY_PULL=false. Skipping secondary expansion pull.")
     else:
@@ -249,8 +311,8 @@ def run_fetcher():
             "BEE-BAKED FETCH: Running tertiary expansion pull"
             f" ({_credits_for_config(active_tertiary) * 2} credits/run)"
         )
-        tertiary_sharp = _fetch_config(cache, ODDS_API_KEY_3, active_tertiary, "tertiary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props)
-        tertiary_soft = _fetch_config(cache, ODDS_API_KEY_3, active_tertiary, "tertiary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props)
+        tertiary_sharp = _fetch_config(cache, ODDS_API_KEY_3, active_tertiary, "tertiary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
+        tertiary_soft = _fetch_config(cache, ODDS_API_KEY_3, active_tertiary, "tertiary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
     elif not ENABLE_ODDS_TERTIARY_PULL:
         print("ENABLE_ODDS_TERTIARY_PULL=false. Skipping tertiary expansion pull.")
     else:
@@ -267,8 +329,8 @@ def run_fetcher():
             "BEE-BAKED FETCH: Running partial-game and alternate-market pull"
             f" ({_credits_for_config(active_partial) * 2} credits/run)"
         )
-        partial_sharp = _fetch_config(cache, ODDS_API_KEY_3, active_partial, "partial/alternate sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props)
-        partial_soft = _fetch_config(cache, ODDS_API_KEY_3, active_partial, "partial/alternate soft us", SOFT_REGION, SOFT_BOOKS, fetched_props)
+        partial_sharp = _fetch_config(cache, ODDS_API_KEY_3, active_partial, "partial/alternate sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
+        partial_soft = _fetch_config(cache, ODDS_API_KEY_3, active_partial, "partial/alternate soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
     elif not ENABLE_ODDS_PARTIAL_MARKET_PULL:
         print("ENABLE_ODDS_PARTIAL_MARKET_PULL=false. Skipping partial-game and alternate-market pull.")
     else:
@@ -285,8 +347,8 @@ def run_fetcher():
             "BEE-BAKED FETCH: Running dedicated MLB first-five pull"
             f" ({_credits_for_config(active_mlb_f5) * 2} credits/run)"
         )
-        mlb_f5_sharp = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_f5, "mlb f5 sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props)
-        mlb_f5_soft = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_f5, "mlb f5 soft us", SOFT_REGION, SOFT_BOOKS, fetched_props)
+        mlb_f5_sharp = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_f5, "mlb f5 sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
+        mlb_f5_soft = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_f5, "mlb f5 soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
     elif not ENABLE_MLB_F5_PULL:
         print("ENABLE_MLB_F5_PULL=false. Skipping dedicated MLB first-five pull.")
     else:
@@ -303,8 +365,8 @@ def run_fetcher():
             "BEE-BAKED FETCH: Running dedicated MLB NRFI pull"
             f" ({_credits_for_config(active_mlb_nrfi) * 2} credits/run)"
         )
-        mlb_nrfi_sharp = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_nrfi, "mlb nrfi sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props)
-        mlb_nrfi_soft = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_nrfi, "mlb nrfi soft us", SOFT_REGION, SOFT_BOOKS, fetched_props)
+        mlb_nrfi_sharp = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_nrfi, "mlb nrfi sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
+        mlb_nrfi_soft = _fetch_config(cache, ODDS_API_KEY_4, active_mlb_nrfi, "mlb nrfi soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credit_tracker, ODDS_MAX_EVENTS_PER_ENRICH)
     elif not ENABLE_MLB_NRFI_PULL:
         print("ENABLE_MLB_NRFI_PULL=false. Skipping dedicated MLB NRFI pull.")
     else:

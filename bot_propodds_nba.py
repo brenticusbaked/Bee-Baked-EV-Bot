@@ -26,7 +26,66 @@ from utils.thresholds import env_float
 load_dotenv()
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
+
+
 SGO_API_KEY = os.getenv("SGO_API_KEY")
+SGO_API_KEY_2 = os.getenv("SGO_API_KEY_2")
+SGO_API_KEY_3 = os.getenv("SGO_API_KEY_3")
+SGO_MAX_EVENTS_PER_LEAGUE = max(0, int(os.getenv("SGO_MAX_EVENTS_PER_LEAGUE", "0")))
+
+
+def _sgo_keys():
+    return [key for key in (SGO_API_KEY, SGO_API_KEY_2, SGO_API_KEY_3) if key]
+
+
+def _sgo_fetch(url: str, league: str, keys: list) -> dict | None:
+    """Fetch a league from SGO, rotating through available keys on 429."""
+    saw_retry = False
+    for key_index, api_key in enumerate(keys, start=1):
+        params = {"apiKey": api_key, "leagueID": league, "oddsAvailable": "true"}
+        try:
+            resp = request("GET", url, params=params, timeout=15, retry_on_429=False)
+            remaining = resp.headers.get("x-requests-remaining")
+            if remaining is not None:
+                print(f"[prop_bot] SGO key #{key_index} x-requests-remaining: {remaining}")
+            if resp.status_code == 429:
+                print(f"[prop_bot] {league}: rate-limited on SGO key #{key_index}; trying next key.")
+                continue
+            return resp.json()
+        except requests.exceptions.RetryError:
+            saw_retry = True
+            print(f"[prop_bot] {league}: transient retry exhaustion on SGO key #{key_index}; trying next key.")
+            continue
+        except requests.HTTPError as exc:
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", None) if resp else None
+            body = ""
+            try:
+                body = (resp.text or "")[:300] if resp is not None else ""
+            except Exception:
+                body = ""
+            if status == 400 or "unsupported" in body.lower():
+                print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
+                raise _SgoUnsupportedLeague(league)
+            if status == 429:
+                print(f"[prop_bot] {league}: rate-limited on SGO key #{key_index}; trying next key.")
+                continue
+            print(f"[prop_bot] {league}: SGO key #{key_index} HTTP error {status}; trying next key. | {body[:120]}")
+            continue
+        except Exception as exc:
+            print(f"[prop_bot] {league}: SGO key #{key_index} fetch failed ({type(exc).__name__}); trying next key.")
+            continue
+    if saw_retry:
+        raise _SgoRetryExhausted(league)
+    return None
+
+
+class _SgoUnsupportedLeague(Exception):
+    pass
+
+
+class _SgoRetryExhausted(Exception):
+    pass
 
 DEFAULT_TARGET_STATS = [
     "points",
@@ -522,9 +581,10 @@ def _log_unparsed_event_shape(league: str, event: dict) -> None:
 
 
 def get_sgo_edges():
-    if not SGO_API_KEY:
+    sgo_keys = _sgo_keys()
+    if not sgo_keys:
         return [], [], {"reason": "SGO_API_KEY missing"}
-    
+
     soft_list = {
         "fanduel",
         "draftkings",
@@ -558,57 +618,29 @@ def get_sgo_edges():
     }
 
     for league in PLAYER_PROP_LEAGUES:
-        params = {"apiKey": SGO_API_KEY, "leagueID": league, "oddsAvailable": "true"}
         sport_key = LEAGUE_SPORT_KEYS.get(league, league.lower())
 
         try:
-            data = request("GET", url, params=params, timeout=15, retry_on_429=False).json()
-        except requests.exceptions.RetryError:
-            print(f"[prop_bot] {league}: transient upstream retry exhaustion; skipping league.")
+            data = _sgo_fetch(url, league, sgo_keys)
+        except _SgoUnsupportedLeague:
+            print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
+            scan_stats["soft_skipped_leagues"].append(f"{league}:unsupported")
+            continue
+        except _SgoRetryExhausted:
+            print(f"[prop_bot] {league}: transient retry exhaustion; skipping league.")
             scan_stats["soft_skipped_leagues"].append(f"{league}:retry")
             continue
-        except requests.HTTPError as exc:
-            resp = getattr(exc, "response", None)
-            status_code = getattr(resp, "status_code", None)
-            body = ""
-            try:
-                body = (resp.text or "")[:300] if resp is not None else ""
-            except Exception:
-                body = ""
-            
-            # FIX: Handle 400 Bad Request / unsupported league as a clean skip without logging it as a hard task failure
-            if status_code == 400 or "unsupported league" in body.lower():
-                print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
-                scan_stats["soft_skipped_leagues"].append(f"{league}:unsupported")
-            elif status_code == 429 or "rate limit" in body.lower():
-                print(f"[prop_bot] {league}: rate-limited by SGO; skipping league.")
-                scan_stats["soft_skipped_leagues"].append(f"{league}:rate_limit")
-            else:
-                print(
-                    f"[prop_bot] {league}: fetch failed ({status_code or 'HTTPError'}); "
-                    f"skipping league | body={body}"
-                )
-                scan_stats["errored_leagues"].append(f"{league}:{status_code or 'http'}")
-            
-            if status_code == 429:
-                break
-            continue
-        except Exception as exc:
-            exc_str = str(exc)
-            if "RetryError" in type(exc).__name__ or "retry" in exc_str.lower() or "rate limit" in exc_str.lower():
-                print(f"[prop_bot] {league}: transient upstream retry exhaustion; skipping league.")
-                scan_stats["soft_skipped_leagues"].append(f"{league}:retry")
-                continue
-            if "400" in exc_str or "unsupported league" in exc_str.lower():
-                print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
-                scan_stats["soft_skipped_leagues"].append(f"{league}:unsupported")
-            else:
-                print(f"[prop_bot] {league}: fetch failed ({type(exc).__name__}); skipping league")
-                scan_stats["errored_leagues"].append(f"{league}:{type(exc).__name__}")
+
+        if data is None:
+            print(f"[prop_bot] {league}: SGO keys exhausted; skipping league.")
+            scan_stats["errored_leagues"].append(f"{league}:keys_exhausted")
             continue
 
         try:
             events_list = _extract_sgo_events(data)
+
+            if SGO_MAX_EVENTS_PER_LEAGUE and events_list:
+                events_list = events_list[:SGO_MAX_EVENTS_PER_LEAGUE]
 
             if not events_list:
                 if isinstance(data, dict):
