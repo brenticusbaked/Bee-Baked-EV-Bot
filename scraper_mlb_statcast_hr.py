@@ -8,6 +8,8 @@ from db_manager import load_tracker_state, save_tracker_state
 from services.last_ten import build_last_ten_context_line
 from utils.config import env_flag
 from utils.thresholds import env_float
+from utils.venue_coordinates import lookup_mlb_venue
+from utils.weather import fetch_open_meteo_weather, weather_hr_boost
 
 STATE_KEY = "mlb_hr_model_cache"
 CACHE_FILE = "hr_cache.json"
@@ -205,27 +207,7 @@ def _parse_weather(weather: dict | None) -> dict:
 
 
 def _weather_boost(profile: dict) -> float:
-    if profile.get("dome"):
-        return 0.0
-
-    boost = 0.0
-    temp_f = profile.get("temp_f")
-    wind_mph = profile.get("wind_mph")
-    humidity_pct = profile.get("humidity_pct")
-
-    if temp_f is not None:
-        boost += max(-0.01, min(0.02, (temp_f - 72.0) * 0.001))
-    if wind_mph is not None:
-        boost += max(-0.01, min(0.015, (wind_mph - 5.0) * 0.0015))
-    if humidity_pct is not None:
-        boost += max(-0.005, min(0.008, (humidity_pct - 50.0) * 0.0002))
-
-    condition = str(profile.get("condition") or "").lower()
-    if any(token in condition for token in ("rain", "drizzle", "mist", "fog")):
-        boost -= 0.004
-    if any(token in condition for token in ("wind", "breezy", "gust")) and wind_mph is not None:
-        boost += max(-0.004, min(0.008, wind_mph * 0.0007))
-    return boost
+    return weather_hr_boost(profile)
 
 
 def _build_team_context_map(slate_games):
@@ -233,6 +215,16 @@ def _build_team_context_map(slate_games):
     for game in slate_games:
         weather = _parse_weather(game.get("weather"))
         venue = game.get("venue")
+
+        coords = lookup_mlb_venue(venue)
+        if coords:
+            meteo = fetch_open_meteo_weather(coords[0], coords[1])
+            if meteo:
+                weather["temp_f"] = meteo.get("temp_f", weather.get("temp_f"))
+                weather["wind_mph"] = meteo.get("wind_mph", weather.get("wind_mph"))
+                weather["wind_direction"] = meteo.get("wind_direction")
+                weather["precipitation"] = meteo.get("precipitation_mm", 0.0)
+
         park_factor = _park_factor_for_venue(venue)
         matchup = f"{game.get('away_team')} @ {game.get('home_team')}"
         for team_name, opponent in ((game.get("home_team"), game.get("away_team")), (game.get("away_team"), game.get("home_team"))):
