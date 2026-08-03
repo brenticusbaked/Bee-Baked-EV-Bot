@@ -234,8 +234,7 @@ def _fetch_config(
         }
 
         try:
-            response = requests.get(url, params=params, timeout=20)
-            response.raise_for_status()
+            response = request("GET", url, params=params, timeout=20)
             events = response.json()
             if not credit_tracker.charge(request_credits):
                 continue
