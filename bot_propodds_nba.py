@@ -53,7 +53,18 @@ def _sgo_fetch(url: str, league: str, keys: list) -> dict | None:
             if resp.status_code == 429:
                 print(f"[prop_bot] {league}: rate-limited on SGO key #{key_index}; trying next key.")
                 continue
-            return resp.json()
+            data = resp.json()
+            if isinstance(data, dict) and data.get("success") is False:
+                error = (data.get("error") or "").lower()
+                if "rate limit" in error or "quota" in error or "too many" in error:
+                    print(f"[prop_bot] {league}: rate-limited on SGO key #{key_index}; trying next key.")
+                    continue
+                if "unsupported" in error:
+                    print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
+                    raise _SgoUnsupportedLeague(league)
+                print(f"[prop_bot] {league}: SGO key #{key_index} API error: {data.get('error')}; trying next key.")
+                continue
+            return data
         except requests.exceptions.RetryError:
             saw_retry = True
             print(f"[prop_bot] {league}: transient retry exhaustion on SGO key #{key_index}; trying next key.")

@@ -32,6 +32,14 @@ def get_sgo_results(league_id, date_str, api_key):
         response = request("GET", url, params=params, timeout=15, retry_on_429=False)
         data = response.json()
 
+        if isinstance(data, dict) and data.get("success") is False:
+            error = (data.get("error") or "").lower()
+            if "rate limit" in error or "quota" in error or "too many" in error:
+                print(f"SGO rate-limited for {league_id} on {date_str}.")
+                return {"players": {}, "events": [], "rate_limited": True, "unsupported": False}
+            if "unsupported" in error:
+                return {"players": {}, "events": [], "rate_limited": False, "unsupported": True}
+
         if isinstance(data, list):
             events = data
         elif isinstance(data, dict):

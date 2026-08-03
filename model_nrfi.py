@@ -39,7 +39,8 @@ def get_best_nrfi_odds(event_id, target_selection):
         return None, None, None, None
 
     for game in cache.get("baseball_mlb", []):
-        if str(game["id"]) != str(event_id):
+        game_id = game.get("id")
+        if game_id is None or str(game_id) != str(event_id):
             continue
         for bookmaker in game.get("bookmakers", []):
             if bookmaker["key"] == "pinnacle":
@@ -100,14 +101,21 @@ def run_nrfi_model():
         pitcher_stats_cache = {}
         team_offense_cache = {}
         for game in dates[0].get("games", []):
-            away_team = game["teams"]["away"]["team"]["name"]
-            away_team_id = game["teams"]["away"]["team"]["id"]
-            home_team = game["teams"]["home"]["team"]["name"]
+            event_id = game.get("id") or game.get("gamePk")
+            if not event_id:
+                continue
+            away_team = game.get("teams", {}).get("away", {}).get("team", {}).get("name")
+            away_team_id = game.get("teams", {}).get("away", {}).get("team", {}).get("id")
+            home_team = game.get("teams", {}).get("home", {}).get("team", {}).get("name")
+            if not away_team or not home_team or not away_team_id:
+                continue
             matchup = f"{away_team} @ {home_team}"
 
             away_p = game["teams"]["away"].get("probablePitcher")
             home_p = game["teams"]["home"].get("probablePitcher")
             if not away_p or not home_p:
+                continue
+            if not home_p.get("id"):
                 continue
 
             # Data-driven first-inning probability:
@@ -115,6 +123,8 @@ def run_nrfi_model():
             #   - lambda = expected runs from pitcher xERA per inning * away offense factor.
             #   - No runs in first inning ~ Poisson(0 | lambda).
             home_est, home_act, _, _ = get_advanced_pitcher_stats(home_p["id"], pitcher_stats_cache, {})
+            if home_est is None and home_act is None:
+                continue
             home_xera = home_act if home_act is not None else home_est
             if home_xera is None:
                 continue
@@ -128,7 +138,7 @@ def run_nrfi_model():
             ]
 
             for target_bet, target_prob, edge_threshold in target_sides:
-                book, odds, link, selected_market = get_best_nrfi_odds(game["id"], target_bet)
+                book, odds, link, selected_market = get_best_nrfi_odds(event_id, target_bet)
                 if not book:
                     continue
 
@@ -138,7 +148,7 @@ def run_nrfi_model():
                 pinnacle_reference = format_pinnacle_reference(
                     get_master_cache() or {},
                     "baseball_mlb",
-                    game["id"],
+                    event_id,
                     "MODEL_NRFI",
                     target_bet,
                 )
@@ -161,7 +171,7 @@ def run_nrfi_model():
                     f"{units:.2f}",
                     fair_p,
                     "baseball_mlb",
-                    game["id"],
+                    event_id,
                     notes=(
                         f"book={book};market=runs_1st_inning;"
                         f"model=nrfi_pitcher_profile;edge={edge:.4f};target={target_bet}"

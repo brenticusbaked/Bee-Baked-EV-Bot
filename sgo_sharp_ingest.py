@@ -78,6 +78,16 @@ def fetch_sgo_sharp_lines():
                 response.raise_for_status()
                 data = response.json()
 
+                if isinstance(data, dict) and data.get("success") is False:
+                    error = (data.get("error") or "").lower()
+                    if "rate limit" in error or "quota" in error or "too many" in error:
+                        print(f"SGO rate-limited for {sgo_league} on key #{key_index}; trying next key.")
+                        time.sleep(SGO_LEAGUE_STAGGER_SECONDS)
+                        continue
+                    if "unsupported" in error:
+                        print(f"SGO rejected {sgo_league} request (unsupported). Skipping this league.")
+                        break
+
                 for event in data.get("events", []):
                     sgo_id = str(event.get("eventID"))
                     home_team = event.get("homeTeam", {}).get("name", "")
