@@ -99,8 +99,8 @@ jobs:
           ENABLE_ALTERNATE_MARKET_ALERTS: "true"
           ENABLE_PARTIAL_GAME_MARKET_ALERTS: "true"
           ODDS_REFRESH_ON_MAIN: "true"
-          ODDS_MAX_CREDITS_PER_RUN: "96"
-          MAX_EVENTS_PER_ENRICH: "10"
+          ODDS_MAX_CREDITS_PER_RUN: "192"
+          MAX_EVENTS_PER_ENRICH: "25"
           SCRATCH_GUARD_START_GRACE_MINUTES: "180"
           SCRATCH_GUARD_SCHEDULE_GRACE_MINUTES: "360"
           SCRATCH_GUARD_TRACE: ${{ inputs.scratch_guard_trace || 'false' }}
@@ -129,7 +129,7 @@ jobs:
           EXECUTION_MAX_NOTIONAL: "0"
           EXECUTION_MAX_SYMBOL_EXPOSURE: "0"
           SHARP_BOOK_HIERARCHY: "pinnacle,circa,bookmaker,cris,draftkings"
-          PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,betonline"
+          PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,draftkings,betonline"
           PROXY_LIST: ${{ secrets.PROXY_LIST }}
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}

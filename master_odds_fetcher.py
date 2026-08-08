@@ -13,9 +13,9 @@ ODDS_API_KEY_2 = os.getenv("ODDS_API_KEY_2")
 ODDS_API_KEY_3 = os.getenv("ODDS_API_KEY_3")
 ODDS_API_KEY_4 = os.getenv("ODDS_API_KEY_4")
 
-ODDS_MAX_CREDITS_PER_RUN = int(os.getenv("ODDS_MAX_CREDITS_PER_RUN", "48"))
+ODDS_MAX_CREDITS_PER_RUN = int(os.getenv("ODDS_MAX_CREDITS_PER_RUN", "192"))
 ODDS_MAX_EVENTS_PER_ENRICH = int(
-    os.getenv("ODDS_MAX_EVENTS_PER_ENRICH", os.getenv("MAX_EVENTS_PER_ENRICH", "3"))
+    os.getenv("ODDS_MAX_EVENTS_PER_ENRICH", os.getenv("MAX_EVENTS_PER_ENRICH", "25"))
 )
 
 

@@ -192,6 +192,10 @@ STAT_ALIASES = {
     "batter_total_bases": "total_bases",
     "hr": "home_runs",
     "hrs": "home_runs",
+    "homerun": "home_runs",
+    "homeruns": "home_runs",
+    "batter_homerun": "home_runs",
+    "batter_homeruns": "home_runs",
     "home_run": "home_runs",
     "home_runs": "home_runs",
     "batter_home_runs": "home_runs",
@@ -642,11 +646,13 @@ def get_sgo_edges():
         "errored_leagues": [],
     }
 
-    for league in PLAYER_PROP_LEAGUES:
+    n_keys = len(sgo_keys)
+    for i, league in enumerate(PLAYER_PROP_LEAGUES):
         sport_key = LEAGUE_SPORT_KEYS.get(league, league.lower())
+        rotated_keys = sgo_keys[i % n_keys:] + sgo_keys[:i % n_keys]
 
         try:
-            data = _sgo_fetch(url, league, sgo_keys)
+            data = _sgo_fetch(url, league, rotated_keys)
         except _SgoUnsupportedLeague:
             print(f"[prop_bot] {league}: skipped (unsupported on current SGO plan).")
             scan_stats["soft_skipped_leagues"].append(f"{league}:unsupported")
