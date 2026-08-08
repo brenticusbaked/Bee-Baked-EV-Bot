@@ -1,0 +1,53 @@
+name: Fast Player Props
+
+on:
+  schedule:
+    # Run every 30 minutes so props are scanned without waiting on the heavy main pipeline.
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: fast-props
+  cancel-in-progress: false
+
+jobs:
+  fast-props:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Fast Player Prop Scan
+        env:
+          SGO_API_KEY: ${{ secrets.SGO_API_KEY }}
+          SGO_API_KEY_2: ${{ secrets.SGO_API_KEY_2 }}
+          SGO_API_KEY_3: ${{ secrets.SGO_API_KEY_3 }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
+          DAILY_SLIPS_WEBHOOK_URL: ${{ secrets.DAILY_SLIPS_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PROP_EV_THRESHOLD: "0.002"
+          PROP_NEAR_MISS_THRESHOLD: "0.0005"
+          PROP_CONFIDENCE_FULL_BOOKS: "1.0"
+          PROP_UNCERTAINTY_Z: "0.0"
+          PROP_KELLY_FRACTION: "0.25"
+          PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,draftkings,betonline"
+          PLAYER_PROP_STATS: ""
+          SGO_LEAGUE_STAGGER_SECONDS: "1.5"
+          SGO_MAX_EVENTS_PER_LEAGUE: "0"
+          USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        run: |
+          python bot_propodds_nba.py

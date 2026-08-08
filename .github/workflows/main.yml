@@ -80,6 +80,7 @@ jobs:
           DISCORD_WATCHLIST_WEBHOOK_URL: ${{ secrets.DISCORD_WATCHLIST_WEBHOOK_URL }}
           ENABLE_NEWS: "true"
           ENABLE_NBA_PROP_BOT: "true"
+          ENABLE_PLAYER_PROP_BOT: "false"
           ENABLE_WNBA_PROP_BOT: "false"
           ENABLE_PLAYER_PROPS_PULL: "true"
           ENABLE_NBA_MODEL: "true"
