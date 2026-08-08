@@ -2,7 +2,7 @@ import os
 import time
 from typing import Dict, List, Set
 
-from db_manager import save_master_cache
+from db_manager import get_master_cache, save_master_cache
 from services.http_client import request
 from utils.config import env_flag
 from utils.seasons import filter_config_in_season
@@ -13,9 +13,9 @@ ODDS_API_KEY_2 = os.getenv("ODDS_API_KEY_2")
 ODDS_API_KEY_3 = os.getenv("ODDS_API_KEY_3")
 ODDS_API_KEY_4 = os.getenv("ODDS_API_KEY_4")
 
-ODDS_MAX_CREDITS_PER_RUN = int(os.getenv("ODDS_MAX_CREDITS_PER_RUN", "192"))
+ODDS_MAX_CREDITS_PER_RUN = int(os.getenv("ODDS_MAX_CREDITS_PER_RUN", "300"))
 ODDS_MAX_EVENTS_PER_ENRICH = int(
-    os.getenv("ODDS_MAX_EVENTS_PER_ENRICH", os.getenv("MAX_EVENTS_PER_ENRICH", "25"))
+    os.getenv("ODDS_MAX_EVENTS_PER_ENRICH", os.getenv("MAX_EVENTS_PER_ENRICH", "50"))
 )
 
 
@@ -266,7 +266,7 @@ def run_fetcher():
     credit_tracker = _CreditTracker(ODDS_MAX_CREDITS_PER_RUN)
     print(f"BEE-BAKED FETCH: starting with credit cap of {credit_tracker.limit}")
 
-    cache: Dict[str, List[dict]] = {}
+    cache: Dict[str, List[dict]] = get_master_cache() or {}
     fetched_props: Set[str] = set()
 
     primary_sharp = 0
