@@ -267,6 +267,7 @@ STAT_LABELS = {
     "interceptions": "INTERCEPTIONS",
 }
 
+
 LEAGUE_SPORT_KEYS = {
     "NBA": "basketball_nba",
     "WNBA": "basketball_wnba",
