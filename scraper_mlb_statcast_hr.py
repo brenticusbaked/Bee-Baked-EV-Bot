@@ -5,6 +5,7 @@ from functools import lru_cache
 import requests
 
 from db_manager import load_tracker_state, save_tracker_state
+from services.http_client import post_discord
 from services.last_ten import build_last_ten_context_line
 from utils.config import env_flag
 from utils.thresholds import env_float
@@ -463,21 +464,21 @@ def _build_field(rec):
     name = f"{rec['name']} ({rec['team']}) vs {rec['opponent']} - {rec['tier']}"
     return {
         "name": name[:256],
-        "value": value[:1024],
+        "value": value[:512],
         "inline": False,
     }
 
 
 def format_discord_message(recommendations):
-    """Format all home run recommendations into one or more Discord embeds."""
+    """Format all home run recommendations into one or more Discord payloads."""
     if not recommendations:
-        return None
+        return []
 
-    # Discord limits: 10 embeds per message and ~6000 embed characters total.
-    # Keep each embed small so we stay under the character cap and field limits.
+    # Discord limits: 6,000 total embed characters per message. Build one embed
+    # per message with a small number of fields so we never exceed the cap.
     recommendations = recommendations[:80]
     embeds = []
-    chunk_size = 8
+    chunk_size = 6
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
     for i in range(0, len(recommendations), chunk_size):
         chunk = recommendations[i : i + chunk_size]
@@ -493,21 +494,27 @@ def format_discord_message(recommendations):
             }
         embeds.append(embed)
 
-    return {"content": "New +EV Home Run Model slips generated!", "embeds": embeds}
+    payloads = []
+    for i, embed in enumerate(embeds):
+        payload = {"embeds": [embed]}
+        if i == 0:
+            payload["content"] = "New +EV Home Run Model slips generated!"
+        payloads.append(payload)
+    return payloads
 
 
-def send_to_discord(payload):
-    """POST the formatted payload to Discord."""
-    if not payload or not DISCORD_WEBHOOK_URL:
+def send_to_discord(payloads):
+    """POST each formatted payload to Discord in sequence."""
+    if not payloads or not DISCORD_WEBHOOK_URL:
         print("No payload generated or Discord webhook URL is missing.")
         return
 
-    try:
-        response = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=10)
-        response.raise_for_status()
+    for i, payload in enumerate(payloads):
+        if not post_discord(payload, webhook_url=DISCORD_WEBHOOK_URL):
+            print(f"Discord webhook failed for HR model on message {i + 1}/{len(payloads)}.")
+            break
+    else:
         print("Successfully sent Home Run +EV alerts to Discord channel.")
-    except Exception as exc:
-        print(f"Discord webhook failed for HR model: {exc}")
 
 
 def run_hr_pipeline():
@@ -526,8 +533,8 @@ def run_hr_pipeline():
     print(f"Generated safe unit sizing recommendations for {len(recommendations)} high-value power hitters.")
 
     if recommendations:
-        payload = format_discord_message(recommendations)
-        send_to_discord(payload)
+        payloads = format_discord_message(recommendations)
+        send_to_discord(payloads)
 
     return {
         "detail": "hr model execution complete",

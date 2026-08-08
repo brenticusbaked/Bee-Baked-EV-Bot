@@ -101,6 +101,13 @@ jobs:
           ODDS_REFRESH_ON_MAIN: "true"
           ODDS_MAX_CREDITS_PER_RUN: "192"
           MAX_EVENTS_PER_ENRICH: "25"
+          ENABLE_MLB_NRFI_PULL: "true"
+          NRFI_MODEL_EDGE_THRESHOLD: "0.015"
+          NRFI_YRFI_MODEL_EDGE_THRESHOLD: "0.015"
+          HR_MODEL_ONLY_TIER1: "false"
+          PROP_EV_THRESHOLD: "0.005"
+          PROP_NEAR_MISS_THRESHOLD: "0.001"
+          PROP_CONFIDENCE_FULL_BOOKS: "1.0"
           SCRATCH_GUARD_START_GRACE_MINUTES: "180"
           SCRATCH_GUARD_SCHEDULE_GRACE_MINUTES: "360"
           SCRATCH_GUARD_TRACE: ${{ inputs.scratch_guard_trace || 'false' }}
