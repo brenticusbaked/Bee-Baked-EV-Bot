@@ -475,10 +475,10 @@ def format_discord_message(recommendations):
         return []
 
     # Discord limits: 6,000 total embed characters per message. Build one embed
-    # per message with a small number of fields so we never exceed the cap.
+    # per message so each HR alert is its own clean Discord message.
     recommendations = recommendations[:80]
     embeds = []
-    chunk_size = 6
+    chunk_size = 1
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
     for i in range(0, len(recommendations), chunk_size):
         chunk = recommendations[i : i + chunk_size]
