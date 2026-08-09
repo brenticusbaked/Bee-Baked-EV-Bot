@@ -23,7 +23,13 @@ from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL, DEFAULT_WEBHOOK_URL
 from utils.odds import decimal_to_american, fair_probabilities_from_prices, quarter_kelly_units
-from utils.scratch_guard import filter_valid_events, format_start_context, validate_bookmaker_outcomes
+from utils.scratch_guard import (
+    STARTED_STATUSES,
+    filter_valid_events,
+    format_start_context,
+    safe_parse_commence_time,
+    validate_bookmaker_outcomes,
+)
 from utils.thresholds import env_float, env_int
 
 
@@ -57,6 +63,23 @@ EXECUTION_MAX_ORDER_UNITS = _uncapped_env_float("EXECUTION_MAX_ORDER_UNITS", 5.0
 EXECUTION_MAX_NOTIONAL = _uncapped_env_float("EXECUTION_MAX_NOTIONAL", 1000.0)
 # Per-symbol exposure ceiling for the RiskManager. Defaults to the per-order unit
 # cap so a single max-size order is never rejected by symbol exposure.
+# Reject events that have already started or whose scheduled start is in the past
+# by more than a small buffer, so the execution desk never bets into live games.
+EXECUTION_START_BUFFER_MINUTES = env_float("EXECUTION_START_BUFFER_MINUTES", 2.0)
+
+
+def _is_event_started(event: dict) -> bool:
+    """Return True if an event has already kicked off."""
+    status = str(event.get("status", "")).strip().lower()
+    if status in STARTED_STATUSES:
+        return True
+    commence = safe_parse_commence_time(str(event.get("commence_time") or ""))
+    if not commence:
+        return False
+    minutes_past = (datetime.now(timezone.utc) - commence).total_seconds() / 60.0
+    return minutes_past > EXECUTION_START_BUFFER_MINUTES
+
+
 EXECUTION_MAX_SYMBOL_EXPOSURE = _uncapped_env_float(
     "EXECUTION_MAX_SYMBOL_EXPOSURE", EXECUTION_MAX_ORDER_UNITS
 )
@@ -181,6 +204,8 @@ def run_execution_scan() -> dict:
 
     for sport, events in cache.items():
         for event in filter_valid_events(events, sport):
+            if _is_event_started(event):
+                continue
             matchup = f"{event['away_team']} @ {event['home_team']}"
             markets: Dict[str, dict] = {}
             for bookmaker in event.get("bookmakers", []):

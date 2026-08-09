@@ -154,7 +154,8 @@ def run_grader():
                     break # Success! Break the key loop
                     
                 print(f"SGO rate-limited for {league} on key #{key_index}; trying next key.")
-                
+                time.sleep(SGO_GRADER_FETCH_DELAY_SECONDS)
+
             if result.get("unsupported"):
                 continue # Skip grading this bet
                 

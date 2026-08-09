@@ -84,10 +84,21 @@ def get_best_spread(target_team: str):
     return None, None, None, None, None
 
 
+_ESPN_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 def get_espn_schedule(date_str: str):
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard?dates={date_str}"
     try:
-        return get_json(url).get("events", [])
+        return get_json(url, headers=_ESPN_HEADERS).get("events", [])
     except Exception as exc:
         print(f"ESPN WNBA schedule fetch failed: {exc}")
         return []

@@ -70,6 +70,8 @@ def fetch_sgo_sharp_lines():
         league_success = False
 
         for key_index, sgo_key in enumerate(sgo_keys, start=1):
+            if key_index > 1 and SGO_LEAGUE_STAGGER_SECONDS > 0:
+                time.sleep(SGO_LEAGUE_STAGGER_SECONDS)
             url = f"https://api.sportsgameodds.com/v2/events?apiKey={sgo_key}&leagueID={sgo_league}&date={today}&includeOdds=true"
 
             try:
