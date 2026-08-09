@@ -5,6 +5,7 @@ from typing import Dict, List, Set
 from db_manager import get_master_cache, save_master_cache
 from services.http_client import request
 from utils.config import env_flag
+from utils.scratch_guard import filter_valid_events
 from utils.seasons import filter_config_in_season
 
 
@@ -238,7 +239,7 @@ def _fetch_config(
 
         try:
             response = request("GET", url, params=params, timeout=20)
-            events = response.json()
+            events = filter_valid_events(response.json(), sport)
             if not credit_tracker.charge(request_credits):
                 continue
 

@@ -457,14 +457,14 @@ def _build_field(rec):
         f"Quarter-Kelly Sizing: **{rec['recommended_units']}u**\n"
         f"ISO: `{rec['iso']}` | HR/AB: `{rec['hr_per_ab']}`\n"
         f"Park Factor: `{rec['park_factor']}` | Implied HR Prob: `{rec['implied_prob']}`\n"
+        f"{last_ten}\n"
         f"{weather_line}\n"
-        f"{statcast_line}\n"
-        f"{last_ten}"
+        f"{statcast_line}"
     )
     name = f"{rec['name']} ({rec['team']}) vs {rec['opponent']} - {rec['tier']}"
     return {
         "name": name[:256],
-        "value": value[:512],
+        "value": value[:1024],
         "inline": False,
     }
 
