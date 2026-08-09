@@ -2,10 +2,10 @@ name: Daily Stat Ingest
 
 on:
   schedule:
-    # 09:00 UTC = 4:00 AM Central (daylight). Runs after the slate finishes so
-    # yesterday's box scores are final. Populates the *_player_logs tables that
-    # feed the "Last 10" hit-rate context on Discord slips. No Odds API credits.
-    - cron: '0 9 * * *'
+    # 09:00 UTC = 4 AM Central (yesterday's final box scores).
+    # 23:00 UTC = 6 PM Eastern (today's mostly-final day games).
+    # Populates *_player_logs that feed the "Last 10" hit-rate context.
+    - cron: '0 9,23 * * *'
   workflow_dispatch:
 
 concurrency:

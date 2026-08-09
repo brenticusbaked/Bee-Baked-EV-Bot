@@ -2,9 +2,9 @@ name: Fast Odds Refresh
 
 on:
   schedule:
-    # Top up the master cache between the four main pipeline runs
-    # (13, 15, 18, 20 UTC) without waiting another 6+ hours.
-    - cron: '0 16,19,22 * * *'
+    # Aggressively refresh the master cache every 30 minutes during the
+    # active betting window. The 40-credit cap keeps runs lightweight.
+    - cron: '*/30 12-23 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -42,8 +42,8 @@ jobs:
           ODDS_API_SOFT_REGION: "us"
           ODDS_API_SHARP_BOOKS: "pinnacle"
           ODDS_API_SOFT_BOOKS: "fanduel,draftkings,betmgm,bet365,caesars,bovada"
-          ODDS_MAX_CREDITS_PER_RUN: "80"
-          ODDS_MAX_EVENTS_PER_ENRICH: "25"
+          ODDS_MAX_CREDITS_PER_RUN: "40"
+          ODDS_MAX_EVENTS_PER_ENRICH: "20"
           ENABLE_PLAYER_PROPS_PULL: "false"
           ENABLE_ODDS_SECONDARY_PULL: "true"
           ENABLE_ODDS_TERTIARY_PULL: "true"
