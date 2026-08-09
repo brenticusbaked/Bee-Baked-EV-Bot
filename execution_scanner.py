@@ -65,7 +65,7 @@ EXECUTION_MAX_NOTIONAL = _uncapped_env_float("EXECUTION_MAX_NOTIONAL", 1000.0)
 # cap so a single max-size order is never rejected by symbol exposure.
 # Reject events that have already started or whose scheduled start is in the past
 # by more than a small buffer, so the execution desk never bets into live games.
-EXECUTION_START_BUFFER_MINUTES = env_float("EXECUTION_START_BUFFER_MINUTES", 2.0)
+EXECUTION_START_BUFFER_MINUTES = env_float("EXECUTION_START_BUFFER_MINUTES", 15.0)
 
 
 def _is_event_started(event: dict) -> bool:
