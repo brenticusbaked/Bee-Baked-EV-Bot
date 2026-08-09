@@ -8,8 +8,8 @@ from dotenv import load_dotenv
 from db_manager import is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
-from services.discord_channels import BET_ALERTS_WEBHOOK_URL
-from services.http_client import request
+from services.discord_channels import BET_ALERTS_WEBHOOK_URL, MODERATOR_WEBHOOK_URL
+from services.http_client import post_discord, request
 from services.last_ten import build_last_ten_context_line
 from utils.links import sportsbook_search_link
 from utils.odds import decimal_to_american
@@ -891,16 +891,26 @@ def main():
         if errored:
             detail += f"; skipped leagues: {', '.join(errored)}"
         
-    meta = {}
     near_miss_summary = _near_miss_summary(near_misses)
-    if near_miss_summary:
-        meta["near_miss_summary"] = near_miss_summary
-        
+    if near_miss_summary and MODERATOR_WEBHOOK_URL:
+        post_discord(
+            {
+                "embeds": [
+                    {
+                        "title": "Player Prop Near Misses",
+                        "description": near_miss_summary,
+                        "color": 15158332,
+                    }
+                ]
+            },
+            webhook_url=MODERATOR_WEBHOOK_URL,
+        )
+
     return {
         "detail": detail,
         "count": len(picks),
         "label": "alerts",
-        "meta": meta,
+        "meta": {},
     }
 
 if __name__ == "__main__":

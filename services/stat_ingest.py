@@ -22,6 +22,16 @@ ENABLE_NFL_STAT_INGEST = os.getenv("ENABLE_NFL_STAT_INGEST", "true").strip().low
 ENABLE_SOCCER_STAT_INGEST = os.getenv("ENABLE_SOCCER_STAT_INGEST", "true").strip().lower() in {"1", "true", "yes", "on"}
 ENABLE_TENNIS_STAT_INGEST = os.getenv("ENABLE_TENNIS_STAT_INGEST", "true").strip().lower() in {"1", "true", "yes", "on"}
 
+_ESPN_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
 _DEFAULT_SOCCER_LEAGUES = "ENG-Premier League,USA-Major League Soccer"
 SOCCER_STAT_LEAGUES = [
     league.strip()
@@ -255,7 +265,7 @@ def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict
         f"https://site.api.espn.com/apis/site/v2/sports/{sport_path}/scoreboard?dates={day}"
     )
     try:
-        scoreboard = get_json(scoreboard_url)
+        scoreboard = get_json(scoreboard_url, headers=_ESPN_HEADERS)
     except Exception as exc:
         print(f"[stat_ingest] {league} scoreboard fetch failed: {exc}")
         return []
@@ -274,7 +284,7 @@ def fetch_nba_logs(game_date: date, league: str = "basketball_nba") -> List[Dict
             f"https://site.api.espn.com/apis/site/v2/sports/{sport_path}/summary?event={event_id}"
         )
         try:
-            summary = get_json(summary_url)
+            summary = get_json(summary_url, headers=_ESPN_HEADERS)
         except Exception as exc:
             print(f"[stat_ingest] {league} summary {event_id} fetch failed: {exc}")
             continue
@@ -355,7 +365,7 @@ def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
         f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates={day}"
     )
     try:
-        scoreboard = get_json(scoreboard_url)
+        scoreboard = get_json(scoreboard_url, headers=_ESPN_HEADERS)
     except Exception as exc:
         print(f"[stat_ingest] NFL scoreboard fetch failed: {exc}")
         return []
@@ -374,7 +384,7 @@ def fetch_nfl_logs(game_date: date) -> List[Dict[str, Any]]:
             f"https://site.api.espn.com/apis/site/v2/sports/football/nfl/summary?event={event_id}"
         )
         try:
-            summary = get_json(summary_url)
+            summary = get_json(summary_url, headers=_ESPN_HEADERS)
         except Exception as exc:
             print(f"[stat_ingest] NFL summary {event_id} fetch failed: {exc}")
             continue

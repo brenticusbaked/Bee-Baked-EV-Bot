@@ -19,6 +19,11 @@ WATCHLIST_WEBHOOK_URL = _first_env(
     "DISCORD_BET_ALERTS_WEBHOOK_URL",
     "DISCORD_WEBHOOK_URL",
 )
+MODERATOR_WEBHOOK_URL = _first_env(
+    "DISCORD_MODERATOR_WEBHOOK_URL",
+    "DISCORD_STATUS_WEBHOOK_URL",
+    "DISCORD_WEBHOOK_URL",
+)
 ARBITRAGE_WEBHOOK_URL = _first_env("DISCORD_ARBITRAGE_WEBHOOK_URL", "DISCORD_BET_ALERTS_WEBHOOK_URL", "DISCORD_WEBHOOK_URL")
 # Overnight opening-line ("opener") scan: pre-market edges to review before
 # placing. Falls back to the bet-alerts channel when no dedicated hook is set.
