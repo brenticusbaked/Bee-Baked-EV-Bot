@@ -41,7 +41,10 @@ PARLAY_KEYS = [
 ]
 PARLAY_SPORTS = [
     s.strip()
-    for s in os.getenv("PARLAYAPI_SPORTS", "baseball_mlb,basketball_nba").split(",")
+    for s in os.getenv(
+        "PARLAYAPI_SPORTS",
+        "baseball_mlb,basketball_nba,americanfootball_nfl,icehockey_nhl,basketball_wnba",
+    ).split(",")
     if s.strip()
 ]
 PARLAY_MARKETS = os.getenv("PARLAYAPI_MARKETS", "").strip() or None
@@ -49,7 +52,7 @@ PARLAY_SHARP_BOOKS = [
     book.strip().lower()
     for book in os.getenv(
         "PARLAY_SHARP_BOOKS",
-        "pinnacle,circa,bookmaker,cris,draftkings",
+        "pinnacle,circa,cris,bookmaker,draftkings,fanduel,betmgm,caesars,pointsbet,bet365,williamhill_us",
     ).split(",")
     if book.strip()
 ]

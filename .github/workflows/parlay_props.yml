@@ -35,9 +35,9 @@ jobs:
           PARLAYAPI_KEY: ${{ secrets.PARLAYAPI_KEY }}
           PARLAYAPI_KEY_2: ${{ secrets.PARLAYAPI_KEY_2 }}
           PARLAYAPI_KEY_3: ${{ secrets.PARLAYAPI_KEY_3 }}
-          PARLAYAPI_SPORTS: ${{ vars.PARLAYAPI_SPORTS || 'baseball_mlb' }}
+          PARLAYAPI_SPORTS: ${{ vars.PARLAYAPI_SPORTS || 'baseball_mlb,basketball_nba,americanfootball_nfl,icehockey_nhl,basketball_wnba' }}
           PARLAYAPI_MARKETS: ${{ vars.PARLAYAPI_MARKETS || '' }}
-          PARLAY_SHARP_BOOKS: ${{ vars.PARLAY_SHARP_BOOKS || 'pinnacle,circa,bookmaker,cris,draftkings' }}
+          PARLAY_SHARP_BOOKS: ${{ vars.PARLAY_SHARP_BOOKS || 'pinnacle,circa,cris,bookmaker,draftkings,fanduel,betmgm,caesars,pointsbet,bet365,williamhill_us' }}
           PARLAY_EV_THRESHOLD: ${{ vars.PARLAY_EV_THRESHOLD || '0.0' }}
           PARLAY_MAX_ALERTS: ${{ vars.PARLAY_MAX_ALERTS || '5' }}
           PARLAY_MAX_UNITS: ${{ vars.PARLAY_MAX_UNITS || '5.0' }}
