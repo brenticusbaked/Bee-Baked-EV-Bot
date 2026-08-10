@@ -37,11 +37,12 @@ jobs:
           PARLAYAPI_KEY_3: ${{ secrets.PARLAYAPI_KEY_3 }}
           PARLAYAPI_SPORTS: ${{ vars.PARLAYAPI_SPORTS || 'baseball_mlb' }}
           PARLAYAPI_MARKETS: ${{ vars.PARLAYAPI_MARKETS || '' }}
+          PARLAY_SHARP_BOOKS: ${{ vars.PARLAY_SHARP_BOOKS || 'pinnacle,circa,bookmaker,cris,draftkings' }}
           PARLAY_EV_THRESHOLD: ${{ vars.PARLAY_EV_THRESHOLD || '0.0' }}
-          PARLAY_EDGE_THRESHOLD: ${{ vars.PARLAY_EDGE_THRESHOLD || '0.0' }}
           PARLAY_MAX_ALERTS: ${{ vars.PARLAY_MAX_ALERTS || '5' }}
           PARLAY_MAX_UNITS: ${{ vars.PARLAY_MAX_UNITS || '5.0' }}
-          PARLAY_LIMIT: ${{ vars.PARLAY_LIMIT || '50' }}
+          PARLAY_LIMIT: ${{ vars.PARLAY_LIMIT || '100' }}
+          PARLAY_MAX_AGE_SECONDS: ${{ vars.PARLAY_MAX_AGE_SECONDS || '300' }}
           PARLAY_REQUEST_DELAY: ${{ vars.PARLAY_REQUEST_DELAY || '1.0' }}
           DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

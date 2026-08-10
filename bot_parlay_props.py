@@ -1,7 +1,15 @@
+"""ParlayAPI player prop +EV scanner.
+
+Fetches player props from ParlayAPI's /v1/sports/{sport}/props endpoint,
+builds a sharp (Pinnacle-first) fair probability for each prop, compares soft
+book prices, and sends the top +EV alerts to Discord.
+"""
+
 import os
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -9,7 +17,13 @@ from dotenv import load_dotenv
 from db_manager import is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
-from utils.odds import american_to_decimal, decimal_to_american, quarter_kelly_units
+from utils.model_pricing import (
+    fair_american_from_probability,
+    model_edge_from_probability,
+    model_units_from_probability,
+)
+from utils.odds import american_to_decimal, decimal_to_american
+from utils.prop_pricing import consensus_probabilities
 from utils.scratch_guard import safe_parse_commence_time
 from utils.thresholds import env_float, env_int
 
@@ -27,50 +41,47 @@ PARLAY_KEYS = [
 ]
 PARLAY_SPORTS = [
     s.strip()
-    for s in os.getenv("PARLAYAPI_SPORTS", "baseball_mlb").split(",")
+    for s in os.getenv("PARLAYAPI_SPORTS", "baseball_mlb,basketball_nba").split(",")
     if s.strip()
 ]
 PARLAY_MARKETS = os.getenv("PARLAYAPI_MARKETS", "").strip() or None
+PARLAY_SHARP_BOOKS = [
+    book.strip().lower()
+    for book in os.getenv(
+        "PARLAY_SHARP_BOOKS",
+        "pinnacle,circa,bookmaker,cris,draftkings",
+    ).split(",")
+    if book.strip()
+]
 PARLAY_EV_THRESHOLD = env_float("PARLAY_EV_THRESHOLD", 0.0)
-PARLAY_EDGE_THRESHOLD = env_float("PARLAY_EDGE_THRESHOLD", 0.0)
 PARLAY_MAX_ALERTS = env_int("PARLAY_MAX_ALERTS", 5)
 PARLAY_MAX_UNITS = env_float("PARLAY_MAX_UNITS", 5.0)
-PARLAY_LIMIT = env_int("PARLAY_LIMIT", 50)
+PARLAY_LIMIT = env_int("PARLAY_LIMIT", 100)
+PARLAY_MAX_AGE_SECONDS = env_int("PARLAY_MAX_AGE_SECONDS", 300)
 PARLAY_REQUEST_DELAY = env_float("PARLAY_REQUEST_DELAY", 1.0)
 
 
-def _american_to_decimal_safe(american_odds: Any) -> float:
+def _american_to_decimal_safe(american_odds: Any) -> Optional[float]:
     try:
         return float(american_to_decimal(american_odds))
     except Exception:
-        return 0.0
+        return None
 
 
-def _format_selection(opp: dict) -> str:
-    side = str(opp.get("side") or "Unknown").strip()
-    player = str(opp.get("player") or "").strip()
-    if player and player != side:
-        return f"{player} {side}"
-    return side
-
-
-def _format_market(opp: dict) -> str:
-    market_key = str(opp.get("market_key") or "h2h").strip()
-    return market_key.replace("_", " ").upper()
-
-
-def _not_yet_started(opp: dict) -> bool:
-    commence = safe_parse_commence_time(str(opp.get("commence_time") or ""))
+def _not_yet_started(commence_time: Any) -> bool:
+    commence = safe_parse_commence_time(str(commence_time or ""))
     if not commence:
         return True
     return datetime.now(timezone.utc) < commence
 
 
-def _fetch_ev_for_sport(sport: str, api_key: str) -> Optional[Dict[str, Any]]:
-    url = f"{PARLAY_BASE_URL}/sports/{sport}/ev"
+def _fetch_props(sport: str, api_key: str) -> Any:
+    url = f"{PARLAY_BASE_URL}/sports/{sport}/props"
     params: Dict[str, Any] = {"limit": PARLAY_LIMIT}
     if PARLAY_MARKETS:
         params["markets"] = PARLAY_MARKETS
+    if PARLAY_MAX_AGE_SECONDS > 0:
+        params["maxAgeSec"] = PARLAY_MAX_AGE_SECONDS
     headers = {"X-API-Key": api_key}
     try:
         response = requests.get(url, params=params, headers=headers, timeout=20)
@@ -79,104 +90,184 @@ def _fetch_ev_for_sport(sport: str, api_key: str) -> Optional[Dict[str, Any]]:
             return {"rate_limited": True}
         response.raise_for_status()
         data = response.json()
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, list):
+            return []
+        return data
     except Exception as exc:
-        print(f"ParlayAPI fetch failed for {sport}: {exc}")
-        return {}
+        print(f"ParlayAPI props fetch failed for {sport}: {exc}")
+        return []
 
 
-def _opportunity_ev(opp: dict) -> Optional[Dict[str, Any]]:
-    price = opp.get("price")
-    fair_prob_pct = opp.get("fair_prob_pct")
-    book_implied_pct = opp.get("book_implied_pct")
-    if price is None or fair_prob_pct is None:
+def _group_props(
+    rows: List[Dict[str, Any]],
+) -> Dict[Tuple[str, str, str, Any], List[Dict[str, Any]]]:
+    groups: Dict[Tuple[str, str, str, Any], List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        event_id = str(row.get("canonical_event_id") or row.get("event_id") or "unknown")
+        player = str(row.get("player") or "").strip()
+        market = str(row.get("market_key") or "").strip()
+        line = row.get("line")
+        if not player or not market or line is None:
+            continue
+        key = (event_id, player, market, line)
+        groups[key].append(row)
+    return groups
+
+
+def _sharp_fair_probability(
+    group_rows: List[Dict[str, Any]],
+) -> Optional[Dict[str, float]]:
+    prices_by_book: Dict[str, Dict[str, Any]] = {}
+    for row in group_rows:
+        book = str(row.get("bookmaker") or "").strip().lower()
+        if not book:
+            continue
+        over = _american_to_decimal_safe(row.get("over_price"))
+        under = _american_to_decimal_safe(row.get("under_price"))
+        if over is None or under is None:
+            continue
+        if book not in prices_by_book:
+            prices_by_book[book] = {}
+        prices_by_book[book]["over"] = over
+        prices_by_book[book]["under"] = under
+
+    book_pairs = []
+    source_books = []
+    for book in PARLAY_SHARP_BOOKS:
+        sides = prices_by_book.get(book)
+        if not sides or "over" not in sides or "under" not in sides:
+            continue
+        if book == "pinnacle":
+            book_pairs = [
+                {
+                    "over": {"price": sides["over"]},
+                    "under": {"price": sides["under"]},
+                }
+            ]
+            source_books = ["pinnacle"]
+            break
+        book_pairs.append(
+            {
+                "over": {"price": sides["over"]},
+                "under": {"price": sides["under"]},
+            }
+        )
+        source_books.append(book)
+
+    if not book_pairs:
         return None
 
-    decimal_odds = _american_to_decimal_safe(price)
-    if decimal_odds <= 1.0:
+    probabilities = consensus_probabilities(book_pairs, method="power")
+    if not probabilities:
         return None
-
-    true_prob = float(fair_prob_pct) / 100.0
-    ev_pct = (true_prob * decimal_odds) - 1.0
-    if ev_pct < PARLAY_EV_THRESHOLD:
-        return None
-
-    if book_implied_pct is not None:
-        edge_pp = float(fair_prob_pct) - float(book_implied_pct)
-        if edge_pp < PARLAY_EDGE_THRESHOLD:
-            return None
-
-    units = quarter_kelly_units(ev_pct, decimal_odds, cap=PARLAY_MAX_UNITS)
-    if units <= 0.0:
-        return None
-
-    return {
-        "decimal_odds": decimal_odds,
-        "true_prob": true_prob,
-        "ev_pct": ev_pct,
-        "units": units,
-    }
+    return probabilities
 
 
-def _log_and_collect(sport: str, opp: dict, math: dict) -> Optional[Dict[str, Any]]:
-    selection = _format_selection(opp)
-    market = _format_market(opp)
-    matchup = f"{opp.get('away_team', '?')} @ {opp.get('home_team', '?')}"
-    book = str(opp.get("book") or "Unknown").strip()
-    event_id = str(opp.get("canonical_event_id") or opp.get("event_id") or "").strip()
-    price = opp.get("price")
-
-    if event_id:
-        already = is_already_logged(sport, event_id, market, selection)
-    else:
-        already = is_already_logged(matchup, market, selection)
-    if already:
-        return None
-
-    ev_percent = math["ev_pct"] * 100.0
-    logged = log_bet_to_db(
-        matchup,
-        market,
-        selection,
-        sport=sport,
-        event_id=event_id or None,
-        bookmaker=book,
-        odds=price,
-        odds_decimal=math["decimal_odds"],
-        fair_prob=math["true_prob"],
-        edge=ev_percent,
-        edge_pct=ev_percent,
-        units=math["units"],
-    )
-    if not logged:
-        return None
-
-    return {
-        "sport": sport,
-        "matchup": matchup,
-        "market": market,
-        "selection": selection,
-        "book": book,
-        "price": price,
-        "decimal_odds": math["decimal_odds"],
-        "true_prob_pct": float(opp.get("fair_prob_pct") or 0.0),
-        "ev_pct": math["ev_pct"],
-        "units": math["units"],
-        "sharp_anchor": str(opp.get("sharp_anchor") or "pinnacle"),
-    }
-
-
-def _process_opportunities(opportunities: List[dict], sport: str) -> List[Dict[str, Any]]:
+def _process_group(
+    sport: str,
+    event_id: str,
+    away_team: str,
+    home_team: str,
+    player: str,
+    market_key: str,
+    market_display: str,
+    line: Any,
+    group_rows: List[Dict[str, Any]],
+    fair: Dict[str, float],
+) -> List[Dict[str, Any]]:
     picks: List[Dict[str, Any]] = []
-    for opp in opportunities:
-        if not _not_yet_started(opp):
+    matchup = f"{away_team} @ {home_team}"
+    market = str(market_key).replace("_", " ").upper()
+    sharp_books = set(PARLAY_SHARP_BOOKS)
+    sharp_source = ",".join(
+        sorted(
+            {
+                str(row.get("bookmaker_title") or row.get("bookmaker") or "").strip()
+                for row in group_rows
+                if str(row.get("bookmaker") or "").strip().lower() in sharp_books
+            }
+        )
+    ) or "consensus"
+
+    for row in group_rows:
+        book = str(row.get("bookmaker") or "").strip().lower()
+        book_title = str(row.get("bookmaker_title") or book).strip()
+        if not book or book in sharp_books:
             continue
-        math = _opportunity_ev(opp)
-        if not math:
-            continue
-        pick = _log_and_collect(sport, opp, math)
-        if pick:
-            picks.append(pick)
+        for side in ("over", "under"):
+            price = row.get(f"{side}_price")
+            if price in (None, ""):
+                continue
+            true_prob = fair.get(side)
+            if not true_prob:
+                continue
+            try:
+                ev = model_edge_from_probability(true_prob, price)
+            except Exception:
+                continue
+            if ev < PARLAY_EV_THRESHOLD:
+                continue
+            try:
+                units = model_units_from_probability(
+                    true_prob, price, cap=PARLAY_MAX_UNITS
+                )
+            except Exception:
+                continue
+            if units <= 0.0:
+                continue
+
+            selection = f"{player} {side.upper()} {line}"
+            try:
+                already = is_already_logged(sport, event_id, market, selection)
+            except Exception:
+                already = is_already_logged(matchup, market, selection)
+            if already:
+                continue
+
+            decimal_price = _american_to_decimal_safe(price)
+            if not decimal_price:
+                continue
+
+            fair_american = fair_american_from_probability(true_prob)
+            logged = log_bet_to_db(
+                matchup,
+                market,
+                selection,
+                price,
+                ev,
+                f"{units:.2f}",
+                fair_american,
+                sport,
+                event_id,
+                bookmaker=book_title,
+                odds_decimal=decimal_price,
+                fair_prob=true_prob,
+                edge_pct=ev * 100.0,
+            )
+            if not logged:
+                continue
+
+            picks.append(
+                {
+                    "sport": sport,
+                    "matchup": matchup,
+                    "market": market,
+                    "market_display": market_display,
+                    "selection": selection,
+                    "player": player,
+                    "side": side,
+                    "line": line,
+                    "book": book_title,
+                    "book_key": book,
+                    "price": price,
+                    "decimal_odds": decimal_price,
+                    "true_prob_pct": true_prob * 100.0,
+                    "ev_pct": ev,
+                    "units": units,
+                    "sharp_book": sharp_source,
+                    "event_id": event_id,
+                }
+            )
     return picks
 
 
@@ -184,18 +275,16 @@ def _format_discord_embeds(picks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     now = datetime.now(timezone.utc).isoformat()
     embeds: List[Dict[str, Any]] = []
     for pick in picks[:PARLAY_MAX_ALERTS]:
-        true_prob = pick["true_prob_pct"]
         fair_american = "N/A"
-        if true_prob and true_prob > 0.0:
-            fair_decimal = 1.0 / (true_prob / 100.0)
-            try:
-                fair_american = decimal_to_american(fair_decimal)
-            except Exception:
-                fair_american = "N/A"
+        try:
+            fair_decimal = 1.0 / (pick["true_prob_pct"] / 100.0)
+            fair_american = decimal_to_american(fair_decimal)
+        except Exception:
+            pass
 
         ev_percent = pick["ev_pct"] * 100.0
         embed = {
-            "title": "🐝 +EV Alert from The Hive",
+            "title": "🐝 +EV Prop Alert from The Hive",
             "color": 0x2ECC71,
             "fields": [
                 {
@@ -205,13 +294,17 @@ def _format_discord_embeds(picks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 },
                 {
                     "name": "The +EV Play",
-                    "value": f"**{pick['selection']}**\nBook: {pick['book']}\nOdds: {pick['price']}",
+                    "value": (
+                        f"**{pick['selection']} ({pick['market_display']})**\n"
+                        f"Book: {pick['book']}\n"
+                        f"Odds: {pick['price']}"
+                    ),
                     "inline": False,
                 },
                 {
                     "name": "Sharp Baseline",
                     "value": (
-                        f"Sharp: {pick['sharp_anchor']}\n"
+                        f"Sharp: {pick['sharp_book']}\n"
                         f"True Probability: {pick['true_prob_pct']:.2f}%\n"
                         f"Fair Value: {fair_american}"
                     ),
@@ -227,7 +320,7 @@ def _format_discord_embeds(picks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 },
             ],
             "footer": {
-                "text": "BEE BAKED BETS | The Hive +EV Scanner | ParlayAPI"
+                "text": "BEE BAKED BETS | The Hive +EV Scanner | ParlayAPI Props"
             },
             "timestamp": now,
         }
@@ -237,40 +330,62 @@ def _format_discord_embeds(picks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def run_parlay_scan() -> None:
     if not PARLAY_KEYS:
-        print("No PARLAYAPI_KEY configured. Skipping Parlay scan.")
+        print("No PARLAYAPI_KEY configured. Skipping Parlay prop scan.")
         return
     if not BET_ALERTS_WEBHOOK_URL:
-        print("No bet-alerts webhook configured. Skipping Parlay scan.")
+        print("No bet-alerts webhook configured. Skipping Parlay prop scan.")
         return
 
     all_picks: List[Dict[str, Any]] = []
     for sport in PARLAY_SPORTS:
-        data: Optional[Dict[str, Any]] = None
+        data = None
         for api_key in PARLAY_KEYS:
-            data = _fetch_ev_for_sport(sport, api_key)
+            data = _fetch_props(sport, api_key)
             if not data:
                 continue
-            if data.get("rate_limited"):
+            if isinstance(data, dict) and data.get("rate_limited"):
                 time.sleep(1.0)
                 continue
             break
 
-        if not data or not isinstance(data, dict):
+        if not data or not isinstance(data, list):
             continue
 
-        opportunities = data.get("opportunities", [])
-        if not isinstance(opportunities, list):
-            continue
+        rows = [r for r in data if _not_yet_started(r.get("commence_time"))]
+        groups = _group_props(rows)
+        sport_picks = 0
+        for (event_id, player, market_key, line), group_rows in groups.items():
+            fair = _sharp_fair_probability(group_rows)
+            if not fair:
+                continue
+            away_team = group_rows[0].get("away_team", "?")
+            home_team = group_rows[0].get("home_team", "?")
+            market_display = str(group_rows[0].get("market") or market_key)
+            picks = _process_group(
+                sport,
+                str(event_id),
+                str(away_team),
+                str(home_team),
+                player,
+                market_key,
+                market_display,
+                line,
+                group_rows,
+                fair,
+            )
+            all_picks.extend(picks)
+            sport_picks += len(picks)
 
-        picks = _process_opportunities(opportunities, sport)
-        all_picks.extend(picks)
-        print(f"[parlay] {sport}: {len(picks)} alerts")
+        print(
+            f"[parlay] {sport}: {len(groups)} prop markets scanned, "
+            f"{sport_picks} +EV picks"
+        )
 
         if PARLAY_REQUEST_DELAY > 0.0:
             time.sleep(PARLAY_REQUEST_DELAY)
 
     if not all_picks:
-        print("No +EV ParlayAPI opportunities met the threshold.")
+        print("No +EV ParlayAPI prop opportunities met the threshold.")
         return
 
     all_picks.sort(key=lambda item: item.get("ev_pct", 0.0), reverse=True)
@@ -284,7 +399,7 @@ def run_parlay_scan() -> None:
         alert_type="bet_alert",
         webhook_url=BET_ALERTS_WEBHOOK_URL,
     )
-    print(f"Sent {len(embeds)} ParlayAPI +EV alert(s) to Discord.")
+    print(f"Sent {len(embeds)} ParlayAPI +EV prop alert(s) to Discord.")
 
 
 if __name__ == "__main__":
