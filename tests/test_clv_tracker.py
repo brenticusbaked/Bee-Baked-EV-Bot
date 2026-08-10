@@ -29,7 +29,9 @@ class PropConsensusCloseTest(unittest.TestCase):
         self.assertEqual(label, "Pinnacle")
         self.assertGreater(fair_decimal, 1.0)
 
-    def test_no_pinnacle_returns_none(self):
+    def test_without_pinnacle_falls_back_to_the_market_and_says_so(self):
+        # An unrecorded close is invisible to ROI analysis, so a retail-derived
+        # number beats no number — as long as the label makes it distinguishable.
         game = {
             "bookmakers": [
                 {"key": "bookmaker", "markets": [_prop_market(1.87, 1.95)]},
@@ -39,12 +41,23 @@ class PropConsensusCloseTest(unittest.TestCase):
         }
         spec = parse_selection("batter_total_bases", "Wyatt Langford Over 1.5")
         result = clv_tracker._prop_consensus_close(game, ["batter_total_bases"], spec)
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        fair_decimal, label = result
+        self.assertEqual(label, "Market consensus (3)")
+        self.assertGreater(fair_decimal, 1.0)
 
-    def test_no_sharp_book_returns_none(self):
+    def test_single_retail_book_is_still_used(self):
         game = {"bookmakers": [{"key": "draftkings", "markets": [_prop_market(2.1, 1.72)]}]}
         spec = parse_selection("batter_total_bases", "Wyatt Langford Over 1.5")
-        self.assertIsNone(clv_tracker._prop_consensus_close(game, ["batter_total_bases"], spec))
+        result = clv_tracker._prop_consensus_close(game, ["batter_total_bases"], spec)
+        self.assertIsNotNone(result)
+        self.assertEqual(result[1], "Market consensus (1)")
+
+    def test_retail_fallback_can_be_disabled(self):
+        game = {"bookmakers": [{"key": "draftkings", "markets": [_prop_market(2.1, 1.72)]}]}
+        spec = parse_selection("batter_total_bases", "Wyatt Langford Over 1.5")
+        with mock.patch.object(clv_tracker, "ENABLE_PROP_RETAIL_FALLBACK", False):
+            self.assertIsNone(clv_tracker._prop_consensus_close(game, ["batter_total_bases"], spec))
 
     def test_one_sided_market_returns_none(self):
         one_sided = {"key": "batter_total_bases", "outcomes": [
@@ -76,7 +89,7 @@ class RunClvTrackerTest(unittest.TestCase):
         base.update(kw)
         return base
 
-    def test_prop_bet_skipped_without_pinnacle(self):
+    def test_prop_bet_tracked_without_pinnacle(self):
         bet = self._bet(market="batter_total_bases", selection="Wyatt Langford Under 1.5")
         cache = {"baseball_mlb": [{
             "id": "evt1",
@@ -86,8 +99,8 @@ class RunClvTrackerTest(unittest.TestCase):
             ],
         }]}
         result, update = self._run([bet], cache)
-        self.assertEqual(result["count"], 0)
-        update.assert_not_called()
+        self.assertEqual(result["count"], 1)
+        update.assert_called_once()
 
     def test_prop_bet_with_pinnacle_tracked(self):
         bet = self._bet(market="pitcher_strikeouts", selection="Sonny Gray Over 4.5")
@@ -111,13 +124,48 @@ class RunClvTrackerTest(unittest.TestCase):
         self.assertEqual(result["count"], 1)
         update.assert_called_once()
 
-    def test_prop_without_sharp_line_skipped(self):
+    def test_prop_skipped_when_no_book_posts_the_market(self):
         bet = self._bet(market="batter_total_bases", selection="Wyatt Langford Under 1.5")
         cache = {"baseball_mlb": [{
             "id": "evt1",
-            "bookmakers": [{"key": "draftkings", "markets": [_prop_market(2.1, 1.72)]}],
+            "bookmakers": [{"key": "draftkings", "markets": [_prop_market(2.1, 1.72, player="Someone Else")]}],
         }]}
         result, update = self._run([bet], cache)
+        self.assertEqual(result["count"], 0)
+        update.assert_not_called()
+
+    def test_clv_columns_are_not_transposed(self):
+        # closing_line_decimal must hold the price and clv_edge_pct the percent;
+        # swapping them silently corrupts every CLV figure in the report.
+        bet = self._bet(market="h2h", selection="Athletics", odds="+100")
+        cache = {"baseball_mlb": [{
+            "id": "evt1",
+            "bookmakers": [{"key": "pinnacle", "markets": [_h2h_market("Athletics", 1.9)]}],
+        }]}
+        _, update = self._run([bet], cache)
+        kwargs = update.call_args.kwargs
+        self.assertAlmostEqual(kwargs["closing_line"], 1.9, places=6)
+        # placed 2.0 vs close 1.9 -> (2.0 / 1.9 - 1) * 100
+        self.assertAlmostEqual(kwargs["clv_pct"], 5.2632, places=3)
+
+    def test_game_market_falls_back_to_retail_close(self):
+        bet = self._bet(market="h2h", selection="Athletics")
+        cache = {"baseball_mlb": [{
+            "id": "evt1",
+            "bookmakers": [{"key": "draftkings", "markets": [_h2h_market("Athletics", 1.9)]}],
+        }]}
+        result, update = self._run([bet], cache)
+        self.assertEqual(result["count"], 1)
+        update.assert_called_once()
+
+    def test_game_market_fallback_can_be_disabled(self):
+        bet = self._bet(market="h2h", selection="Athletics")
+        cache = {"baseball_mlb": [{
+            "id": "evt1",
+            "bookmakers": [{"key": "draftkings", "markets": [_h2h_market("Athletics", 1.9)]}],
+        }]}
+        with mock.patch.object(clv_tracker, "ENABLE_CLV_BOOK_FALLBACK", False):
+            result, update = self._run([bet], cache)
         self.assertEqual(result["count"], 0)
         update.assert_not_called()
 

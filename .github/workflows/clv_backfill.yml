@@ -1,0 +1,36 @@
+name: CLV Backfill
+
+# Manual only. This walks the entire bets_log rather than the tracker's normal
+# 2-day ungraded window, so it is a maintenance job, not a scheduled one.
+# It reads Supabase and the historical_odds snapshots only — zero Odds API cost.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Write changes (unchecked = dry run, prints what would change)'
+        type: boolean
+        default: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: clv-backfill
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Backfill CLV
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python clv_backfill.py ${{ inputs.apply && '--apply' || '' }}

@@ -26,10 +26,28 @@ SHARP_PROP_BOOKS = {
     if book.strip() and book.strip().lower() in {"pinnacle"}
 }
 PROP_DEVIG_METHOD = os.getenv("PROP_DEVIG_METHOD", "power")
-ENABLE_PROP_RETAIL_FALLBACK = env_flag("ENABLE_PROP_RETAIL_FALLBACK", False)
 
-# Pinnacle is the only allowed sharp baseline; no fallback.
-SHARP_GAME_BOOKS_PRIORITY = ["pinnacle"]
+# Pinnacle remains the only book allowed to set a fair price for *alerting*.
+# Closing-price resolution is a different job: a bet with no recorded close is
+# simply invisible to ROI analysis, which is worse than a close measured against
+# a softer book. When Pinnacle never posts the market, fall back down this list
+# and record which book was actually used via ``closing_source``.
+ENABLE_CLV_BOOK_FALLBACK = env_flag("ENABLE_CLV_BOOK_FALLBACK", True)
+ENABLE_PROP_RETAIL_FALLBACK = env_flag("ENABLE_PROP_RETAIL_FALLBACK", True)
+CLV_CLOSING_BOOK_PRIORITY = [
+    book.strip().lower()
+    for book in os.getenv(
+        "CLV_CLOSING_BOOK_PRIORITY",
+        "pinnacle,circa,betonlineag,bookmaker,draftkings,fanduel,betmgm,caesars",
+    ).split(",")
+    if book.strip()
+]
+
+
+def closing_book_priority() -> list:
+    if not ENABLE_CLV_BOOK_FALLBACK:
+        return ["pinnacle"]
+    return CLV_CLOSING_BOOK_PRIORITY
 
 
 def _fetch_historical_game_data(event_id: str) -> Optional[dict]:
@@ -188,6 +206,79 @@ def _prop_consensus_close(game_data: dict, candidate_keys: list, selection_spec:
     return fair_decimal, label
 
 
+def candidate_market_keys(market: str) -> list:
+    """Feed market keys that could hold the closing line for a logged bet.
+
+    A logged ``market`` is whatever the model recorded, which is not always the
+    key the closing feed publishes under. Anything not resolvable here silently
+    loses its CLV, so aliases belong in this one place.
+    """
+    market_key = str(market).strip().lower()
+    candidate_keys = [market_key]
+
+    if market_key in {"model_nba_spread", "model_nhl_puckline"}:
+        candidate_keys.append("spreads")
+    if market_key == "model_mlb_f5":
+        candidate_keys.extend(["h2h_1st_5_innings", "h2h_1st_half"])
+
+    # Feeds disagree on these keys, so a bet taken under one spelling still has
+    # to find the closing line posted under the other.
+    if market_key in {"player_receiving_yds", "player_reception_yds"}:
+        candidate_keys.extend(["player_receiving_yds", "player_reception_yds"])
+    if market_key in {"player_first_basket", "player_first_field_goal", "first_basket_scorer"}:
+        candidate_keys.extend(["player_first_basket", "player_first_field_goal", "first_basket_scorer"])
+
+    if market_key in {"moneyline", "ml"}:
+        candidate_keys.append("h2h")
+    if market_key in {"spread", "runline", "puckline"}:
+        candidate_keys.append("spreads")
+    if market_key in {"total", "totals", "over/under", "o/u"}:
+        candidate_keys.append("totals")
+
+    return list(dict.fromkeys(candidate_keys))
+
+
+def resolve_closing_price(game_data: dict, bet: dict):
+    """Closing ``(decimal_price, source_label)`` for any bet shape, or ``(None, None)``.
+
+    Player props go through the de-vigged two-way consensus; everything else
+    takes the best single price from the book priority list.
+    """
+    candidate_keys = candidate_market_keys(bet.get("market", ""))
+    selection_spec = parse_selection(bet.get("market", ""), bet.get("selection", ""))
+    if selection_spec.get("type") == "player_prop":
+        consensus = _prop_consensus_close(game_data, candidate_keys, selection_spec)
+        return consensus if consensus else (None, None)
+    return find_closing_price(game_data, candidate_keys, selection_spec)
+
+
+def find_closing_price(game_data: dict, candidate_keys: list, selection_spec: dict):
+    """Best available closing price for a game market, sharpest book first.
+
+    Returns ``(decimal_price, book_label)`` or ``(None, None)``.
+    """
+    for priority_book in closing_book_priority():
+        found = next(
+            (b for b in game_data.get("bookmakers", []) if str(b.get("key")).lower() == priority_book),
+            None,
+        )
+        if not found:
+            continue
+        m_data = next(
+            (m for m in found.get("markets", []) if str(m.get("key", "")).lower() in candidate_keys),
+            None,
+        )
+        if not m_data:
+            continue
+        out = next(
+            (item for item in m_data.get("outcomes", []) if outcome_matches(selection_spec, item)),
+            None,
+        )
+        if out and parse_float(out.get("price")):
+            return float(out["price"]), priority_book.title()
+    return None, None
+
+
 def _bet_book(bet: dict) -> str:
     return str(bet.get("sportsbook") or _extract_book(bet.get("notes", "")))
 
@@ -305,30 +396,8 @@ def run_clv_tracker():
                 missing_event_counts[(str(sport), target_event_id)] += 1
             continue
 
-        market_key = str(bet["market"]).lower()
-        candidate_keys = [market_key]
-
-        if market_key in {"model_nba_spread", "model_nhl_puckline"}:
-            candidate_keys.append("spreads")
-        if market_key == "model_mlb_f5":
-            candidate_keys.extend(["h2h_1st_5_innings", "h2h_1st_half"])
-
-        # Feeds disagree on these keys, so a bet taken under one spelling still
-        # has to find the sharp closing line posted under the other.
-        if market_key in {"player_receiving_yds", "player_reception_yds"}:
-            candidate_keys.extend(["player_receiving_yds", "player_reception_yds"])
-        if market_key in {"player_first_basket", "player_first_field_goal", "first_basket_scorer"}:
-            candidate_keys.extend(["player_first_basket", "player_first_field_goal", "first_basket_scorer"])
-
-        if market_key in {"moneyline", "ml"}:
-            candidate_keys.append("h2h")
-        if market_key in {"spread", "runline", "puckline"}:
-            candidate_keys.append("spreads")
-        if market_key in {"total", "totals", "over/under", "o/u"}:
-            candidate_keys.append("totals")
-
+        candidate_keys = candidate_market_keys(bet["market"])
         selection_spec = parse_selection(bet["market"], bet["selection"])
-        closing_source = "Pinnacle"
 
         if selection_spec.get("type") == "player_prop":
             consensus = _prop_consensus_close(game_data, candidate_keys, selection_spec)
@@ -344,33 +413,13 @@ def run_clv_tracker():
                 continue
             closing_price_decimal, closing_source = consensus
         else:
-            def _find_sharp_closing_price(g_data):
-                for priority_book in SHARP_GAME_BOOKS_PRIORITY:
-                    found = next(
-                        (b for b in g_data.get("bookmakers", []) if str(b.get("key")).lower() == priority_book),
-                        None,
-                    )
-                    if not found:
-                        continue
-                    m_data = next(
-                        (m for m in found.get("markets", []) if str(m.get("key", "")).lower() in candidate_keys),
-                        None,
-                    )
-                    if not m_data:
-                        continue
-                    out = next(
-                        (item for item in m_data.get("outcomes", []) if outcome_matches(selection_spec, item)),
-                        None,
-                    )
-                    if out and parse_float(out.get("price")):
-                        return float(out["price"]), priority_book.title()
-                return None, None
-
-            closing_price_decimal, closing_source = _find_sharp_closing_price(game_data)
+            closing_price_decimal, closing_source = find_closing_price(game_data, candidate_keys, selection_spec)
             if closing_price_decimal is None and not is_historical:
                 hist_data = _fetch_historical_game_data(target_event_id)
                 if hist_data:
-                    closing_price_decimal, closing_source = _find_sharp_closing_price(hist_data)
+                    closing_price_decimal, closing_source = find_closing_price(
+                        hist_data, candidate_keys, selection_spec
+                    )
 
             if not closing_price_decimal:
                 print(f"CLV: Line or market not found for {bet['selection']} (tried {candidate_keys}).")
@@ -388,7 +437,12 @@ def run_clv_tracker():
         clv_edge_pct = ((placed_decimal / closing_price_decimal) - 1.0) * 100.0
         closing_price_american = decimal_to_american(closing_price_decimal)
         previous_clv = bet.get("clv_edge_pct")
-        update_bet_clv(bet["id"], closing_price_american, closing_price_decimal, round(clv_edge_pct, 4))
+        update_bet_clv(
+            bet["id"],
+            closing_odds=closing_price_american,
+            clv_pct=round(clv_edge_pct, 4),
+            closing_line=closing_price_decimal,
+        )
         print(f"CLV Updated for {bet['selection']}: {clv_edge_pct:.2f}%")
         tracked_count += 1
 
