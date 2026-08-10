@@ -17,13 +17,13 @@ load_dotenv()
 
 PARLAY_BASE_URL = "https://parlay-api.com/v1"
 PARLAY_KEYS = [
-    key
+    key.strip().replace("\r", "").replace("\n", "")
     for key in (
         os.getenv("PARLAYAPI_KEY"),
         os.getenv("PARLAYAPI_KEY_2"),
         os.getenv("PARLAYAPI_KEY_3"),
     )
-    if key
+    if key and key.strip()
 ]
 PARLAY_SPORTS = [
     s.strip()
@@ -68,11 +68,12 @@ def _not_yet_started(opp: dict) -> bool:
 
 def _fetch_ev_for_sport(sport: str, api_key: str) -> Optional[Dict[str, Any]]:
     url = f"{PARLAY_BASE_URL}/sports/{sport}/ev"
-    params: Dict[str, Any] = {"apiKey": api_key, "limit": PARLAY_LIMIT}
+    params: Dict[str, Any] = {"limit": PARLAY_LIMIT}
     if PARLAY_MARKETS:
         params["markets"] = PARLAY_MARKETS
+    headers = {"X-API-Key": api_key}
     try:
-        response = requests.get(url, params=params, timeout=20)
+        response = requests.get(url, params=params, headers=headers, timeout=20)
         if response.status_code == 429:
             print(f"ParlayAPI rate limit (429) for {sport}.")
             return {"rate_limited": True}
