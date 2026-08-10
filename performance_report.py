@@ -50,6 +50,10 @@ def _compute_stats(group: pd.DataFrame) -> Dict[str, float]:
         "win_rate": (graded["is_win"].mean() * 100.0) if not graded.empty else 0.0,
         "clv_beaten_rate": (clv_group["beat_clv"].mean() * 100.0) if not clv_group.empty else 0.0,
         "avg_clv_edge": clv_group["clv_edge_num"].mean() if not clv_group.empty else 0.0,
+        # A CLV rate is only meaningful next to the share of bets it was measured
+        # on: 70% CLV beaten across 20% of bets is a sampling artifact, not a result.
+        "clv_tracked": len(clv_group),
+        "clv_coverage": (len(clv_group) / len(group) * 100.0) if len(group) else 0.0,
         "net_units": 0.0,
     }
     if "units" in graded.columns and "result" in graded.columns and "odds" in graded.columns:
@@ -132,6 +136,7 @@ def build_performance_report() -> str:
     df["clv_edge_num"] = pd.to_numeric(df.get("clv_edge_pct"), errors="coerce")
     df["bet_source"] = df.get("bet_source", "unknown").fillna("unknown").astype(str)
     df["sportsbook"] = df.get("notes", "").apply(_extract_book)
+    df["market"] = df.get("market", "unknown").fillna("unknown").astype(str)
 
     overall_graded = df[df["is_graded"]]
     overall_clv = df.dropna(subset=["clv_edge_num"])
@@ -139,6 +144,7 @@ def build_performance_report() -> str:
     overall_net = _compute_stats(df)["net_units"]
     overall_clv_beaten = (overall_clv["beat_clv"].mean() * 100.0) if not overall_clv.empty else 0.0
     avg_clv = overall_clv["clv_edge_num"].mean() if not overall_clv.empty else 0.0
+    clv_coverage = (len(overall_clv) / len(df) * 100.0) if len(df) else 0.0
     win_pct = (overall_graded["is_win"].mean() * 100.0) if not overall_graded.empty else 0.0
 
     summary = (
@@ -148,6 +154,7 @@ def build_performance_report() -> str:
         f"{int((overall_graded['result'].astype(str) == 'LOSS').sum()) if not overall_graded.empty else 0}L\n"
         f"Win%: {win_pct:.1f} | ROI: **{overall_roi:+.1f}%** | Net: **{overall_net:+.2f}u**\n"
         f"CLV Beaten: **{overall_clv_beaten:.1f}%** | Avg CLV Edge: {avg_clv:+.2f}%\n"
+        f"CLV Tracked: {len(overall_clv)}/{len(df)} ({clv_coverage:.1f}% coverage)\n"
     )
 
     bucket_rows = []
@@ -187,12 +194,13 @@ def build_performance_report() -> str:
             f"{stats['win_rate']:.1f}",
             f"{roi:+.1f}",
             f"{stats['clv_beaten_rate']:.1f}",
+            f"{stats['avg_clv_edge']:+.2f}",
             f"{stats['net_units']:+.2f}",
         ]))
     book_rows = [row for _, row in sorted(book_rows, key=lambda item: item[0], reverse=True)[:8]]
 
     book_table = _markdown_table(
-        ["Book", "Bets", "Win%", "ROI%", "CLV%", "Units"],
+        ["Book", "Bets", "Win%", "ROI%", "CLV%", "AvgCLV", "Units"],
         book_rows,
     ) if book_rows else ""
 
@@ -209,16 +217,46 @@ def build_performance_report() -> str:
             f"{stats['win_rate']:.1f}",
             f"{roi:+.1f}",
             f"{stats['clv_beaten_rate']:.1f}",
+            f"{stats['avg_clv_edge']:+.2f}",
             f"{stats['net_units']:+.2f}",
         ]))
     source_rows = [row for _, row in sorted(source_rows, key=lambda item: item[0], reverse=True)]
 
     source_table = _markdown_table(
-        ["Source", "Bets", "Win%", "ROI%", "CLV%", "Units"],
+        ["Source", "Bets", "Win%", "ROI%", "CLV%", "AvgCLV", "Units"],
         source_rows,
     ) if source_rows else ""
 
+    # Broken out by market because that is where CLV coverage actually fails:
+    # a market whose closing key never resolves shows up here as a low Cov%
+    # instead of quietly dragging the headline CLV number around.
+    market_rows = []
+    for market, group in df.groupby("market", dropna=False):
+        if group.empty:
+            continue
+        stats = _compute_stats(group)
+        graded_group = group[group["is_graded"]]
+        roi = _compute_roi(graded_group)
+        market_rows.append((stats["bets"], [
+            str(market)[:28],
+            str(int(stats["bets"])),
+            f"{stats['clv_coverage']:.0f}",
+            f"{stats['win_rate']:.1f}",
+            f"{roi:+.1f}",
+            f"{stats['clv_beaten_rate']:.1f}",
+            f"{stats['avg_clv_edge']:+.2f}",
+            f"{stats['net_units']:+.2f}",
+        ]))
+    market_rows = [row for _, row in sorted(market_rows, key=lambda item: item[0], reverse=True)[:12]]
+
+    market_table = _markdown_table(
+        ["Market", "Bets", "Cov%", "Win%", "ROI%", "CLV%", "AvgCLV", "Units"],
+        market_rows,
+    ) if market_rows else ""
+
     sections = [summary, "**EV Buckets**\n" + bucket_table]
+    if market_table:
+        sections.append("**By Market (Cov% = share with a tracked close)**\n" + market_table)
     if book_table:
         sections.append("**By Book**\n" + book_table)
     if source_table:
