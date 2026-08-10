@@ -8,6 +8,16 @@ from utils.odds import parse_float
 # ``name`` is "Over"/"Under" and whose ``description`` holds the player name.
 PROP_MARKET_PREFIXES = ("player_", "batter_", "pitcher_")
 
+# Partial-game markets price the same way as their full-game counterparts, so
+# they are normalized down to the base key before parsing.
+PARTIAL_GAME_SUFFIXES = ("_1st_5_innings", "_1st_half", "_1st_quarter", "_1st_period")
+
+# Two-way props whose outcome ``name`` is Yes/No rather than Over/Under.
+YES_NO_PROP_MARKETS = {"player_anytime_td", "player_1st_td", "player_last_td"}
+
+# Single-winner props where the outcome ``name`` is the player themselves.
+OUTRIGHT_PROP_MARKETS = {"player_first_basket", "player_first_field_goal", "first_basket_scorer"}
+
 
 def normalize_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value).lower()).strip()
@@ -31,6 +41,31 @@ def parse_selection(market: str, selection: str) -> Dict[str, Optional[object]]:
     market_key = str(market).strip().lower()
     selection = str(selection).strip()
     selection_norm = normalize_text(selection)
+
+    if market_key in YES_NO_PROP_MARKETS:
+        yes_no_match = re.match(r"(.+?)\s+(yes|no)$", selection, flags=re.IGNORECASE)
+        if yes_no_match:
+            player = yes_no_match.group(1).strip()
+            return {
+                "type": "player_yes_no",
+                "player": player,
+                "player_norm": normalize_team_fragment(player),
+                "side": yes_no_match.group(2).lower(),
+                "stat": market_key,
+            }
+
+    if market_key in OUTRIGHT_PROP_MARKETS:
+        return {
+            "type": "player_outright",
+            "player": selection,
+            "player_norm": normalize_team_fragment(selection),
+            "stat": market_key,
+        }
+
+    for suffix in PARTIAL_GAME_SUFFIXES:
+        if market_key.endswith(suffix):
+            market_key = market_key[: -len(suffix)]
+            break
 
     if market_key in {"h2h", "moneyline", "model_mlb_f5"}:
         return {"type": "team", "team": selection, "team_norm": normalize_team_fragment(selection)}
@@ -81,6 +116,21 @@ def parse_selection(market: str, selection: str) -> Dict[str, Optional[object]]:
     return {"type": "raw", "value": selection_norm}
 
 
+def _player_matches(selection_spec: Dict[str, Optional[object]], outcome: Dict[str, object]) -> bool:
+    """Whether the outcome's ``description`` names the bet's player."""
+    player_norm = selection_spec.get("player_norm")
+    if not player_norm:
+        return True
+    description_norm = normalize_team_fragment(str(outcome.get("description", "")))
+    if not description_norm:
+        return False
+    return bool(
+        player_norm == description_norm
+        or player_norm in description_norm
+        or description_norm in player_norm
+    )
+
+
 def outcome_matches(selection_spec: Dict[str, Optional[object]], outcome: Dict[str, object], tolerance: float = 0.001) -> bool:
     outcome_name = str(outcome.get("name", "")).strip()
     outcome_norm = normalize_team_fragment(outcome_name)
@@ -106,6 +156,25 @@ def outcome_matches(selection_spec: Dict[str, Optional[object]], outcome: Dict[s
         if line is None or outcome_point is None:
             return False
         return side == outcome_side and abs(outcome_point - float(line)) <= tolerance
+
+    if kind == "player_yes_no":
+        side = normalize_text(selection_spec.get("side", ""))
+        if side and side != outcome_side:
+            return False
+        return _player_matches(selection_spec, outcome)
+
+    if kind == "player_outright":
+        player_norm = selection_spec.get("player_norm")
+        if not player_norm:
+            return False
+        # Single-winner markets carry the player in ``name``; some feeds repeat
+        # it in ``description`` instead.
+        return bool(
+            player_norm == outcome_norm
+            or player_norm in outcome_norm
+            or outcome_norm in player_norm
+            or _player_matches(selection_spec, outcome)
+        )
 
     if kind == "player_prop":
         line = selection_spec.get("line")

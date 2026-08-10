@@ -1,0 +1,84 @@
+name: Scheduled Model Overlays
+
+# Hourly runner for the sport-model overlays. Every step below reads the
+# Supabase `odds_cache` blob that the odds-cache-ingest Edge Function keeps
+# fresh, so this workflow spends ZERO Odds API credits — note that no
+# ODDS_API_KEY* secret is passed to the job at all, which makes a live pull
+# impossible by construction.
+#
+# `model_nfl.py` previously ran from no workflow whatsoever; it is scheduled here
+# alongside the three cache-only models.
+#
+# Cadence: hourly 13:00-04:59 UTC (~8am-midnight Central), matching the ingestion
+# window used by continuous_scan. Paused 05:00-12:59 UTC since no bets are placed
+# overnight. Each model self-gates on `utils.seasons.is_sport_in_season`, so
+# out-of-season sports no-op in seconds rather than needing separate schedules.
+on:
+  schedule:
+    - cron: '10 13-23,0-4 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: model-overlays
+  cancel-in-progress: true
+
+jobs:
+  model-overlays:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Model Overlays
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BET_ALERTS_WEBHOOK_URL: ${{ secrets.DISCORD_BET_ALERTS_WEBHOOK_URL }}
+          DISCORD_NFL_BETS_WEBHOOK_URL: ${{ secrets.DISCORD_NFL_BETS_WEBHOOK_URL }}
+          DISCORD_MLB_BETS_WEBHOOK_URL: ${{ secrets.DISCORD_MLB_BETS_WEBHOOK_URL }}
+          DISCORD_WNBA_BETS_WEBHOOK_URL: ${{ secrets.DISCORD_WNBA_BETS_WEBHOOK_URL }}
+          ENABLE_NFL_PLAYER_PROP_MODEL: "true"
+          ENABLE_MLB_F5_MARKET_MODEL: "true"
+          ENABLE_WNBA_FIRST_BASKET_MODEL: "true"
+          NFL_PROP_EV_THRESHOLD: "0.02"
+          NFL_PROP_MAX_UNITS: "1.0"
+          NFL_PROP_MAX_ALERTS: "10"
+          MLB_F5_MARKET_EV_THRESHOLD: "0.015"
+          MLB_F5_MARKET_MAX_UNITS: "1.0"
+          MLB_F5_MARKET_MAX_ALERTS: "8"
+          WNBA_FIRST_BASKET_EV_THRESHOLD: "0.025"
+          WNBA_FIRST_BASKET_MAX_UNITS: "0.5"
+          WNBA_FIRST_BASKET_MAX_ALERTS: "5"
+          NFL_MODEL_EDGE_THRESHOLD: "0.02"
+          NFL_MODEL_MAX_UNITS: "1.25"
+          DEVIG_METHOD: "power"
+        run: |
+          python -m models.nfl_player_props
+          python -m models.mlb_f5
+          python -m models.wnba_first_basket
+          python model_nfl.py
+
+      # main.yml only tracks CLV twice a day, so the last sharp price a bet ever
+      # sees can be many hours from the actual close. Re-snapshotting hourly off
+      # the same cache costs nothing and pulls the recorded "closing" line much
+      # closer to the real one. Discord updates stay off here; the pipeline run
+      # still owns movement alerts.
+      - name: Refresh CLV Snapshots
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          CLV_SEND_DISCORD_UPDATES: "false"
+        run: python clv_tracker.py
