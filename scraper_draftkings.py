@@ -10,6 +10,8 @@ from db_manager import get_master_cache, load_tracker_state, save_tracker_state
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import post_discord, request
 from services.odds_reference import format_pinnacle_spread_reference
+from services.odds_scraper_ingest import ingest_events
+from utils.odds import american_to_decimal
 
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
@@ -69,6 +71,40 @@ def _build_event_name_map(payload: dict) -> Dict[str, str]:
     return event_name_map
 
 
+def _build_event_meta_map(payload: dict) -> Dict[str, Dict[str, str]]:
+    event_group = payload.get("eventGroup") or payload.get("eventgroup") or {}
+    meta_map = {}
+    for event in event_group.get("events", []):
+        event_id = str(event.get("eventId") or event.get("id") or "")
+        if not event_id:
+            continue
+        name = str(
+            event.get("name") or event.get("shortName") or event.get("eventName") or ""
+        ).strip()
+        start = str(event.get("startDate") or event.get("eventStartDate") or "").strip()
+
+        away_team, home_team = "", ""
+        if " @ " in name:
+            parts = name.split(" @ ", 1)
+            away_team, home_team = parts[0].strip(), parts[1].strip()
+        elif " at " in name.lower():
+            parts = re.split(r"\s+at\s+", name, maxsplit=1, flags=re.IGNORECASE)
+            away_team, home_team = parts[0].strip(), parts[1].strip()
+        elif " vs " in name.lower():
+            parts = re.split(r"\s+vs\.?\s+", name, maxsplit=1, flags=re.IGNORECASE)
+            away_team, home_team = parts[0].strip(), parts[1].strip()
+        else:
+            away_team, home_team = name, name
+
+        meta_map[event_id] = {
+            "matchup": name,
+            "home_team": home_team,
+            "away_team": away_team,
+            "commence_time": start,
+        }
+    return meta_map
+
+
 def _looks_like_direct_dk_payload(payload: dict) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -124,9 +160,36 @@ def _extract_embedded_payload(html: str):
     return None
 
 
+def _extract_price(outcome: dict) -> Optional[float]:
+    if outcome.get("oddsDecimal"):
+        try:
+            return float(outcome["oddsDecimal"])
+        except Exception:
+            pass
+    raw = outcome.get("odds")
+    if raw is not None:
+        try:
+            value = float(raw)
+            if value >= 100:
+                return float(american_to_decimal(raw))
+            if value <= -100:
+                return float(american_to_decimal(raw))
+            if value > 1.0:
+                return value
+        except Exception:
+            pass
+    american = outcome.get("oddsAmerican")
+    if american is not None:
+        try:
+            return float(american_to_decimal(american))
+        except Exception:
+            pass
+    return None
+
+
 def _parse_spread_lines(payload: dict) -> Dict[str, Dict[str, object]]:
     payload = _normalize_direct_dk_payload(payload)
-    event_name_map = _build_event_name_map(payload)
+    meta_map = _build_event_meta_map(payload)
     current_lines: Dict[str, Dict[str, object]] = {}
 
     for offer in _iter_offer_groups(payload):
@@ -135,18 +198,65 @@ def _parse_spread_lines(payload: dict) -> Dict[str, Dict[str, object]]:
             continue
 
         event_id = str(offer.get("eventId") or offer.get("eventIdLong") or "")
-        matchup = event_name_map.get(event_id, "Unknown Matchup")
+        meta = meta_map.get(event_id, {})
+        if not meta:
+            continue
 
         for outcome in offer.get("outcomes", []):
             team = outcome.get("label") or outcome.get("participant") or outcome.get("name")
             line = outcome.get("line") or outcome.get("spread") or outcome.get("lineValue")
-            if team in (None, "") or line in (None, "") or not event_id:
+            price = _extract_price(outcome)
+            if team in (None, "") or line in (None, "") or not event_id or not price:
                 continue
 
             unique_key = f"{event_id}_{team}"
-            current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line}
+            current_lines[unique_key] = {
+                "event_id": event_id,
+                "matchup": meta.get("matchup", "Unknown Matchup"),
+                "home_team": meta.get("home_team", ""),
+                "away_team": meta.get("away_team", ""),
+                "commence_time": meta.get("commence_time", ""),
+                "team": team,
+                "line": line,
+                "price": price,
+            }
 
     return current_lines
+
+
+def _to_ingest_events(current_lines: Dict[str, Dict[str, object]]) -> List[Dict[str, object]]:
+    by_event: Dict[str, Dict[str, object]] = {}
+    for line in current_lines.values():
+        event_id = str(line.get("event_id", ""))
+        if not event_id:
+            continue
+        if event_id not in by_event:
+            by_event[event_id] = {
+                "id": event_id,
+                "home_team": line.get("home_team", ""),
+                "away_team": line.get("away_team", ""),
+                "commence_time": line.get("commence_time", ""),
+                "bookmakers": [
+                    {
+                        "key": "draftkings",
+                        "title": "DraftKings",
+                        "markets": [
+                            {
+                                "key": "spreads",
+                                "outcomes": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        by_event[event_id]["bookmakers"][0]["markets"][0]["outcomes"].append(
+            {
+                "name": line.get("team", ""),
+                "price": line.get("price"),
+                "point": line.get("line"),
+            }
+        )
+    return list(by_event.values())
 
 
 def _fetch_dk_direct_payload():
@@ -304,10 +414,13 @@ async def scrape_dk():
                 )
 
         save_current_lines(current_lines)
+        events = _to_ingest_events(current_lines)
+        if events:
+            ingest_events("basketball_nba", events)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 15844367}]}, webhook_url=DISCORD_WEBHOOK_URL)
         return {
-            "detail": f"draftkings scrape complete ({len(current_lines)} lines tracked)",
+            "detail": f"draftkings scrape complete ({len(current_lines)} lines tracked, {len(events)} events ingested)",
             "count": len(alerts),
             "label": "alerts",
         }

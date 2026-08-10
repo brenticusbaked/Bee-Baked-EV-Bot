@@ -17,6 +17,7 @@ from db_manager import get_master_cache, load_tracker_state, save_tracker_state
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import post_discord, request
 from services.odds_reference import format_pinnacle_spread_reference
+from services.odds_scraper_ingest import extract_price, ingest_current_lines
 
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
@@ -483,7 +484,19 @@ def _build_current_lines_from_api(fixtures: list[dict]) -> Dict[str, Dict[str, o
                     continue
 
                 unique_key = f"{event_id}_{team.lower()}"
-                current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line_value}
+                current_lines[unique_key] = {
+                    "event_id": event_id,
+                    "matchup": matchup,
+                    "commence_time": str(
+                        fixture.get("startTime")
+                        or fixture.get("startDate")
+                        or fixture.get("eventStartTime")
+                        or ""
+                    ).strip(),
+                    "team": team,
+                    "line": line_value,
+                    "price": extract_price(option),
+                }
 
     return current_lines
 
@@ -810,7 +823,19 @@ def _build_current_lines(data: dict) -> Dict[str, Dict[str, object]]:
                     continue
 
                 unique_key = f"{event_id}_{team}"
-                current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line}
+                current_lines[unique_key] = {
+                    "event_id": event_id,
+                    "matchup": matchup,
+                    "commence_time": str(
+                        fixture.get("startTime")
+                        or fixture.get("startDate")
+                        or fixture.get("eventStartTime")
+                        or ""
+                    ).strip(),
+                    "team": team,
+                    "line": line,
+                    "price": extract_price(outcome),
+                }
     return current_lines
 
 

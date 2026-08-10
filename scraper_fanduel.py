@@ -11,6 +11,7 @@ from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import request
 from services.http_client import post_discord
 from services.odds_reference import format_pinnacle_spread_reference
+from services.odds_scraper_ingest import extract_price, ingest_current_lines
 
 
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
@@ -263,15 +264,28 @@ def _build_current_lines(data: dict) -> Dict[str, Dict[str, object]]:
 
         event_id = str(market_data.get("eventId"))
         matchup = events.get(event_id, {}).get("name", "Unknown Matchup")
+        commence_time = str(
+            events.get(event_id, {}).get("startTime")
+            or events.get(event_id, {}).get("startDate")
+            or ""
+        ).strip()
 
         for runner in market_data.get("runners", []):
             team = runner.get("runnerName")
             line = runner.get("handicap")
-            if team in (None, "") or line in (None, ""):
+            price = extract_price(runner)
+            if team in (None, "") or line in (None, "") or not price:
                 continue
 
             unique_key = f"{event_id}_{team}"
-            current_lines[unique_key] = {"matchup": matchup, "team": team, "line": line}
+            current_lines[unique_key] = {
+                "event_id": event_id,
+                "matchup": matchup,
+                "commence_time": commence_time,
+                "team": team,
+                "line": line,
+                "price": price,
+            }
 
     return current_lines
 
@@ -306,6 +320,7 @@ def scrape_fanduel():
                 )
 
         save_current_lines(current_lines)
+        ingest_current_lines("basketball_nba", "fanduel", "spreads", current_lines)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 15615}]}, webhook_url=DISCORD_WEBHOOK_URL)
         return {
