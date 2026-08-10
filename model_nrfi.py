@@ -3,11 +3,10 @@ starting pitcher first-inning WHIP, strikeout rates, and top-of-the-order wOBA.
 """
 
 import logging
-import math
 from typing import Any, Dict, Optional
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
-from model_mlb import get_advanced_pitcher_stats
+from model_mlb import _team_matches, get_advanced_pitcher_stats
 from services.alerts import send_discord_alert
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import get_json as _http_get_json
@@ -16,6 +15,7 @@ from services.last_ten import build_last_ten_context_line
 from utils.links import sportsbook_search_link
 from utils.model_pricing import fair_american_from_probability, model_edge_from_probability, model_units_from_probability
 from utils.odds import decimal_to_american, quarter_kelly_units, american_to_decimal
+from utils.prop_pricing import negative_binomial_pmf
 from utils.thresholds import env_float
 from utils.time import get_local_now
 
@@ -26,6 +26,7 @@ NRFI_MODEL_EDGE_THRESHOLD = env_float("NRFI_MODEL_EDGE_THRESHOLD", 0.025)
 NRFI_YRFI_MODEL_EDGE_THRESHOLD = env_float("NRFI_YRFI_MODEL_EDGE_THRESHOLD", 0.025)
 NRFI_MODEL_MAX_UNITS = env_float("NRFI_MODEL_MAX_UNITS", 1.0)
 NRFI_FIRST_INNING_SCALE = env_float("NRFI_FIRST_INNING_SCALE", 1.05)
+NRFI_VARIANCE_MULTIPLIER = env_float("NRFI_VARIANCE_MULTIPLIER", 1.35)
 NRFI_LEAGUE_AVG_RPG = env_float("NRFI_LEAGUE_AVG_RPG", 4.5)
 
 
@@ -33,14 +34,15 @@ def get_dynamic_link(bookmaker, target_string):
     return sportsbook_search_link(bookmaker, target_string)
 
 
-def get_best_nrfi_odds(event_id, target_selection):
+def get_best_nrfi_odds(away_team: str, home_team: str, target_selection: str):
     cache = get_master_cache()
     if not cache:
         return None, None, None, None
 
     for game in cache.get("baseball_mlb", []):
-        game_id = game.get("id")
-        if game_id is None or str(game_id) != str(event_id):
+        if not _team_matches(away_team, game.get("away_team", "")):
+            continue
+        if not _team_matches(home_team, game.get("home_team", "")):
             continue
         for bookmaker in game.get("bookmakers", []):
             if bookmaker["key"] == "pinnacle":
@@ -53,7 +55,7 @@ def get_best_nrfi_odds(event_id, target_selection):
                         return (
                             bookmaker["title"],
                             decimal_to_american(float(outcome["price"])),
-                            get_dynamic_link(bookmaker["key"], f"NRFI {event_id}"),
+                            get_dynamic_link(bookmaker["key"], f"NRFI {away_team} @ {home_team}"),
                             market["key"],
                         )
     return None, None, None, None
@@ -107,7 +109,8 @@ def run_nrfi_model():
             away_team = game.get("teams", {}).get("away", {}).get("team", {}).get("name")
             away_team_id = game.get("teams", {}).get("away", {}).get("team", {}).get("id")
             home_team = game.get("teams", {}).get("home", {}).get("team", {}).get("name")
-            if not away_team or not home_team or not away_team_id:
+            home_team_id = game.get("teams", {}).get("home", {}).get("team", {}).get("id")
+            if not away_team or not home_team or not away_team_id or not home_team_id:
                 continue
             matchup = f"{away_team} @ {home_team}"
 
@@ -115,22 +118,29 @@ def run_nrfi_model():
             home_p = game["teams"]["home"].get("probablePitcher")
             if not away_p or not home_p:
                 continue
-            if not home_p.get("id"):
+            if not away_p.get("id") or not home_p.get("id"):
                 continue
 
             # Data-driven first-inning probability:
-            #   - Home pitcher is on the mound in the top of the 1st.
-            #   - lambda = expected runs from pitcher xERA per inning * away offense factor.
-            #   - No runs in first inning ~ Poisson(0 | lambda).
+            #   - Top of 1st: home pitcher vs away offense.
+            #   - Bottom of 1st: away pitcher vs home offense.
+            #   - No runs in first inning = both halves produce zero runs.
+            #   - Each half is modeled as a Negative-Binomial (Poisson when variance=1.0).
+            away_est, away_act, _, _ = get_advanced_pitcher_stats(away_p["id"], pitcher_stats_cache, {})
             home_est, home_act, _, _ = get_advanced_pitcher_stats(home_p["id"], pitcher_stats_cache, {})
-            if home_est is None and home_act is None:
+            if (away_est is None and away_act is None) or (home_est is None and home_act is None):
                 continue
+            away_xera = away_act if away_act is not None else away_est
             home_xera = home_act if home_act is not None else home_est
-            if home_xera is None:
+            if away_xera is None or home_xera is None:
                 continue
             away_offense = get_team_offense_factor(away_team_id, team_offense_cache)
-            lambda_runs = (home_xera / 9.0) * away_offense * NRFI_FIRST_INNING_SCALE
-            prob_no_runs = math.exp(-lambda_runs)
+            home_offense = get_team_offense_factor(home_team_id, team_offense_cache)
+            lambda_top = (home_xera / 9.0) * away_offense * NRFI_FIRST_INNING_SCALE
+            lambda_bot = (away_xera / 9.0) * home_offense * NRFI_FIRST_INNING_SCALE
+            prob_top_zero = negative_binomial_pmf(0, lambda_top, NRFI_VARIANCE_MULTIPLIER)
+            prob_bot_zero = negative_binomial_pmf(0, lambda_bot, NRFI_VARIANCE_MULTIPLIER)
+            prob_no_runs = prob_top_zero * prob_bot_zero
 
             target_sides = [
                 ("No", prob_no_runs, NRFI_MODEL_EDGE_THRESHOLD),
@@ -138,7 +148,7 @@ def run_nrfi_model():
             ]
 
             for target_bet, target_prob, edge_threshold in target_sides:
-                book, odds, link, selected_market = get_best_nrfi_odds(event_id, target_bet)
+                book, odds, link, selected_market = get_best_nrfi_odds(away_team, home_team, target_bet)
                 if not book:
                     continue
 
