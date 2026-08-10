@@ -874,6 +874,7 @@ def scrape_betmgm():
                 )
 
         save_current_lines(current_lines)
+        ingest_current_lines("basketball_nba", "betmgm", "spreads", current_lines)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 13611036}]}, webhook_url=DISCORD_WEBHOOK_URL)
         return {
