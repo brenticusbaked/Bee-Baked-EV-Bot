@@ -313,6 +313,13 @@ def run_clv_tracker():
         if market_key == "model_mlb_f5":
             candidate_keys.extend(["h2h_1st_5_innings", "h2h_1st_half"])
 
+        # Feeds disagree on these keys, so a bet taken under one spelling still
+        # has to find the sharp closing line posted under the other.
+        if market_key in {"player_receiving_yds", "player_reception_yds"}:
+            candidate_keys.extend(["player_receiving_yds", "player_reception_yds"])
+        if market_key in {"player_first_basket", "player_first_field_goal", "first_basket_scorer"}:
+            candidate_keys.extend(["player_first_basket", "player_first_field_goal", "first_basket_scorer"])
+
         if market_key in {"moneyline", "ml"}:
             candidate_keys.append("h2h")
         if market_key in {"spread", "runline", "puckline"}:

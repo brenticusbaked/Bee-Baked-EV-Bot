@@ -1,0 +1,186 @@
+{
+  "americanfootball_nfl": [
+    {
+      "id": "nfl-evt-1",
+      "commence_time": "__FUTURE__",
+      "home_team": "Cincinnati Bengals",
+      "away_team": "Buffalo Bills",
+      "bookmakers": [
+        {
+          "key": "pinnacle",
+          "title": "Pinnacle",
+          "markets": [
+            {
+              "key": "player_pass_yds",
+              "outcomes": [
+                {"name": "Over", "description": "Josh Allen", "point": 249.5, "price": 1.9},
+                {"name": "Under", "description": "Josh Allen", "point": 249.5, "price": 1.9},
+                {"name": "Over", "description": "Joe Burrow", "point": 271.5, "price": 1.87},
+                {"name": "Under", "description": "Joe Burrow", "point": 271.5, "price": 1.93}
+              ]
+            },
+            {
+              "key": "player_receiving_yds",
+              "outcomes": [
+                {"name": "Over", "description": "Ja'Marr Chase", "point": 82.5, "price": 1.91},
+                {"name": "Under", "description": "Ja'Marr Chase", "point": 82.5, "price": 1.89}
+              ]
+            },
+            {
+              "key": "player_anytime_td",
+              "outcomes": [
+                {"name": "Yes", "description": "Ja'Marr Chase", "price": 2.1},
+                {"name": "No", "description": "Ja'Marr Chase", "price": 1.75}
+              ]
+            }
+          ]
+        },
+        {
+          "key": "draftkings",
+          "title": "DraftKings",
+          "markets": [
+            {
+              "key": "player_pass_yds",
+              "outcomes": [
+                {"name": "Over", "description": "Josh Allen", "point": 249.5, "price": 2.1},
+                {"name": "Under", "description": "Josh Allen", "point": 249.5, "price": 1.74},
+                {"name": "Over", "description": "Joe Burrow", "point": 271.5, "price": 1.85},
+                {"name": "Under", "description": "Joe Burrow", "point": 271.5, "price": 1.95}
+              ]
+            },
+            {
+              "key": "player_anytime_td",
+              "outcomes": [
+                {"name": "Yes", "description": "Ja'Marr Chase", "price": 2.4},
+                {"name": "No", "description": "Ja'Marr Chase", "price": 1.55}
+              ]
+            }
+          ]
+        },
+        {
+          "key": "fanduel",
+          "title": "FanDuel",
+          "markets": [
+            {
+              "key": "player_reception_yds",
+              "outcomes": [
+                {"name": "Over", "description": "Ja'Marr Chase", "point": 82.5, "price": 2.08},
+                {"name": "Under", "description": "Ja'Marr Chase", "point": 82.5, "price": 1.76}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "baseball_mlb": [
+    {
+      "id": "mlb-evt-1",
+      "commence_time": "__FUTURE__",
+      "home_team": "New York Yankees",
+      "away_team": "Boston Red Sox",
+      "bookmakers": [
+        {
+          "key": "pinnacle",
+          "title": "Pinnacle",
+          "markets": [
+            {
+              "key": "totals_1st_5_innings",
+              "outcomes": [
+                {"name": "Over", "point": 4.5, "price": 1.95},
+                {"name": "Under", "point": 4.5, "price": 1.95}
+              ]
+            },
+            {
+              "key": "spreads_1st_5_innings",
+              "outcomes": [
+                {"name": "New York Yankees", "point": -0.5, "price": 2.0},
+                {"name": "Boston Red Sox", "point": 0.5, "price": 2.0}
+              ]
+            },
+            {
+              "key": "h2h_1st_5_innings",
+              "outcomes": [
+                {"name": "New York Yankees", "price": 1.83},
+                {"name": "Boston Red Sox", "price": 2.05}
+              ]
+            }
+          ]
+        },
+        {
+          "key": "betmgm",
+          "title": "BetMGM",
+          "markets": [
+            {
+              "key": "totals_1st_5_innings",
+              "outcomes": [
+                {"name": "Over", "point": 4.5, "price": 2.09},
+                {"name": "Under", "point": 4.5, "price": 1.8}
+              ]
+            },
+            {
+              "key": "spreads_1st_5_innings",
+              "outcomes": [
+                {"name": "New York Yankees", "point": -0.5, "price": 2.15},
+                {"name": "Boston Red Sox", "point": 0.5, "price": 1.75}
+              ]
+            },
+            {
+              "key": "h2h_1st_5_innings",
+              "outcomes": [
+                {"name": "New York Yankees", "price": 1.8},
+                {"name": "Boston Red Sox", "price": 2.02}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "basketball_wnba": [
+    {
+      "id": "wnba-evt-1",
+      "commence_time": "__FUTURE__",
+      "home_team": "Las Vegas Aces",
+      "away_team": "New York Liberty",
+      "bookmakers": [
+        {
+          "key": "pinnacle",
+          "title": "Pinnacle",
+          "markets": [
+            {
+              "key": "player_first_basket",
+              "outcomes": [
+                {"name": "A'ja Wilson", "price": 5.5},
+                {"name": "Breanna Stewart", "price": 6.5},
+                {"name": "Jackie Young", "price": 7.0},
+                {"name": "Sabrina Ionescu", "price": 8.0},
+                {"name": "Kelsey Plum", "price": 9.0},
+                {"name": "Jonquel Jones", "price": 10.0},
+                {"name": "Chelsea Gray", "price": 11.0},
+                {"name": "Betnijah Laney", "price": 12.0},
+                {"name": "Alysha Clark", "price": 14.0},
+                {"name": "Courtney Vandersloot", "price": 16.0}
+              ]
+            }
+          ]
+        },
+        {
+          "key": "draftkings",
+          "title": "DraftKings",
+          "markets": [
+            {
+              "key": "player_first_basket",
+              "outcomes": [
+                {"name": "A'ja Wilson", "price": 7.0},
+                {"name": "Breanna Stewart", "price": 6.0},
+                {"name": "Jackie Young", "price": 6.5},
+                {"name": "Sabrina Ionescu", "price": 7.5}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
