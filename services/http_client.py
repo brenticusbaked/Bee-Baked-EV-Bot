@@ -13,6 +13,7 @@ from utils.time import get_local_date_str
 
 
 DEFAULT_TIMEOUT = 20
+RETRY_BACKOFF_MAX_SECONDS = 8.0
 
 _MLB_STATS_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -77,6 +78,11 @@ def build_session(retry_on_429: bool = True) -> requests.Session:
         connect=3,
         read=3,
         backoff_factor=1.0,
+        # A rate-limited API can answer 429 with a Retry-After of minutes, which
+        # urllib3 honours by sleeping. Callers already rotate to the next API key
+        # on 429, so bounded local backoff is preferred over an unbounded stall.
+        respect_retry_after_header=False,
+        backoff_max=RETRY_BACKOFF_MAX_SECONDS,
         status_forcelist=((429, 500, 502, 503, 504) if retry_on_429 else (500, 502, 503, 504)),
         allowed_methods=frozenset({"GET", "POST"}),
     )
