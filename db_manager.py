@@ -926,14 +926,27 @@ def _stat_value_for_prop(row: dict, prop: str) -> Optional[float]:
     return value
 
 
+def _opponent_keys(opponent: Any) -> set:
+    if opponent in (None, ""):
+        return set()
+    values = opponent if isinstance(opponent, (list, tuple, set)) else [opponent]
+    return {str(value).strip().lower() for value in values if str(value).strip()}
+
+
 def get_l10_hit_rate(
     player: str,
     prop: str,
     line: float,
     sport: str,
     games: int = 10,
-    opponent: str | None = None,
+    opponent: Any = None,
 ) -> Optional[Dict[str, Any]]:
+    """Recent-form hit rate for ``player`` against ``line``.
+
+    ``opponent`` may be one team or several candidates. A player prop does not
+    say which side of the matchup the player is on, so callers can offer both
+    teams and whichever appears in the player's log is taken as the opponent.
+    """
     table = _stat_log_table(sport)
     if not table:
         return None
@@ -957,35 +970,43 @@ def get_l10_hit_rate(
     if not rows:
         return None
 
-    opponent_key = str(opponent or "").strip().lower()
-    values: List[float] = []
+    opponent_keys = _opponent_keys(opponent)
     game_details = []
     last_vs_game = None
     for row in rows:
         val = _stat_value_for_prop(row, prop)
         if val is not None:
-            values.append(val)
             detail = {
                 "game_date": row.get("game_date"),
                 "value": val,
                 "opponent": row.get("opponent"),
             }
             game_details.append(detail)
-            if opponent_key:
+            if opponent_keys and last_vs_game is None:
                 row_opponent = str(row.get("opponent") or "").strip().lower()
-                if row_opponent and row_opponent == opponent_key and last_vs_game is None:
+                if row_opponent and row_opponent in opponent_keys:
                     last_vs_game = detail
 
-    if not values:
+    if not game_details:
         return None
+
+    # The query deliberately over-fetches when an opponent is supplied so the
+    # last head-to-head meeting can be found further back, but the hit rate
+    # itself must still describe only the most recent ``games`` outings.
+    window = game_details[: max(1, int(games))]
+    values = [detail["value"] for detail in window]
 
     over = sum(1 for v in values if v > line_value)
     under = sum(1 for v in values if v < line_value)
-    last_game = game_details[0] if game_details else None
+    # Whole-number lines (e.g. Over 5.0 strikeouts) push on an exact hit. Those
+    # games belong to neither side, so they are reported rather than dropped.
+    push = len(values) - over - under
+    last_game = game_details[0]
 
     return {
         "over": over,
         "under": under,
+        "push": push,
         "games": len(values),
         "line": line_value,
         "values": values,
