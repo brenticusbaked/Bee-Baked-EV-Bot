@@ -2,19 +2,40 @@ import os
 import time
 from typing import Dict, List, Set
 
-from db_manager import get_master_cache, save_master_cache
+from db_manager import (
+    get_master_cache,
+    load_tracker_state,
+    save_master_cache,
+    save_tracker_state,
+)
 from services.http_client import request
 from utils.config import env_flag
 from utils.scratch_guard import filter_valid_events
 from utils.seasons import filter_config_in_season
+from utils.time import get_local_date_str, get_local_now
 
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 ODDS_API_KEY_2 = os.getenv("ODDS_API_KEY_2")
 ODDS_API_KEY_3 = os.getenv("ODDS_API_KEY_3")
+# Held in reserve: a 500/month key cannot fund a per-event pull over a full
+# slate, so no tier is currently billed to it.
 ODDS_API_KEY_4 = os.getenv("ODDS_API_KEY_4")
 
+# Per-run ceiling for the primary key (a 20,000/month plan).
 ODDS_MAX_CREDITS_PER_RUN = int(os.getenv("ODDS_MAX_CREDITS_PER_RUN", "300"))
+# The expansion keys are 500/month plans. At four runs a day that is ~4 credits
+# per run each, so their ceiling has to be a different number entirely; a single
+# shared ceiling either starves the primary key or drains the small ones.
+ODDS_MAX_CREDITS_PER_RUN_SECONDARY = int(os.getenv("ODDS_MAX_CREDITS_PER_RUN_SECONDARY", "20"))
+# Credits held back on each key, measured against its own x-requests-remaining.
+# Default 0: spending the month out early is an accepted trade for more bets.
+ODDS_MIN_CREDITS_RESERVE = int(os.getenv("ODDS_MIN_CREDITS_RESERVE", "0"))
+# The event-scoped MLB pulls (first five, first-inning runs) cost per event per
+# region, so they are affordable once a day rather than every window. Earliest
+# local hour they may run; the first run at or after it claims the day.
+ODDS_DAILY_PULL_MIN_LOCAL_HOUR = int(os.getenv("ODDS_DAILY_PULL_MIN_LOCAL_HOUR", "12"))
+DAILY_PULL_STATE_KEY = "odds_daily_pull_state"
 ODDS_MAX_EVENTS_PER_ENRICH = int(
     os.getenv("ODDS_MAX_EVENTS_PER_ENRICH", os.getenv("MAX_EVENTS_PER_ENRICH", "50"))
 )
@@ -22,14 +43,35 @@ ODDS_API_REQUEST_DELAY_SECONDS = float(os.getenv("ODDS_API_REQUEST_DELAY_SECONDS
 
 
 class _CreditTracker:
-    def __init__(self, limit: int) -> None:
+    """Per-run spend cap for one API key, floored by the key's own quota.
+
+    ``limit`` bounds this run, and the keys are on very different plans
+    (20,000/month for the primary, 500/month for the expansion keys), so each
+    gets its own. ``observe`` reads x-requests-remaining off any response, which
+    additionally stops spend once the key would drop below ``reserve`` — 0 by
+    default, i.e. a key is allowed to run itself dry.
+    """
+
+    def __init__(self, limit: int, reserve: int = ODDS_MIN_CREDITS_RESERVE) -> None:
         self.limit = limit
         self.used = 0
+        self.reserve = reserve
+        self.quota_remaining: int | None = None
+
+    def observe(self, response) -> None:
+        header = (getattr(response, "headers", None) or {}).get("x-requests-remaining")
+        if header is None:
+            return
+        try:
+            self.quota_remaining = int(float(header))
+        except (TypeError, ValueError):
+            return
+        print(f"[odds] x-requests-remaining: {self.quota_remaining}")
 
     def charge(self, cost: int) -> bool:
         if cost <= 0:
             return True
-        if self.used + cost > self.limit:
+        if cost > self.remaining:
             print(f"BEE-BAKED CREDIT GUARD: blocked {cost} credits; {self.remaining} left.")
             return False
         self.used += cost
@@ -37,7 +79,10 @@ class _CreditTracker:
 
     @property
     def remaining(self) -> int:
-        return max(0, self.limit - self.used)
+        run_remaining = max(0, self.limit - self.used)
+        if self.quota_remaining is None:
+            return run_remaining
+        return min(run_remaining, max(0, self.quota_remaining - self.reserve))
 
 
 # Define your most profitable prop markets
@@ -95,6 +140,25 @@ MLB_F5_CONFIG = {
 MLB_NRFI_CONFIG = {
     "baseball_mlb": "runs_1st_inning",
 }
+
+
+def _claim_daily_pull(name: str) -> bool:
+    """True at most once per local day, for the first run past the cutoff hour.
+
+    Claimed through ``bot_state`` rather than inferred from the clock so a
+    re-run, a shifted cron or a second workflow can't pay for the pull twice.
+    """
+    if get_local_now().hour < ODDS_DAILY_PULL_MIN_LOCAL_HOUR:
+        return False
+
+    today = get_local_date_str()
+    state = load_tracker_state(DAILY_PULL_STATE_KEY, {}) or {}
+    if state.get(name) == today:
+        return False
+
+    state[name] = today
+    save_tracker_state(DAILY_PULL_STATE_KEY, state)
+    return True
 
 
 def _credits_for_config(config: Dict[str, str]) -> int:
@@ -200,11 +264,9 @@ def _fetch_props_for_events(
             response.raise_for_status()
             prop_data = response.json()
             _merge_bookmakers(event, prop_data)
+            credit_tracker.observe(response)
             if not credit_tracker.charge(request_credits):
                 break
-            remaining = response.headers.get("x-requests-remaining")
-            if remaining is not None:
-                print(f"[odds] x-requests-remaining: {remaining}")
             enriched += 1
             time.sleep(0.3)
         except Exception as exc:
@@ -254,6 +316,7 @@ def _fetch_event_scoped_config(
             try:
                 response = request("GET", url, params=params, timeout=20)
                 _merge_bookmakers(event, response.json())
+                credit_tracker.observe(response)
                 if not credit_tracker.charge(request_credits):
                     break
                 enriched += 1
@@ -300,6 +363,7 @@ def _fetch_config(
         try:
             response = request("GET", url, params=params, timeout=20)
             events = filter_valid_events(response.json(), sport)
+            credit_tracker.observe(response)
             if not credit_tracker.charge(request_credits):
                 continue
 
@@ -310,9 +374,6 @@ def _fetch_config(
                 fetched_props.add(tracker_key)
 
             _merge_cache(cache, sport, events)
-            remaining = response.headers.get("x-requests-remaining")
-            if remaining is not None:
-                print(f"[odds] x-requests-remaining: {remaining}")
             print(f"Cached {sport} ({markets}) via {label}. Credits used this main request: {request_credits} | total: {credit_tracker.used}/{credit_tracker.limit}")
             success_count += 1
         except Exception as exc:
@@ -329,10 +390,13 @@ def run_fetcher():
     # billed against a different key with its own monthly quota.
     trackers: Dict[str, _CreditTracker] = {}
 
-    def credits_for(api_key: str | None) -> _CreditTracker:
-        return trackers.setdefault(str(api_key or ""), _CreditTracker(ODDS_MAX_CREDITS_PER_RUN))
+    def credits_for(api_key: str | None, limit: int = ODDS_MAX_CREDITS_PER_RUN_SECONDARY) -> _CreditTracker:
+        return trackers.setdefault(str(api_key or ""), _CreditTracker(limit))
 
-    print(f"BEE-BAKED FETCH: starting with a credit cap of {ODDS_MAX_CREDITS_PER_RUN} per API key")
+    print(
+        f"BEE-BAKED FETCH: credit caps per run — primary key {ODDS_MAX_CREDITS_PER_RUN},"
+        f" expansion keys {ODDS_MAX_CREDITS_PER_RUN_SECONDARY}, reserve floor {ODDS_MIN_CREDITS_RESERVE}"
+    )
 
     cache: Dict[str, List[dict]] = get_master_cache() or {}
     fetched_props: Set[str] = set()
@@ -349,8 +413,8 @@ def run_fetcher():
         "BEE-BAKED FETCH: Running primary precision pull"
         f" ({_credits_for_config(active_primary) * 2} credits/run)"
     )
-    primary_sharp = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credits_for(ODDS_API_KEY), ODDS_MAX_EVENTS_PER_ENRICH)
-    primary_soft = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credits_for(ODDS_API_KEY), ODDS_MAX_EVENTS_PER_ENRICH)
+    primary_sharp = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credits_for(ODDS_API_KEY, ODDS_MAX_CREDITS_PER_RUN), ODDS_MAX_EVENTS_PER_ENRICH)
+    primary_soft = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credits_for(ODDS_API_KEY, ODDS_MAX_CREDITS_PER_RUN), ODDS_MAX_EVENTS_PER_ENRICH)
 
     active_secondary = filter_config_in_season(SECONDARY_CONFIG)
     secondary_sharp = 0
@@ -406,10 +470,13 @@ def run_fetcher():
     else:
         print("ODDS_API_KEY_3 not set. Skipping partial-game and alternate-market pull.")
 
+    # First five and NRFI are billed per event per region and share the primary
+    # key's quota, so they run once a day instead of in every window.
     active_mlb_f5 = filter_config_in_season(MLB_F5_CONFIG)
     mlb_f5_sharp = 0
     mlb_f5_soft = 0
-    if ODDS_API_KEY_4 and ENABLE_MLB_F5_PULL:
+    daily_pull_due = _claim_daily_pull("mlb_f5") if ENABLE_MLB_F5_PULL else False
+    if ODDS_API_KEY and ENABLE_MLB_F5_PULL and daily_pull_due:
         skipped_mlb_f5 = set(MLB_F5_CONFIG) - set(active_mlb_f5)
         if skipped_mlb_f5:
             print(f"BEE-BAKED FETCH: Skipping off-season sports (mlb_f5): {', '.join(sorted(skipped_mlb_f5))}")
@@ -417,17 +484,20 @@ def run_fetcher():
             "BEE-BAKED FETCH: Running dedicated MLB first-five pull"
             f" ({_credits_for_config(active_mlb_f5)} credits/event)"
         )
-        mlb_f5_sharp = _fetch_event_scoped_config(cache, ODDS_API_KEY_4, active_mlb_f5, "mlb f5 sharp eu", SHARP_REGION, SHARP_BOOKS, credits_for(ODDS_API_KEY_4), ODDS_MAX_EVENTS_PER_ENRICH)
-        mlb_f5_soft = _fetch_event_scoped_config(cache, ODDS_API_KEY_4, active_mlb_f5, "mlb f5 soft us", SOFT_REGION, SOFT_BOOKS, credits_for(ODDS_API_KEY_4), ODDS_MAX_EVENTS_PER_ENRICH)
+        mlb_f5_sharp = _fetch_event_scoped_config(cache, ODDS_API_KEY, active_mlb_f5, "mlb f5 sharp eu", SHARP_REGION, SHARP_BOOKS, credits_for(ODDS_API_KEY, ODDS_MAX_CREDITS_PER_RUN), ODDS_MAX_EVENTS_PER_ENRICH)
+        mlb_f5_soft = _fetch_event_scoped_config(cache, ODDS_API_KEY, active_mlb_f5, "mlb f5 soft us", SOFT_REGION, SOFT_BOOKS, credits_for(ODDS_API_KEY, ODDS_MAX_CREDITS_PER_RUN), ODDS_MAX_EVENTS_PER_ENRICH)
     elif not ENABLE_MLB_F5_PULL:
         print("ENABLE_MLB_F5_PULL=false. Skipping dedicated MLB first-five pull.")
+    elif not daily_pull_due:
+        print("BEE-BAKED FETCH: MLB first-five already pulled today; skipping.")
     else:
-        print("ODDS_API_KEY_4 not set. Skipping dedicated MLB first-five pull.")
+        print("ODDS_API_KEY not set. Skipping dedicated MLB first-five pull.")
 
     active_mlb_nrfi = filter_config_in_season(MLB_NRFI_CONFIG)
     mlb_nrfi_sharp = 0
     mlb_nrfi_soft = 0
-    if ODDS_API_KEY_4 and ENABLE_MLB_NRFI_PULL:
+    nrfi_pull_due = _claim_daily_pull("mlb_nrfi") if ENABLE_MLB_NRFI_PULL else False
+    if ODDS_API_KEY and ENABLE_MLB_NRFI_PULL and nrfi_pull_due:
         skipped_mlb_nrfi = set(MLB_NRFI_CONFIG) - set(active_mlb_nrfi)
         if skipped_mlb_nrfi:
             print(f"BEE-BAKED FETCH: Skipping off-season sports (mlb_nrfi): {', '.join(sorted(skipped_mlb_nrfi))}")
@@ -435,12 +505,14 @@ def run_fetcher():
             "BEE-BAKED FETCH: Running dedicated MLB NRFI pull"
             f" ({_credits_for_config(active_mlb_nrfi)} credits/event)"
         )
-        mlb_nrfi_sharp = _fetch_event_scoped_config(cache, ODDS_API_KEY_4, active_mlb_nrfi, "mlb nrfi sharp eu", SHARP_REGION, SHARP_BOOKS, credits_for(ODDS_API_KEY_4), ODDS_MAX_EVENTS_PER_ENRICH)
-        mlb_nrfi_soft = _fetch_event_scoped_config(cache, ODDS_API_KEY_4, active_mlb_nrfi, "mlb nrfi soft us", SOFT_REGION, SOFT_BOOKS, credits_for(ODDS_API_KEY_4), ODDS_MAX_EVENTS_PER_ENRICH)
+        mlb_nrfi_sharp = _fetch_event_scoped_config(cache, ODDS_API_KEY, active_mlb_nrfi, "mlb nrfi sharp eu", SHARP_REGION, SHARP_BOOKS, credits_for(ODDS_API_KEY, ODDS_MAX_CREDITS_PER_RUN), ODDS_MAX_EVENTS_PER_ENRICH)
+        mlb_nrfi_soft = _fetch_event_scoped_config(cache, ODDS_API_KEY, active_mlb_nrfi, "mlb nrfi soft us", SOFT_REGION, SOFT_BOOKS, credits_for(ODDS_API_KEY, ODDS_MAX_CREDITS_PER_RUN), ODDS_MAX_EVENTS_PER_ENRICH)
     elif not ENABLE_MLB_NRFI_PULL:
         print("ENABLE_MLB_NRFI_PULL=false. Skipping dedicated MLB NRFI pull.")
+    elif not nrfi_pull_due:
+        print("BEE-BAKED FETCH: MLB NRFI already pulled today; skipping.")
     else:
-        print("ODDS_API_KEY_4 not set. Skipping dedicated MLB NRFI pull.")
+        print("ODDS_API_KEY not set. Skipping dedicated MLB NRFI pull.")
 
     save_master_cache(cache)
 
@@ -448,8 +520,8 @@ def run_fetcher():
     secondary_denom = len(active_secondary) if (ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL) else 0
     tertiary_denom = len(active_tertiary) if (ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL) else 0
     partial_denom = len(active_partial) if (ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL) else 0
-    mlb_f5_denom = len(active_mlb_f5) if (ODDS_API_KEY_4 and ENABLE_MLB_F5_PULL) else 0
-    mlb_nrfi_denom = len(active_mlb_nrfi) if (ODDS_API_KEY_4 and ENABLE_MLB_NRFI_PULL) else 0
+    mlb_f5_denom = len(active_mlb_f5) if (ODDS_API_KEY and ENABLE_MLB_F5_PULL and daily_pull_due) else 0
+    mlb_nrfi_denom = len(active_mlb_nrfi) if (ODDS_API_KEY and ENABLE_MLB_NRFI_PULL and nrfi_pull_due) else 0
 
     detail = (
         f"fetch complete"
