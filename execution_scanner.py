@@ -22,6 +22,7 @@ from execution_signal import build_order_from_edge, quote_from_book
 from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL, DEFAULT_WEBHOOK_URL
+from services.last_ten import build_last_ten_context_line
 from utils.odds import decimal_to_american, fair_probabilities_from_prices, quarter_kelly_units
 from utils.scratch_guard import (
     STARTED_STATUSES,
@@ -226,6 +227,12 @@ def run_execution_scan() -> dict:
                                     "book": bookmaker.get("title", book_key),
                                     "price": float(outcome["price"]),
                                     "selection": _selection_text(outcome),
+                                    # Kept unnormalized (unlike the dedupe key)
+                                    # so recent-form lookups and Discord text
+                                    # can use the player's actual name.
+                                    "player": str(outcome.get("description") or "").strip(),
+                                    "outcome_name": str(outcome.get("name") or "").strip(),
+                                    "point": outcome.get("point"),
                                     "capacity": EXECUTION_MAX_ORDER_UNITS,
                                     "weight": book_weight_for(book_weights, bookmaker.get("title", book_key)),
                                 }
@@ -353,7 +360,50 @@ def _execution_desk_alert_description(candidate: dict) -> str:
         f"**Fair Value (Pinnacle):** {fair_american}\n"
         f"**Edge:** {candidate['edge'] * 100:.2f}%\n"
         f"**Suggested:** {candidate['units']:.2f} Units"
+        f"{_execution_last_ten(candidate)}"
     )
+
+
+def _execution_last_ten(candidate: dict) -> str:
+    """Recent-form line for a desk edge.
+
+    The desk keys outcomes by ``(name, point, description)``; the player name
+    lives in ``description`` for props and the outcome ``name`` is the side.
+    Team markets fall back to the outcome name, which resolves to no over/under
+    direction rather than a fabricated one.
+    """
+    outcome = best_outcome_context(candidate)
+    if not outcome:
+        return ""
+    target, side = outcome
+    return build_last_ten_context_line(
+        target,
+        str(candidate.get("market_type") or ""),
+        (candidate.get("best") or {}).get("point"),
+        side,
+        str(candidate.get("sport") or ""),
+        opponent=_matchup_teams(candidate.get("matchup")),
+    )
+
+
+def _matchup_teams(matchup: object) -> tuple:
+    text = str(matchup or "")
+    if " @ " not in text:
+        return ()
+    away, home = text.split(" @ ", 1)
+    return tuple(team.strip() for team in (home, away) if team.strip())
+
+
+def best_outcome_context(candidate: dict):
+    """``(target_name, side)`` for the selected outcome, or ``None``."""
+    best = candidate.get("best") or {}
+    player = str(best.get("player") or "").strip()
+    name = str(best.get("outcome_name") or "").strip()
+    if player:
+        return player, name
+    if name:
+        return name, name
+    return None
 
 
 def _execution_dedup_key(candidate: dict) -> str:
