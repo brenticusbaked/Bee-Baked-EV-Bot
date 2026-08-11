@@ -7,7 +7,7 @@ scripts then pick up the new lines without further wiring.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from db_manager import get_master_cache, save_master_cache
 from master_odds_fetcher import _merge_cache

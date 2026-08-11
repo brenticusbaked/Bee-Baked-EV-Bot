@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime
+from enum import Enum
 from typing import Iterable, List
 
 from execution.models import ExecutionReport, OrderStatus, ParentOrder, VenueQuote
@@ -50,15 +52,25 @@ class ExecutionDesk:
         return ExecutionReport(order, status, child_orders, fills, metrics=execution_metrics(order, fills))
 
 
+def _json_safe(value):
+    """Recursively convert ``asdict`` output into JSON-encodable values.
+
+    ``ParentOrder.created_at`` and ``Fill.filled_at`` survive ``asdict`` as real
+    ``datetime`` objects, which the Supabase client cannot encode; the local
+    ledger hid this because it dumps with ``default=str``.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def report_to_dict(report: ExecutionReport) -> dict:
-    data = asdict(report)
+    data = _json_safe(asdict(report))
     data["status"] = report.status.value
-    data["parent_order"]["side"] = report.parent_order.side.value
-    data["parent_order"]["order_type"] = report.parent_order.order_type.value
-    data["parent_order"]["time_in_force"] = report.parent_order.time_in_force.value
-    for child in data["child_orders"]:
-        child["side"] = child["side"].value if hasattr(child["side"], "value") else child["side"]
-        child["status"] = child["status"].value if hasattr(child["status"], "value") else child["status"]
-    for fill in data["fills"]:
-        fill["side"] = fill["side"].value if hasattr(fill["side"], "value") else fill["side"]
     return data
