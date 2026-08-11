@@ -1,10 +1,10 @@
-import os
 from datetime import datetime
 from functools import lru_cache
 
 import requests
 
 from db_manager import load_tracker_state, save_tracker_state
+from services.discord_channels import HOME_RUNS_WEBHOOK_URL
 from services.http_client import post_discord
 from services.last_ten import build_last_ten_context_line
 from utils.config import env_flag
@@ -23,13 +23,9 @@ HR_MODEL_ONLY_TIER1 = env_flag("HR_MODEL_ONLY_TIER1", True)
 # gates are worth one, and the run is capped so this can never dominate the job.
 HR_STATCAST_MAX_PROFILES = int(env_float("HR_STATCAST_MAX_PROFILES", 40))
 
-# Routed directly to your Positive EV / Bet Alerts Discord channel
-DISCORD_WEBHOOK_URL = (
-    os.environ.get("DISCORD_BET_ALERTS_WEBHOOK_URL")
-    or os.environ.get("DAILY_SLIPS_WEBHOOK_URL")
-    or os.environ.get("DISCORD_WEBHOOK_URL")
-    or ""
-).strip()
+# Home run alerts get their own channel, falling back to the MLB and bet-alerts
+# lanes when no dedicated hook is configured.
+DISCORD_WEBHOOK_URL = (HOME_RUNS_WEBHOOK_URL or "").strip()
 
 
 def fetch_todays_mlb_slate():
