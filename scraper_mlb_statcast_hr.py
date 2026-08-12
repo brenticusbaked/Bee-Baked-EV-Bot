@@ -18,6 +18,10 @@ HR_MODEL_EDGE_THRESHOLD = env_float("HR_MODEL_EDGE_THRESHOLD", 0.02)
 HR_MODEL_MIN_UNITS = env_float("HR_MODEL_MIN_UNITS", 0.25)
 HR_MODEL_BASE_DECIMAL_ODDS = env_float("HR_MODEL_BASE_DECIMAL_ODDS", 5.0)
 HR_MODEL_ONLY_TIER1 = env_flag("HR_MODEL_ONLY_TIER1", True)
+# Each Statcast profile is a full-season pull from baseballsavant for one
+# batter, several seconds apiece. Only batters that survive the slate and tier
+# gates are worth one, and the run is capped so this can never dominate the job.
+HR_STATCAST_MAX_PROFILES = int(env_float("HR_STATCAST_MAX_PROFILES", 40))
 
 # Routed directly to your Positive EV / Bet Alerts Discord channel
 DISCORD_WEBHOOK_URL = (
@@ -342,7 +346,11 @@ def fetch_batter_power_stats(season=2026):
                     "hr_per_ab": hr / ab if ab > 0 else 0.0,
                     "slg": slg,
                     "iso": iso,
-                    "statcast": _fetch_statcast_profile(player_id, str(name), season) if name else {},
+                    "player_id": player_id,
+                    "season": season,
+                    # Fetched lazily in calculate_hr_units: most qualified
+                    # batters are not playing today or fail the tier gate.
+                    "statcast": None,
                 }
         print(f"Successfully compiled power metrics for {len(batter_cache)} batters.")
     except Exception as exc:
@@ -357,10 +365,10 @@ def calculate_hr_units(batter_stats, slate_context, base_unit_size=1.0, kelly_fr
     Quarter-Kelly formula.
     """
     recommendations = []
+    statcast_budget = HR_STATCAST_MAX_PROFILES
     for player_id, stats in batter_stats.items():
         iso = stats.get("iso", 0.0)
         hr_per_ab = stats.get("hr_per_ab", 0.0)
-        statcast = stats.get("statcast") or {}
         team_name = stats.get("team", "")
         game_context = _find_team_context(team_name, slate_context)
 
@@ -374,6 +382,17 @@ def calculate_hr_units(batter_stats, slate_context, base_unit_size=1.0, kelly_fr
             continue
         if HR_MODEL_ONLY_TIER1 and not is_tier_1:
             continue
+
+        statcast = stats.get("statcast")
+        if statcast is None and statcast_budget > 0:
+            statcast = _fetch_statcast_profile(
+                str(stats.get("player_id") or player_id),
+                str(stats.get("name") or ""),
+                int(stats.get("season") or 0),
+            )
+            stats["statcast"] = statcast
+            statcast_budget -= 1
+        statcast = statcast or {}
 
         # Scaled probability baseline for home run markets (~+300 odds / 4.0 decimal).
         implied_prob = min(0.30, max(0.10, hr_per_ab * 3.8))

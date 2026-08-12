@@ -207,13 +207,22 @@ def _format_prop_stat_label(market_key: str) -> str:
     return clean.replace("_", " ").title()
 
 
+def _prop_opponent(event: dict) -> tuple:
+    """Both teams in the matchup as candidate opponents.
+
+    The odds feed does not say which team a prop's player belongs to, so both
+    are offered and the stat log decides which one is the opponent.
+    """
+    return tuple(team for team in (event.get("home_team"), event.get("away_team")) if team)
+
+
 def _l10_context_line(
     target_name: str,
     market_key: str,
     point: object,
     side: str,
     sport: str,
-    opponent: str | None = None,
+    opponent: object = None,
 ) -> str:
     return build_last_ten_context_line(
         target_name,
@@ -558,7 +567,9 @@ def evaluate_player_props(
                 continue
 
             app_link = sportsbook_search_link(offer["book_key"], matchup)
-            l10_context = _l10_context_line(player, market_key, point, side, sport)
+            l10_context = _l10_context_line(
+                player, market_key, point, side, sport, opponent=_prop_opponent(event)
+            )
             alerts.append(
                 {
                     "sport": sport,
@@ -893,6 +904,9 @@ def scan_markets(
                         final["name"],
                         market_type,
                         final.get("point"),
+                        # The outcome name is the side: "Over"/"Under" on a
+                        # total, a team name otherwise (which resolves to no
+                        # direction rather than being read as "under").
                         final["name"],
                         sport,
                         opponent=opponent_team,

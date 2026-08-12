@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from db_manager import get_master_cache, is_already_logged, log_bet_to_db
 from services.alerts import send_discord_alert
+from services.last_ten import build_last_ten_context_line
 from utils.odds import (
     decimal_to_american,
     fair_probabilities_from_prices,
@@ -42,6 +43,9 @@ class MarketEdge:
     fair_probability: float
     edge: float
     units: float
+    # Raw outcome name ("Over", "Yes", a team). Recent-form lookups need the
+    # direction, which ``selection`` has already been formatted away from.
+    side: str = ""
 
     @property
     def offered_american(self) -> str:
@@ -187,6 +191,7 @@ def find_edges(
                             fair_probability=probability,
                             edge=edge,
                             units=units,
+                            side=str(outcome.get("name") or "").strip(),
                         )
                     )
 
@@ -195,6 +200,35 @@ def find_edges(
 
     edges.sort(key=lambda item: item.edge, reverse=True)
     return edges
+
+
+def last_ten_field(edge: MarketEdge) -> list:
+    """Recent-form field, omitted entirely when there is nothing to say.
+
+    ``build_last_ten_context_line`` returns a newline-prefixed markdown fragment
+    built for plain descriptions; here it becomes its own embed field, so the
+    prefix and bold label are stripped back off.
+    """
+    target = edge.player or edge.selection
+    context = build_last_ten_context_line(
+        target,
+        edge.market_key,
+        edge.point,
+        edge.side,
+        edge.sport,
+        opponent=matchup_teams(edge.matchup),
+    )
+    body = context.replace("\n**Last 10:** ", "").strip()
+    if not body or body == "unavailable.":
+        return []
+    return [{"name": "Last 10", "value": body[:1024], "inline": False}]
+
+
+def matchup_teams(matchup: str) -> tuple:
+    if " @ " not in str(matchup or ""):
+        return ()
+    away, home = str(matchup).split(" @ ", 1)
+    return tuple(team.strip() for team in (home, away) if team.strip())
 
 
 def build_embed(edge: MarketEdge) -> dict:
@@ -221,6 +255,7 @@ def build_embed(edge: MarketEdge) -> dict:
                 "value": f"EV {edge.edge:.2%} | Recommend: {edge.units:.2f}u (Quarter-Kelly)",
                 "inline": False,
             },
+            *last_ten_field(edge),
         ],
         "footer": {"text": EMBED_FOOTER},
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
