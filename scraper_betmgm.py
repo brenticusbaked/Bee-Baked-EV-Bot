@@ -23,11 +23,8 @@ from services.odds_scraper_ingest import extract_price, ingest_current_lines
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 TRACKER_FILE = "mgm_lines.json"
 STATE_KEY = "tracker_betmgm_nba"
-PROXY_USERNAME = os.getenv("PROXY_USERNAME")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
-RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
-PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
-MAX_PROXY_ATTEMPTS = int(os.getenv("BETMGM_SCRAPER_PROXY_ATTEMPTS", os.getenv("SCRAPER_PROXY_ATTEMPTS", "2")))
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
+
 DIRECT_TIMEOUT_MS = int(os.getenv("BETMGM_DIRECT_TIMEOUT_MS", "8000"))
 LAUNCH_TIMEOUT_MS = int(os.getenv("BETMGM_LAUNCH_TIMEOUT_MS", "8000"))
 NAV_TIMEOUT_MS = int(os.getenv("BETMGM_NAV_TIMEOUT_MS", "15000"))
@@ -93,36 +90,31 @@ def _pinnacle_reference(current: dict) -> str:
 
 
 def _proxy_candidates():
-    if not (PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD):
-        return [None]
-    shuffled = PROXY_IPS[:]
-    random.shuffle(shuffled)
-    return [None] + shuffled[: max(MAX_PROXY_ATTEMPTS - 1, 0)]
+    return ["scraperapi"]
 
 
 def _browser_proxy_candidates():
-    return [proxy_ip for proxy_ip in _proxy_candidates() if proxy_ip]
+    return ["scraperapi"]
 
 
 def _proxy_settings(proxy_ip: Optional[str]):
-    if not proxy_ip:
+    if not SCRAPER_API_KEY:
         return None
-    random_session = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    dynamic_username = f"{PROXY_USERNAME}-session-{random_session}"
     return {
-        "server": f"http://{proxy_ip}",
-        "username": dynamic_username,
-        "password": PROXY_PASSWORD,
+        "server": "http://proxy-server.scraperapi.com:8001",
+        "username": "scraperapi",
+        "password": SCRAPER_API_KEY,
     }
 
 
 def _request_proxy_kwargs(proxy_ip: Optional[str]):
-    if not proxy_ip or not (PROXY_USERNAME and PROXY_PASSWORD):
+    if not SCRAPER_API_KEY:
         return {}
-    encoded_username = quote(PROXY_USERNAME, safe="")
-    encoded_password = quote(PROXY_PASSWORD, safe="")
-    proxy_url = f"http://{encoded_username}:{encoded_password}@{proxy_ip}"
-    return {"proxies": {"http": proxy_url, "https": proxy_url}}
+    proxy_url = f"http://scraperapi:{SCRAPER_API_KEY}@proxy-server.scraperapi.com:8001"
+    return {
+        "proxies": {"http": proxy_url, "https": proxy_url},
+        "verify": False
+    }
 
 
 def _looks_like_betmgm_payload(payload: dict) -> bool:

@@ -17,8 +17,8 @@ from utils.odds import american_to_decimal
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 TRACKER_FILE = "dk_lines.json"
 STATE_KEY = "tracker_draftkings_nba"
-PROXY_USERNAME = os.getenv("PROXY_USERNAME")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
+
 USER_AGENT = os.getenv(
     "USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -280,16 +280,17 @@ def _fetch_dk_direct_payload():
 async def _fetch_dk_browser_direct_payload():
     async with async_playwright() as playwright:
         proxy_settings = None
-        if PROXY_USERNAME and PROXY_PASSWORD:
+        if SCRAPER_API_KEY:
             proxy_settings = {
-                "server": "http://p.webshare.io:80",
-                "username": PROXY_USERNAME,
-                "password": PROXY_PASSWORD,
+                "server": "http://proxy-server.scraperapi.com:8001",
+                "username": "scraperapi",
+                "password": SCRAPER_API_KEY,
             }
 
         browser = await playwright.chromium.launch(headless=True, proxy=proxy_settings)
         context = await browser.new_context(
             user_agent=USER_AGENT,
+            ignore_https_errors=True,
             extra_http_headers={
                 "Accept": "application/json",
                 "Referer": DK_PAGE_URL,
@@ -324,15 +325,18 @@ async def _fetch_dk_playwright_payload():
 
     async with async_playwright() as playwright:
         proxy_settings = None
-        if PROXY_USERNAME and PROXY_PASSWORD:
+        if SCRAPER_API_KEY:
             proxy_settings = {
-                "server": "http://p.webshare.io:80",
-                "username": PROXY_USERNAME,
-                "password": PROXY_PASSWORD,
+                "server": "http://proxy-server.scraperapi.com:8001",
+                "username": "scraperapi",
+                "password": SCRAPER_API_KEY,
             }
 
         browser = await playwright.chromium.launch(headless=True, proxy=proxy_settings)
-        context = await browser.new_context(user_agent=USER_AGENT)
+        context = await browser.new_context(
+            user_agent=USER_AGENT,
+            ignore_https_errors=True
+        )
         page = await context.new_page()
 
         try:

@@ -17,11 +17,8 @@ from services.odds_scraper_ingest import extract_price, ingest_current_lines
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 TRACKER_FILE = "fd_lines.json"
 STATE_KEY = "tracker_fanduel_nba"
-PROXY_USERNAME = os.getenv("PROXY_USERNAME")
-PROXY_PASSWORD = os.getenv("PROXY_PASSWORD")
-RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
-PROXY_IPS = [ip.strip() for ip in RAW_PROXY_LIST.replace("\n", ",").split(",") if ip.strip()]
-MAX_PROXY_ATTEMPTS = int(os.getenv("SCRAPER_PROXY_ATTEMPTS", "3"))
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
+
 FANDUEL_URL = "https://sportsbook.fanduel.com/basketball/nba"
 FANDUEL_CONTENT_API = "https://sbapi.nj.sportsbook.fanduel.com/api/content-managed-page"
 FANDUEL_AK = os.getenv("FANDUEL_AK", "FhMFpcPWXMeyZxOx")
@@ -49,20 +46,16 @@ def _pinnacle_reference(current: dict) -> str:
 
 
 def _proxy_candidates():
-    if not (PROXY_IPS and PROXY_USERNAME and PROXY_PASSWORD):
-        return [None]
-    shuffled = PROXY_IPS[:]
-    random.shuffle(shuffled)
-    return [None] + shuffled[: max(MAX_PROXY_ATTEMPTS - 1, 0)]
+    return ["scraperapi"]
 
 
 def _proxy_settings(proxy_ip: Optional[str]):
-    if not proxy_ip:
+    if not SCRAPER_API_KEY:
         return None
     return {
-        "server": f"http://{proxy_ip}",
-        "username": PROXY_USERNAME,
-        "password": PROXY_PASSWORD,
+        "server": "http://proxy-server.scraperapi.com:8001",
+        "username": "scraperapi",
+        "password": SCRAPER_API_KEY,
     }
 
 
@@ -231,7 +224,10 @@ def _fetch_fanduel_payload():
             browser = None
             try:
                 browser = playwright.chromium.launch(headless=True, proxy=proxy_settings)
-                context = browser.new_context(user_agent=FANDUEL_USER_AGENT)
+                context = browser.new_context(
+                    user_agent=FANDUEL_USER_AGENT,
+                    ignore_https_errors=True
+                )
                 page = context.new_page()
                 data, source_url = _extract_payload_from_page(page)
                 browser.close()

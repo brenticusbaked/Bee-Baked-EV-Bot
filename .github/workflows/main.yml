@@ -139,9 +139,7 @@ jobs:
           EXECUTION_MAX_SYMBOL_EXPOSURE: "0"
           SHARP_BOOK_HIERARCHY: "pinnacle,circa,bookmaker,cris,draftkings"
           PROP_SHARP_BOOKS: "pinnacle,bookmaker,circa,cris,draftkings,betonline"
-          PROXY_LIST: ${{ secrets.PROXY_LIST }}
-          PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
-          PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
           USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         run: |
           python scraper_unified.py
