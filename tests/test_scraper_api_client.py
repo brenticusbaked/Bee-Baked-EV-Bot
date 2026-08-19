@@ -1,9 +1,11 @@
 """ScraperAPI transport: request shaping, retry classification, credit
 accounting and the scrapers' wiring. No network access."""
 
+import asyncio
+import os
 import unittest
 from dataclasses import replace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from db_manager import _state_fallback
 from services import scraper_api_client as client
@@ -268,6 +270,61 @@ class CreditBookkeepingTests(unittest.TestCase):
         self.assertEqual(_state_fallback("scraperapi_credits.json"), {})
         self.assertEqual(_state_fallback(None), {})
         self.assertEqual(_state_fallback({"credits": 1}), {"credits": 1})
+
+
+class TelemetryIsolationTests(ScraperApiClientTestCase):
+    def test_stats_reporting_cannot_fail_the_scraper_job(self):
+        # The run that graded every scraper "ok" still exited 1, because this
+        # reporting line raised after the work was done.
+        with patch.object(client, "format_stats", side_effect=AttributeError("boom")):
+            client.log_stats()
+
+
+class DraftKingsFallbackTests(unittest.TestCase):
+    """DraftKings' Playwright fallbacks timed out from the runner and propagated,
+    marking the task failed after minutes of job time."""
+
+    def test_browser_fallbacks_are_off_unless_asked_for(self):
+        import scraper_draftkings
+
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("DRAFTKINGS_BROWSER_FALLBACK", None)
+            self.assertIsNone(asyncio.run(scraper_draftkings._fetch_dk_browser_direct_payload()))
+            self.assertIsNone(asyncio.run(scraper_draftkings._fetch_dk_playwright_payload()))
+
+    def test_navigation_failure_reports_no_data_instead_of_raising(self):
+        import scraper_draftkings
+
+        page = MagicMock()
+        page.goto = AsyncMock(side_effect=RuntimeError("Timeout 25000ms exceeded"))
+        browser = MagicMock()
+        browser.close = AsyncMock()
+        context = MagicMock()
+        context.new_page = AsyncMock(return_value=page)
+        browser.new_context = AsyncMock(return_value=context)
+        chromium = MagicMock()
+        chromium.launch = AsyncMock(return_value=browser)
+        playwright = MagicMock(chromium=chromium)
+        manager = MagicMock()
+        manager.__aenter__ = AsyncMock(return_value=playwright)
+        manager.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.dict("os.environ", {"DRAFTKINGS_BROWSER_FALLBACK": "true"}, clear=False),
+            patch.object(scraper_draftkings, "async_playwright", return_value=manager),
+            patch.object(scraper_draftkings, "playwright_proxy", return_value=None),
+        ):
+            self.assertIsNone(asyncio.run(scraper_draftkings._fetch_dk_browser_direct_payload()))
+        browser.close.assert_awaited()
+
+    def test_event_group_and_page_are_configurable_for_out_of_season_leagues(self):
+        import scraper_draftkings
+
+        self.assertIn(f"eventgroup/{scraper_draftkings.DK_EVENT_GROUP}/full", scraper_draftkings.DK_DIRECT_URLS[0])
+        self.assertEqual(
+            scraper_draftkings.DK_PAGE_URL,
+            os.getenv("DRAFTKINGS_PAGE_URL", "https://sportsbook.draftkings.com/leagues/basketball/nba"),
+        )
 
 
 class ScraperWiringTests(ScraperApiClientTestCase):

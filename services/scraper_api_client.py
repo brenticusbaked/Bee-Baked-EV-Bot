@@ -569,4 +569,9 @@ def format_stats() -> str:
 
 
 def log_stats() -> None:
-    print(format_stats(), flush=True)
+    try:
+        print(format_stats(), flush=True)
+    except Exception as exc:  # noqa: BLE001 - telemetry must not fail the job
+        # This reporting line crashed the whole scraper job once already, after
+        # every scraper had finished successfully.
+        print(f"[scraperapi] stats reporting skipped: {exc}", flush=True)

@@ -70,6 +70,9 @@ jobs:
           SCRAPER_PROXY_ATTEMPTS: "2"
           ENABLE_PYBASEBALL_FIP_SCRAPER: "true"
           ENABLE_DRAFTKINGS_SCRAPER: "true"
+          # DraftKings' Playwright fallbacks time out from runner IPs and cost
+          # minutes of job time; the ScraperAPI JSON endpoint is the live path.
+          DRAFTKINGS_BROWSER_FALLBACK: "false"
           ENABLE_BETMGM_SCRAPER: "true"
           ENABLE_FANDUEL_SCRAPER: "true"
           ENABLE_ODDSHARVESTER: "true"

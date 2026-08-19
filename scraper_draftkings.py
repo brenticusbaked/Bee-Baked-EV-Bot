@@ -18,6 +18,7 @@ from services.scraper_api_client import (
     options_for,
     playwright_proxy,
 )
+from utils.config import env_flag
 from utils.odds import american_to_decimal
 
 
@@ -30,9 +31,15 @@ USER_AGENT = os.getenv(
     "USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 )
-DK_PAGE_URL = "https://sportsbook.draftkings.com/leagues/basketball/nba"
+# DraftKings addresses leagues by page path and numeric event group. Both are
+# overridable so an out-of-season league (NBA in August) can be pointed at a live
+# one without a deploy.
+DK_PAGE_URL = os.getenv(
+    "DRAFTKINGS_PAGE_URL", "https://sportsbook.draftkings.com/leagues/basketball/nba"
+)
+DK_EVENT_GROUP = os.getenv("DRAFTKINGS_EVENT_GROUP", "103")
 DK_DIRECT_URLS = [
-    "https://sportsbook.draftkings.com/sites/US-NJ-SB/api/v1/eventgroup/103/full?format=json",
+    f"https://sportsbook.draftkings.com/sites/US-NJ-SB/api/v1/eventgroup/{DK_EVENT_GROUP}/full?format=json",
 ]
 
 
@@ -288,6 +295,11 @@ def _fetch_dk_direct_payload():
 
 
 async def _fetch_dk_browser_direct_payload():
+    if not env_flag("DRAFTKINGS_BROWSER_FALLBACK", False):
+        # DraftKings times out on Playwright from GitHub runner IPs even through
+        # the proxy, so the browser paths are off by default: they cost minutes of
+        # job time and have never produced a payload the JSON endpoint missed.
+        return None
     async with async_playwright() as playwright:
         proxy_settings = playwright_proxy(BOOK_KEY)
 
@@ -303,8 +315,14 @@ async def _fetch_dk_browser_direct_payload():
         page = await context.new_page()
 
         try:
-            await page.goto(DK_PAGE_URL, wait_until="domcontentloaded", timeout=25000)
-            await page.wait_for_timeout(1500)
+            try:
+                await page.goto(DK_PAGE_URL, wait_until="domcontentloaded", timeout=25000)
+                await page.wait_for_timeout(1500)
+            except Exception as exc:  # noqa: BLE001 - Playwright raises many types here
+                # A fallback that raises turns the whole task red even when the
+                # JSON path already answered; report no data instead.
+                print(f"DraftKings browser navigation failed: {exc}")
+                return None
 
             for url in DK_DIRECT_URLS:
                 try:
@@ -325,6 +343,8 @@ async def _fetch_dk_browser_direct_payload():
 
 
 async def _fetch_dk_playwright_payload():
+    if not env_flag("DRAFTKINGS_BROWSER_FALLBACK", False):
+        return None
     api_data = None
 
     async with async_playwright() as playwright:
