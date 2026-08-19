@@ -1,0 +1,46 @@
+name: Supabase Retention Prune
+
+# Supabase-only: deletes rows past their retention window so the project stays
+# under its storage limit. Zero Odds API cost. Runs after the last daily
+# pipeline window so it never contends with an ingest.
+on:
+  schedule:
+    - cron: '30 8 * * *'  # 03:30 Central
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (count rows without deleting)'
+        type: boolean
+        default: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: db-retention
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Prune stale rows
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          DB_RETENTION_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          # Windows in days. historical_odds is the growth driver but is also the
+          # CLV closing-price fallback, so it keeps the widest odds window.
+          RETENTION_DAYS_HISTORICAL_ODDS: "45"
+          RETENTION_DAYS_FIXTURES: "45"
+          RETENTION_DAYS_ODDS_INGEST_RUNS: "14"
+          RETENTION_DAYS_ALERTS_SENT: "30"
+          RETENTION_DAYS_WORKFLOW_RUNS: "30"
+        run: python -u db_retention.py

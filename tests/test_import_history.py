@@ -63,6 +63,7 @@ class TestImportHistory(unittest.TestCase):
                     "sports": "Baseball",
                     "type": "parlay",
                     "bet_info": "New bet",
+                    "sportsbook": "Fanduel Sportsbook",
                     "time_placed_iso": "2026-07-16T02:00:00Z",
                     "time_settled_iso": "2026-07-16T03:00:00Z",
                 },
@@ -101,8 +102,11 @@ class TestImportHistory(unittest.TestCase):
         mock_table.insert.assert_called_once()
         inserted_rows = mock_table.insert.call_args.args[0]
         self.assertEqual(len(inserted_rows), 1)
-        self.assertEqual(inserted_rows[0]["notes"], "Historical import - ID: new-2")
-        self.assertEqual(inserted_rows[0]["result"], "loss")
+        self.assertEqual(
+            inserted_rows[0]["notes"],
+            "Historical import - ID: new-2;book=fanduel;book_key=fanduel",
+        )
+        self.assertEqual(inserted_rows[0]["result"], "LOSS")
         self.assertEqual(inserted_rows[0]["units"], 2.0)
 
 

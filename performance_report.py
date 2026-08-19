@@ -1,4 +1,3 @@
-import re
 from typing import Dict
 
 import pandas as pd
@@ -6,6 +5,7 @@ import pandas as pd
 from db_manager import get_all_bets
 from services.discord_channels import RESULTS_WEBHOOK_URL
 from services.http_client import post_discord
+from utils.results import GRADED_RESULTS, WIN, book_from_notes, normalize_result
 
 
 DISCORD_STATUS_WEBHOOK_URL = RESULTS_WEBHOOK_URL
@@ -18,6 +18,13 @@ BUCKET_LABELS = [
     "3-5%",
     "5%+",
 ]
+
+
+def _column(df: pd.DataFrame, name: str, default="") -> pd.Series:
+    """The named column, or a filled series when the table predates it."""
+    if name in df.columns:
+        return df[name]
+    return pd.Series(default, index=df.index, dtype="object")
 
 
 def _bucket_edge(value: float) -> str:
@@ -77,12 +84,7 @@ def _format_source_row(label: str, stats: Dict[str, float]) -> str:
 
 
 def _extract_book(notes: str) -> str:
-    if not isinstance(notes, str) or not notes:
-        return "unknown"
-    match = re.search(r"book=([^;]+)", notes)
-    if not match:
-        return "unknown"
-    return match.group(1).strip()
+    return book_from_notes(notes)
 
 
 def _compute_roi(graded: pd.DataFrame) -> float:
@@ -124,19 +126,24 @@ def build_performance_report() -> str:
 
     df["edge_pct_num"] = pd.to_numeric(df.get("edge_pct"), errors="coerce")
     if "edge_pct_num" not in df or df["edge_pct_num"].isna().all():
-        df["edge_pct_num"] = pd.to_numeric(df["edge"].astype(str).str.replace("%", ""), errors="coerce")
-    df = df.dropna(subset=["edge_pct_num"]).copy()
-    if df.empty:
-        return "**EV Bucket Report**\nNo bets with usable EV values found."
+        df["edge_pct_num"] = pd.to_numeric(
+            _column(df, "edge").astype(str).str.replace("%", ""), errors="coerce"
+        )
 
-    df["ev_bucket"] = df["edge_pct_num"].apply(_bucket_edge)
-    df["is_win"] = df.get("result", "").astype(str).eq("WIN")
-    df["is_graded"] = df.get("result", "").astype(str).isin(["WIN", "LOSS", "PUSH"])
+    df["ev_bucket"] = df["edge_pct_num"].apply(lambda value: _bucket_edge(value) if pd.notna(value) else "")
+    # Normalised, because the historical import wrote lower-case results.
+    df["result"] = _column(df, "result").apply(normalize_result)
+    df["is_win"] = df["result"].eq(WIN)
+    df["is_graded"] = df["result"].isin(GRADED_RESULTS)
     df["beat_clv"] = pd.to_numeric(df.get("odds_decimal"), errors="coerce") > pd.to_numeric(df.get("closing_line_decimal"), errors="coerce")
     df["clv_edge_num"] = pd.to_numeric(df.get("clv_edge_pct"), errors="coerce")
     df["bet_source"] = df.get("bet_source", "unknown").fillna("unknown").astype(str)
-    df["sportsbook"] = df.get("notes", "").apply(_extract_book)
+    df["sportsbook"] = _column(df, "notes").apply(_extract_book)
     df["market"] = df.get("market", "unknown").fillna("unknown").astype(str)
+
+    # The record covers every graded bet. Only the EV buckets need a parsable
+    # edge, and a bet whose edge did not survive the import is still a W or an L.
+    bucketed = df.dropna(subset=["edge_pct_num"]).copy()
 
     overall_graded = df[df["is_graded"]]
     overall_clv = df.dropna(subset=["clv_edge_num"])
@@ -149,7 +156,7 @@ def build_performance_report() -> str:
 
     summary = (
         f"**BEE BAKED PERFORMANCE REPORT**\n"
-        f"Total Bets: {len(df)} | Graded: {len(overall_graded)}\n"
+        f"Total Bets: {len(df)} | Graded: {len(overall_graded)} | EV-tagged: {len(bucketed)}\n"
         f"Record: {int(overall_graded['is_win'].sum()) if not overall_graded.empty else 0}W-"
         f"{int((overall_graded['result'].astype(str) == 'LOSS').sum()) if not overall_graded.empty else 0}L\n"
         f"Win%: {win_pct:.1f} | ROI: **{overall_roi:+.1f}%** | Net: **{overall_net:+.2f}u**\n"
@@ -158,7 +165,7 @@ def build_performance_report() -> str:
     )
 
     bucket_rows = []
-    grouped = df.groupby("ev_bucket", dropna=False)
+    grouped = bucketed.groupby("ev_bucket", dropna=False)
     for label in BUCKET_LABELS:
         group = grouped.get_group(label) if label in grouped.groups else pd.DataFrame()
         if group.empty:

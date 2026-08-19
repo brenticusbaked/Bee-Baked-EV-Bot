@@ -1,4 +1,3 @@
-import re
 from typing import Dict
 
 import pandas as pd
@@ -6,15 +5,17 @@ import pandas as pd
 from db_manager import get_all_bets
 from services.history_calibration import book_factor_for, history_book_factors
 from utils.book_names import normalize_book
+from utils.results import GRADED_RESULTS, WIN, book_from_notes, normalize_result
 
 
 def _extract_book(notes: str) -> str:
-    if not isinstance(notes, str) or not notes:
-        return "unknown"
-    match = re.search(r"book=([^;]+)", notes)
-    if not match:
-        return "unknown"
-    return match.group(1).strip()
+    return book_from_notes(notes)
+
+
+def _column(df: pd.DataFrame, name: str, default="") -> pd.Series:
+    if name in df.columns:
+        return df[name]
+    return pd.Series(default, index=df.index, dtype="object")
 
 
 # Books known for higher liquidity and faster line movement
@@ -31,10 +32,11 @@ def get_book_weights(min_sample: int = 5) -> Dict[str, float]:
     if df.empty:
         return {}
 
-    df["sportsbook"] = df.get("notes", "").apply(_extract_book)
+    df["sportsbook"] = _column(df, "notes").apply(_extract_book)
     df["clv_edge_num"] = pd.to_numeric(df.get("clv_edge_pct"), errors="coerce")
-    df["is_win"] = df.get("result", "").astype(str).eq("WIN")
-    df["is_graded"] = df.get("result", "").astype(str).isin(["WIN", "LOSS", "PUSH"])
+    results = _column(df, "result").apply(normalize_result)
+    df["is_win"] = results.eq(WIN)
+    df["is_graded"] = results.isin(GRADED_RESULTS)
 
     weights: Dict[str, float] = {}
     for book, group in df.groupby("sportsbook", dropna=False):

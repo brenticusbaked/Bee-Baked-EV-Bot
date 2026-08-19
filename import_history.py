@@ -1,9 +1,38 @@
 import os
 import re
-import pandas as pd
-from db_manager import supabase
+import sys
 
-_HISTORICAL_NOTE_RE = re.compile(r"^Historical import - ID:\s*(?P<bet_id>.+?)\s*$")
+import pandas as pd
+
+from db_manager import supabase
+from utils.book_names import normalize_book
+from utils.results import LOSS, PUSH, WIN, normalize_result
+
+_HISTORICAL_NOTE_RE = re.compile(r"^Historical import - ID:\s*(?P<bet_id>[^;]+?)\s*(?:;|$)")
+
+# The readers grade on WIN/LOSS/PUSH; writing anything else here is what hid the
+# imported record from every report.
+_STATUS_MAP = {
+    "SETTLED_WIN": WIN,
+    "SETTLED_LOSS": LOSS,
+    "SETTLED_PUSH": PUSH,
+    "SETTLED_VOID": PUSH,
+}
+
+
+def _historical_notes(bet_id: str, sportsbook: object) -> str:
+    """Notes carrying both the dedupe id and the book the per-book records need."""
+    book = normalize_book(str(sportsbook or ""))
+    return f"Historical import - ID: {bet_id};book={book};book_key={book}"
+
+
+def _edge_pct(value: object) -> float:
+    """The export stores EV as a fraction (0.0198); the reports read percent."""
+    if not pd.notna(value):
+        return 0.0
+    edge = float(value)
+    return edge * 100.0 if abs(edge) <= 1.0 else edge
+
 
 def decimal_to_american(decimal_odds):
     if pd.isna(decimal_odds) or decimal_odds <= 1.0:
@@ -43,14 +72,12 @@ def import_csv():
         print(f"Error reading CSV at {csv_path}: {e}")
         return
 
-    settled = df[df['status'].isin(['SETTLED_WIN', 'SETTLED_LOSS', 'SETTLED_PUSH', 'SETTLED_VOID'])].copy()
-    
-    status_map = {
-        'SETTLED_WIN': 'win',
-        'SETTLED_LOSS': 'loss',
-        'SETTLED_PUSH': 'push',
-        'SETTLED_VOID': 'push'
-    }
+    settled = df[df['status'].isin(list(_STATUS_MAP))].copy()
+    cashed_out = sum(1 for status in df['status'] if str(status) == 'SETTLED_CASH_OUT')
+    if cashed_out:
+        # A cash-out settles for a partial amount that no W/L/P label describes,
+        # so it stays out of the record rather than distorting ROI.
+        print(f"[import] skipping {cashed_out} cashed-out wager(s): no win/loss outcome to record.")
 
     existing_history_ids = set()
     try:
@@ -79,20 +106,22 @@ def import_csv():
             continue
 
         raw_amount = float(row['amount']) if pd.notna(row['amount']) else 0.0
-        
-        rows_to_insert.append({
+        payload = {
             "matchup": "Historical Wager",
             "selection": str(row['bet_info'])[:200] if pd.notna(row['bet_info']) else f"Wager ({row['bet_id']})",
             "market": str(row['type']).upper() if pd.notna(row['type']) else "UNKNOWN",
             "odds": decimal_to_american(row['odds']),
-            "edge": float(row['ev']) if pd.notna(row['ev']) else 0.0,
+            "edge": _edge_pct(row['ev']),
             "units": round(raw_amount / 3.0, 2),
             "sport": str(row['sports']).lower() if pd.notna(row['sports']) else "unknown",
-            "result": status_map[row['status']],
+            "result": _STATUS_MAP[row['status']],
             "date": row['time_placed_iso'],
             "graded_at": row['time_settled_iso'],
-            "notes": f"Historical import - ID: {bet_id or row['bet_id']}"
-        })
+            "notes": _historical_notes(bet_id or str(row['bet_id']), row.get('sportsbook')),
+        }
+        if pd.notna(row.get('closing_line')) and float(row['closing_line']) > 1.0:
+            payload["closing_line_decimal"] = float(row['closing_line'])
+        rows_to_insert.append(payload)
         
     print(f"Found {len(rows_to_insert)} settled bets to import.")
 
@@ -107,5 +136,82 @@ def import_csv():
             
     print("Historical import complete! Monte Carlo is ready.")
 
+
+def _existing_history_rows() -> list:
+    """Every previously imported row, paged past PostgREST's row ceiling."""
+    rows: list = []
+    page_size = 1000
+    offset = 0
+    while True:
+        page = (
+            supabase.table("bets_log")
+            .select("id,notes,result")
+            .ilike("notes", "Historical import - ID:%")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        offset += page_size
+
+
+def repair_history(csv_path: str = "bet_history.csv") -> int:
+    """Rewrite already-imported rows with canonical results and their book.
+
+    The first import wrote lower-case results and no sportsbook, which is why the
+    overall record read empty and the per-book breakdown had nothing to group on.
+    This backfills both in place instead of re-importing 22k duplicates.
+    """
+    if not supabase:
+        print("[repair] Supabase client not configured.")
+        return 0
+    if not os.path.exists(csv_path):
+        print(f"[repair] {csv_path} not found; cannot recover the book per bet.")
+        return 0
+
+    csv_rows = pd.read_csv(csv_path)
+    by_bet_id = {
+        str(row["bet_id"]).strip(): row
+        for _, row in csv_rows.iterrows()
+        if pd.notna(row.get("bet_id"))
+    }
+
+    updates = []
+    for row in _existing_history_rows():
+        match = _HISTORICAL_NOTE_RE.match(str(row.get("notes") or "").strip())
+        if not match:
+            continue
+        bet_id = match.group("bet_id")
+        source = by_bet_id.get(bet_id)
+        sportsbook = source.get("sportsbook") if source is not None else None
+        payload = {"id": row.get("id"), "notes": _historical_notes(bet_id, sportsbook)}
+        status = str(source.get("status")) if source is not None else ""
+        canonical = _STATUS_MAP.get(status) or normalize_result(row.get("result"))
+        if canonical:
+            payload["result"] = canonical
+        if source is not None and pd.notna(source.get("closing_line")) and float(source["closing_line"]) > 1.0:
+            payload["closing_line_decimal"] = float(source["closing_line"])
+        updates.append(payload)
+
+    print(f"[repair] rewriting {len(updates)} imported row(s) with canonical results and books.")
+    chunk_size = 500
+    repaired = 0
+    for i in range(0, len(updates), chunk_size):
+        chunk = updates[i:i + chunk_size]
+        try:
+            supabase.table("bets_log").upsert(chunk).execute()
+            repaired += len(chunk)
+            print(f"[repair] {repaired} / {len(updates)} rows updated...")
+        except Exception as e:
+            print(f"[repair] failed to update chunk starting at {i}: {e}")
+    return repaired
+
+
 if __name__ == "__main__":
-    import_csv()
+    if "--repair" in sys.argv:
+        repair_history()
+    else:
+        import_csv()

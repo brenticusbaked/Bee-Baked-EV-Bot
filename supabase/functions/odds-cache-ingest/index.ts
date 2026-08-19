@@ -508,7 +508,9 @@ async function upsertFixtures(sportKey: string, events: OddsEvent[]): Promise<nu
     home_team: event.home_team ?? null,
     away_team: event.away_team ?? null,
     status: "scheduled",
-    raw_event: event,
+    // raw_event held the entire event payload, every bookmaker and outcome
+    // included, rewritten on every ingest. Nothing reads it and it was the bulk
+    // of the project's disk; the columns above carry what the bot needs.
     updated_at: new Date().toISOString(),
   }));
   if (!fixtureRows.length) return 0;
@@ -589,7 +591,6 @@ async function upsertOdds(sportKey: string, events: OddsEvent[]): Promise<number
             line_hash: lineHash(event.id, bookmaker.key, market.key, outcome, marketLastUpdate),
             last_update: marketLastUpdate,
             captured_at: capturedAt,
-            raw_outcome: outcome,
           });
         }
       }
