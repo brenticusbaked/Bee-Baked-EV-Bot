@@ -1,23 +1,30 @@
 import asyncio
-import os
 import json
+import os
 import re
+from dataclasses import replace
 from typing import Dict, Iterable, List, Optional
 
 from playwright.async_api import async_playwright
 
 from db_manager import get_master_cache, load_tracker_state, save_tracker_state
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
-from services.http_client import post_discord, request
+from services.http_client import post_discord
 from services.odds_reference import format_pinnacle_spread_reference
 from services.odds_scraper_ingest import ingest_events
+from services.scraper_api_client import (
+    ScraperApiError,
+    fetch,
+    options_for,
+    playwright_proxy,
+)
 from utils.odds import american_to_decimal
 
 
+BOOK_KEY = "draftkings"
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 TRACKER_FILE = "dk_lines.json"
 STATE_KEY = "tracker_draftkings_nba"
-SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
 
 USER_AGENT = os.getenv(
     "USER_AGENT",
@@ -261,31 +268,28 @@ def _to_ingest_events(current_lines: Dict[str, Dict[str, object]]) -> List[Dict[
 
 def _fetch_dk_direct_payload():
     headers = {"Accept": "application/json", "User-Agent": USER_AGENT, "Referer": DK_PAGE_URL}
+    # The eventgroup feed is JSON behind Akamai: premium residential IPs get it,
+    # ScraperAPI-side rendering would only add 15 credits per call.
+    options = replace(options_for(BOOK_KEY), keep_headers=True)
     for url in DK_DIRECT_URLS:
         try:
-            response = request("GET", url, headers=headers, timeout=20, retry_on_429=False)
+            response = fetch(url, BOOK_KEY, options=options, headers=headers)
             payload = None
             try:
                 payload = response.json()
-            except Exception:
+            except ValueError:
                 payload = _decode_possible_json(response.text)
             if _looks_like_direct_dk_payload(payload):
                 print(f"DraftKings payload captured via direct endpoint: {url}")
                 return _normalize_direct_dk_payload(payload)
-        except Exception as exc:
+        except ScraperApiError as exc:
             print(f"DraftKings direct fetch failed for {url}: {exc}")
     return None
 
 
 async def _fetch_dk_browser_direct_payload():
     async with async_playwright() as playwright:
-        proxy_settings = None
-        if SCRAPER_API_KEY:
-            proxy_settings = {
-                "server": "http://proxy-server.scraperapi.com:8001",
-                "username": "scraperapi",
-                "password": SCRAPER_API_KEY,
-            }
+        proxy_settings = playwright_proxy(BOOK_KEY)
 
         browser = await playwright.chromium.launch(headless=True, proxy=proxy_settings)
         context = await browser.new_context(
@@ -324,13 +328,7 @@ async def _fetch_dk_playwright_payload():
     api_data = None
 
     async with async_playwright() as playwright:
-        proxy_settings = None
-        if SCRAPER_API_KEY:
-            proxy_settings = {
-                "server": "http://proxy-server.scraperapi.com:8001",
-                "username": "scraperapi",
-                "password": SCRAPER_API_KEY,
-            }
+        proxy_settings = playwright_proxy(BOOK_KEY)
 
         browser = await playwright.chromium.launch(headless=True, proxy=proxy_settings)
         context = await browser.new_context(
