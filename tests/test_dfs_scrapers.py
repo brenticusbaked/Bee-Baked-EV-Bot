@@ -302,6 +302,67 @@ class PrizePicksParsingTests(unittest.TestCase):
         self.assertEqual(result["count"], 1)
 
 
+class PrizePicksBlockHandlingTests(unittest.TestCase):
+    """PrizePicks answered 429 to parallel league requests and then 500'd every
+    retry on the first live run, so requests are serialized and a blocked league
+    is retried with rendering rather than being written off."""
+
+    def test_leagues_are_fetched_one_at_a_time_with_headers_forwarded(self):
+        with patch.object(prizepicks, "gather_json_sync", return_value=[{}]) as gather:
+            prizepicks._fetch_leagues()
+        self.assertEqual(gather.call_args.kwargs["concurrency"], 1)
+        options = gather.call_args.kwargs["options"]
+        self.assertTrue(options.keep_headers)
+        self.assertFalse(options.render)
+        self.assertEqual(gather.call_args.kwargs["headers"]["Referer"], "https://app.prizepicks.com/")
+
+    def test_blocked_league_is_retried_with_rendering(self):
+        with (
+            patch.object(prizepicks, "gather_json_sync", return_value=[None, {"data": []}]),
+            patch.object(prizepicks, "try_fetch_json", return_value={"data": [], "included": []}) as retry,
+        ):
+            payloads = prizepicks._fetch_leagues()
+
+        self.assertEqual(retry.call_count, 1)
+        self.assertTrue(retry.call_args.kwargs["options"].render)
+        self.assertEqual(payloads[0], {"data": [], "included": []})
+
+    def test_successful_leagues_are_not_re_fetched(self):
+        with (
+            patch.object(prizepicks, "gather_json_sync", return_value=[{"data": []}]),
+            patch.object(prizepicks, "try_fetch_json") as retry,
+        ):
+            prizepicks._fetch_leagues()
+        retry.assert_not_called()
+
+    def test_render_fallback_can_be_switched_off(self):
+        with (
+            patch.dict("os.environ", {"PRIZEPICKS_RENDER_FALLBACK": "false"}, clear=False),
+            patch.object(prizepicks, "gather_json_sync", return_value=[None]),
+            patch.object(prizepicks, "try_fetch_json") as retry,
+        ):
+            self.assertEqual(prizepicks._fetch_leagues(), [None])
+        retry.assert_not_called()
+
+    def test_fully_blocked_run_says_so_instead_of_reporting_an_empty_board(self):
+        with (
+            patch.object(prizepicks, "_fetch_leagues", return_value=[None, None]),
+            patch.object(prizepicks, "get_master_cache", return_value={}),
+            patch.object(prizepicks, "ingest_events") as ingest,
+        ):
+            result = prizepicks.scrape_prizepicks()
+        ingest.assert_not_called()
+        self.assertIn("unavailable", result["detail"])
+
+
+class InFlightLimitTests(unittest.TestCase):
+    def test_client_caps_simultaneous_requests_across_scraper_threads(self):
+        # Each book runs in its own thread, so the per-call semaphore cannot see
+        # the others; this ceiling is what keeps the plan's thread limit intact.
+        self.assertLessEqual(client._IN_FLIGHT._initial_value, client.MAX_IN_FLIGHT)
+        self.assertGreaterEqual(client._IN_FLIGHT._initial_value, 1)
+
+
 class ProphetXTests(unittest.TestCase):
     def _market(self):
         return {

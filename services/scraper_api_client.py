@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import random
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -61,14 +62,20 @@ MAX_CREDITS_PER_RUN = int(os.getenv("SCRAPERAPI_MAX_CREDITS_PER_RUN", "600"))
 # Concurrent in-flight requests. ScraperAPI answers 429 when a plan's thread
 # limit is exceeded, so this stays low enough to keep the retry path rare while
 # still overlapping the 5-15s each protected page takes.
-MAX_CONCURRENCY = int(os.getenv("SCRAPERAPI_CONCURRENCY", "5"))
+MAX_CONCURRENCY = int(os.getenv("SCRAPERAPI_CONCURRENCY", "2"))
+# Process-wide ceiling on simultaneous ScraperAPI requests. The scraper phase
+# runs each book in its own thread, so a per-call semaphore cannot see the other
+# books; without this the threads together exceed the plan's concurrency limit
+# and ScraperAPI answers 429.
+MAX_IN_FLIGHT = int(os.getenv("SCRAPERAPI_MAX_IN_FLIGHT", "4"))
 
 RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 OUT_OF_CREDITS_STATUS = 403
 UNAUTHORIZED_STATUS = 401
 
 CREDIT_STATE_KEY = "scraperapi_credits"
-CREDIT_STATE_FILE = "scraperapi_credits.json"
+
+_IN_FLIGHT = threading.BoundedSemaphore(max(1, MAX_IN_FLIGHT))
 
 
 class ScraperApiError(RuntimeError):
@@ -390,12 +397,13 @@ def fetch(
         stats.requests += 1
         started = time.monotonic()
         try:
-            response = requests.get(
-                API_ENDPOINT,
-                params=params,
-                headers=headers if resolved.keep_headers else None,
-                timeout=timeout,
-            )
+            with _IN_FLIGHT:
+                response = requests.get(
+                    API_ENDPOINT,
+                    params=params,
+                    headers=headers if resolved.keep_headers else None,
+                    timeout=timeout,
+                )
         except requests.RequestException as exc:
             stats.latencies.append(time.monotonic() - started)
             if attempt == MAX_ATTEMPTS:
@@ -510,18 +518,18 @@ def _record_monthly_credits(credits: int) -> None:
     if not env_flag("SCRAPERAPI_TRACK_CREDITS", True):
         return
     try:
-        state = load_tracker_state(CREDIT_STATE_KEY, CREDIT_STATE_FILE) or {}
+        state = load_tracker_state(CREDIT_STATE_KEY, {}) or {}
         month = _month_key()
         if state.get("month") != month:
             state = {"month": month, "credits": 0}
         state["credits"] = int(state.get("credits", 0)) + credits
-        save_tracker_state(CREDIT_STATE_KEY, state, CREDIT_STATE_FILE)
+        save_tracker_state(CREDIT_STATE_KEY, state)
     except Exception as exc:  # noqa: BLE001 - telemetry must not break a scrape
         print(f"[scraperapi] credit bookkeeping skipped: {exc}", flush=True)
 
 
 def monthly_credits() -> int:
-    state = load_tracker_state(CREDIT_STATE_KEY, CREDIT_STATE_FILE) or {}
+    state = load_tracker_state(CREDIT_STATE_KEY, {}) or {}
     if state.get("month") != _month_key():
         return 0
     return int(state.get("credits", 0))

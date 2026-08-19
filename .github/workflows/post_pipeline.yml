@@ -59,7 +59,10 @@ jobs:
           SCRAPERAPI_RENDER_BOOKS: ""
           SCRAPERAPI_MAX_CREDITS_PER_RUN: "600"
           SCRAPERAPI_RUN_BUDGET_SECONDS: "600"
-          SCRAPERAPI_CONCURRENCY: "5"
+          # PrizePicks 429'd on 5 parallel league requests, so both the per-call
+          # and the process-wide ceilings stay under the plan's thread limit.
+          SCRAPERAPI_CONCURRENCY: "2"
+          SCRAPERAPI_MAX_IN_FLIGHT: "4"
           SCRAPER_PROXY_ATTEMPTS: "2"
           ENABLE_PYBASEBALL_FIP_SCRAPER: "true"
           ENABLE_DRAFTKINGS_SCRAPER: "true"

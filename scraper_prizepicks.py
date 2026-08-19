@@ -23,6 +23,7 @@ computed from two real numbers.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import Any
 
 from db_manager import get_master_cache
@@ -34,7 +35,7 @@ from services.dfs_normalize import (
     sport_for_league,
 )
 from services.odds_scraper_ingest import ingest_events
-from services.scraper_api_client import gather_json_sync
+from services.scraper_api_client import gather_json_sync, options_for, try_fetch_json
 from utils.config import env_flag
 
 BOOK_KEY = "prizepicks"
@@ -56,6 +57,9 @@ PER_PAGE = os.getenv("PRIZEPICKS_PER_PAGE", "250")
 # Demon/goblin projections are deliberately mispriced against a different payout
 # multiplier, so mixing them with standard lines would compare unlike things.
 STANDARD_ODDS_TYPE = "standard"
+# PrizePicks' Cloudflare policy answers 429 to parallel requests from the same
+# pool and then keeps failing, so leagues go out one at a time by default.
+CONCURRENCY = int(os.getenv("PRIZEPICKS_CONCURRENCY", "1"))
 
 
 def league_ids() -> dict[str, str]:
@@ -97,6 +101,40 @@ def _targets() -> list[tuple[str, str]]:
         url = f"{PROJECTIONS_URL}?league_id={league_id}&per_page={PER_PAGE}&single_stat=true"
         targets.append((url, BOOK_KEY))
     return targets
+
+
+def _options(render: bool):
+    """PrizePicks checks the Referer/User-Agent pair, so headers are forwarded
+    (``keep_headers``) rather than replaced by ScraperAPI's own."""
+    return replace(options_for(BOOK_KEY), keep_headers=True, render=render)
+
+
+def _fetch_leagues() -> list[Any]:
+    """Fetch each league's board, escalating to a rendered request only for the
+    leagues the plain JSON call could not get.
+
+    Cloudflare serves a JS interstitial rather than JSON when it is unhappy, and
+    rendering costs 25 credits against 10, so it is a per-league fallback instead
+    of the default.
+    """
+    targets = _targets()
+    payloads = gather_json_sync(
+        targets,
+        concurrency=CONCURRENCY,
+        options=_options(render=False),
+        headers=REQUEST_HEADERS,
+    )
+
+    retry = [index for index, payload in enumerate(payloads) if payload is None]
+    if not retry or not env_flag("PRIZEPICKS_RENDER_FALLBACK", True):
+        return payloads
+
+    print(f"[prizepicks] retrying {len(retry)} league(s) with rendering", flush=True)
+    rendered = _options(render=True)
+    for index in retry:
+        url = targets[index][0]
+        payloads[index] = try_fetch_json(url, BOOK_KEY, options=rendered, headers=REQUEST_HEADERS)
+    return payloads
 
 
 def _players(payload: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -199,10 +237,14 @@ def scrape_prizepicks() -> dict[str, Any]:
         return {"detail": "prizepicks scraper disabled", "count": 0, "label": "props"}
 
     price = leg_decimal_price()
-    payloads = gather_json_sync(_targets(), headers=REQUEST_HEADERS)
+    payloads = _fetch_leagues()
     lines: list[PropLine] = []
     for payload in payloads:
         lines.extend(parse_lines(payload, price))
+    if not lines and not any(payload for payload in payloads):
+        detail = "prizepicks unavailable: every league request was blocked"
+        print(f"[prizepicks] {detail}", flush=True)
+        return {"detail": detail, "count": 0, "label": "props"}
 
     cache = get_master_cache() or {}
     differentials = line_differentials(lines, cache)

@@ -484,6 +484,13 @@ def update_bet_clv(bet_id: Any, closing_odds: Any, clv_pct: Any, closing_line: A
     _safe_execute(action, None)
 
 
+def _state_fallback(fallback: Any) -> dict[str, Any]:
+    """Several callers pass a local JSON filename as the second argument, a
+    leftover from an older signature. Returning that string would hand the caller
+    something it then calls ``.get()`` on, so only a dict is honoured."""
+    return fallback if isinstance(fallback, dict) else {}
+
+
 def load_tracker_state(sport: str, fallback: Dict[str, Any] = None) -> Dict[str, Any]:
     def action():
         res = supabase.table("bot_state").select("*").eq("id", sport).limit(1).execute()
@@ -493,8 +500,8 @@ def load_tracker_state(sport: str, fallback: Dict[str, Any] = None) -> Dict[str,
                 return row["data"]
             if isinstance(row.get("state"), dict):
                 return row["state"]
-        return fallback or {}
-    return _safe_execute(action, fallback or {})
+        return _state_fallback(fallback)
+    return _safe_execute(action, _state_fallback(fallback))
 
 
 def save_tracker_state(sport: str, data: Dict[str, Any], fallback: Dict[str, Any] = None):
