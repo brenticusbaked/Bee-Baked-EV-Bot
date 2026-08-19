@@ -4,6 +4,95 @@ This repository contains a fully automated, high-frequency sports betting ecosys
 
 By combining real-time API scanning, headless browser scraping, and advanced situational models into a **serverless cloud database**, the Bee-Baked system operates as a professional-grade betting syndicate on autopilot.
 
+## Order Of Operations
+
+Nothing here needs to be run by hand — every stage below is on a cron. The one rule that
+matters: **the master cache is written first, and everything else reads it.** A scan that
+runs before the cache exists finds nothing, which is why the scrapers and alert jobs are
+scheduled *behind* the core pipeline rather than alongside it.
+
+```mermaid
+flowchart TD
+    subgraph API["Paid odds APIs"]
+        ODDS["The Odds API<br/>key 1 = 20k/mo, keys 2-4 = 500/mo"]
+        SGO["SportsGameOdds"]
+        SAPI["ScraperAPI<br/>100k credits/mo"]
+    end
+
+    subgraph CORE["1. main.yml — 13:30/15:30/18:30/20:30 UTC (0 13,15,18,20)"]
+        direction TB
+        MR["master_run.py<br/>master_odds_fetcher.py pulls sharp (Pinnacle) + soft books"]
+        MR --> CACHE[("Supabase<br/>master cache / fixtures / historical_odds")]
+        MR --> SCAN["unified_bot.py scans · de-vig (power) · EV · quarter-Kelly<br/>execution/desk.py paper-routes"]
+        SCAN --> BETS[("Supabase bets_log<br/>execution_orders / fills")]
+        MODELS["sgo_sharp_ingest · wnba_model · model_nrfi<br/>scraper_mlb_statcast_hr · daily_slips_report"]
+        CACHE --> MODELS
+    end
+
+    subgraph SCRAPE["2. post_pipeline.yml — +30 min (30 13,15,18,20)"]
+        SU["scraper_unified.py"]
+        SU --> BOOKS["scraper_draftkings · _fanduel · _betmgm<br/>_underdog · _prizepicks · _prophetx · _oddsharvester"]
+        BOOKS --> MERGE["odds_scraper_ingest merges retail lines<br/>into the cached events"]
+    end
+
+    subgraph READ["3. Cache-only scans — no API credits"]
+        CS["continuous_scan.py — */20 evenings, */30 mornings"]
+        OS["continuous_scan.py --opener — 45 9,21"]
+        PS["pregame_scan.py — */30 16-22 (T-90/45/15)"]
+        AS["arbitrage_scanner.py"]
+        MO["models.mlb_f5 · wnba_first_basket · nfl_player_props — 10 * * * *"]
+        LE["live_edge_poll / odds_push_feed — */15 23-03"]
+    end
+
+    subgraph AUDIT["4. Grading & audit"]
+        GR["sgo_grader.py + daily_slips_report.py — 15 13"]
+        LC["bet_lifecycle_monitor.py + clv_tracker.py — 5 14,17,20,23,02"]
+        PR["performance_report.py — overall + daily-by-book record"]
+        RET["db_retention.py — 30 8 (prunes to stay under 1 GB)"]
+    end
+
+    DISCORD["Discord lanes<br/>bet alerts · honey radar (near miss) · honey hammers (desk)<br/>home runs · arbitrage · results · injuries · status"]
+
+    ODDS --> MR
+    SGO --> MODELS
+    SAPI --> BOOKS
+    MERGE --> CACHE
+    CACHE --> READ
+    BETS --> AUDIT
+    READ --> DISCORD
+    SCAN --> DISCORD
+    MODELS --> DISCORD
+    AUDIT --> PRDB[("Supabase<br/>graded results, CLV")]
+    AUDIT --> DISCORD
+    PRDB --> PR
+```
+
+### Why the order matters
+
+| Stage | Workflow | Reads | Writes |
+| --- | --- | --- | --- |
+| 1. Ingest + scan | `main.yml` | The Odds API (paid) | master cache, `bets_log`, Discord |
+| 2. Retail scrape | `post_pipeline.yml` | ScraperAPI, master cache | retail lines merged into the cache, Discord |
+| 3. Cache scans | `continuous_scan`, `opener_scan`, `pregame_scans`, `arbitrage_scan`, `model_overlays`, `live_edge_window` | master cache only | `bets_log`, Discord |
+| 4. Grade + audit | `daily_reports`, `bet_lifecycle`, `db_retention` | `bets_log`, SGO box scores | results/CLV, pruned tables, Discord |
+
+Everything in stage 3 is free — it never calls a paid API, it only re-reads what stage 1
+and 2 cached. That is the design that keeps a 20,000-credit month affordable, and it is
+also why a broken stage 1 makes stage 3 look empty rather than error.
+
+### Manual, run-once jobs
+
+These are `workflow_dispatch` only and sit outside the flow above:
+
+* **Repair Imported Bet History** (`history_repair.yml`) — rewrites already-imported
+  `bets_log` rows with canonical `WIN/LOSS/PUSH` and their sportsbook, and deletes
+  duplicate imports. Run with `dry_run` checked first; it touches no odds API.
+* **Execution Desk Calibration** (`execution_calibration.yml`) — writes one synthetic
+  paper order to prove Supabase persistence.
+* **CLV Backfill** (`clv_backfill.yml`), **Environment Healthcheck**, **Deploy Edge
+  Function**.
+* `supabase_maintenance.sql` in the Supabase SQL editor — reports the true database size.
+
 ## Core Architecture
 The bot is organized into a modular pipeline, communicating seamlessly with a PostgreSQL cloud backend (Supabase) to completely eliminate file-locking bottlenecks:
 
@@ -255,4 +344,4 @@ python env_healthcheck.py --live --optional
 * `ENABLE_FANDUEL_SCRAPER` (Default: `true`, and re-enabled in the scheduled scraper workflow with a direct content-managed fallback plus broader payload capture)
 * `ENABLE_PRIZEPICKS_SCRAPER` (Default: `true`)
 
-**Automation:** The `.github/workflows/main.yml` file contains the lean core EV cron schedule (`0 14,20 * * *`) that executes `master_run.py` twice daily. During Central daylight time, that lands at roughly 9:00 AM and 3:00 PM CT to catch morning liquidity and afternoon lineup/steam movement without spending paid odds credits through every evening live window. Scrapers run separately in `.github/workflows/scrapers.yml` at `30 14,20 * * *`, 30 minutes after each core run, plus a credit-free live-window cadence at `15,45 23,0,1,2,3 * * *`. The scheduled scraper workflow enables FanDuel, DraftKings, BetMGM, PrizePicks, pybaseball/FIP, and OddsHarvester by default, routes alerts to the positive-EV lane, and includes Pinnacle reference lines in standard sportsbook steam notifications when the master cache can match the event. The live hammer/watchlist workflow runs from `.github/workflows/live_edge_window.yml` every 15 minutes during the evening window; it uses `ODDS_PUSH_WS_URL` when configured and falls back to a primary-key polling refresh if the push feed is unavailable. Pregame window scans run from `.github/workflows/pregame_scans.yml` against the latest cache for T-90/T-45/T-15 minute game windows. Arbitrage scans run cache-only from `.github/workflows/arbitrage_scan.yml` and from the core pipeline, routing guaranteed-profit stake splits to the arbitrage lane. Bet lifecycle and CLV movement updates run from `.github/workflows/bet_lifecycle.yml`, routing still-playable, no-longer-playable, graded, and CLV movement notifications into the results lane. The odds edge alert workflow runs at `20 14,20 * * *`, 20 minutes after each core run, plus live-window summaries at `10,40 23,0,1,2,3 * * *`. A master odds cache is pulled at the beginning of each core run using NBA spreads, WNBA spreads, NHL spreads, and MLB H2H, which keeps the primary footprint to 8 API credits per execution (16 per day). If `ODDS_API_KEY_2` is provided, a secondary expansion pull is merged into the same cache using NBA H2H + totals, WNBA H2H + totals, and NHL H2H for 10 additional credits per execution (20 per day on the second key). If `ODDS_API_KEY_3` is provided, a tertiary expansion pull is merged into the same cache using NHL totals plus MLB spreads and totals for 6 additional credits per execution (12 per day on the third key). Partial-game and alternate markets are supported by the scanner but the paid `ENABLE_ODDS_PARTIAL_MARKET_PULL` is disabled by default because it is high-credit; turn it on only for targeted testing or funded keys. MLB H2H remains available for the MLB model, and the core workflow enables unified MLB H2H alerts. NBA totals, WNBA markets, NHL totals, MLB H2H, MLB spreads, and MLB totals can all be scanned by the unified +EV engine. The SGO grader runs best as its own dedicated `.github/workflows/sgo_grader.yml` workflow with a small fetch budget by default, which helps preserve a single SGO key for the NBA prop bot during the core live run. The daily slips summary runs once per day from `.github/workflows/daily_slips.yml` at `13:15 UTC` and reports slips placed, bets settled, and CLV updates based on their actual timestamps instead of only the original bet date.
+**Automation:** See [Order Of Operations](#order-of-operations) above for the full flow. The `.github/workflows/main.yml` file contains the core EV cron schedule (`0 13,15,18,20 * * *`) that executes `master_run.py` four times daily, catching morning liquidity through the afternoon lineup/steam windows without spending paid odds credits through every evening live window. Scrapers run separately in `.github/workflows/post_pipeline.yml` at `30 13,15,18,20 * * *`, 30 minutes after each core run so the master cache they merge into is already refreshed. The scheduled scraper workflow enables FanDuel, DraftKings, BetMGM, PrizePicks, pybaseball/FIP, and OddsHarvester by default, routes alerts to the positive-EV lane, and includes Pinnacle reference lines in standard sportsbook steam notifications when the master cache can match the event. The live hammer/watchlist workflow runs from `.github/workflows/live_edge_window.yml` every 15 minutes during the evening window; it uses `ODDS_PUSH_WS_URL` when configured and falls back to a primary-key polling refresh if the push feed is unavailable. Pregame window scans run from `.github/workflows/pregame_scans.yml` against the latest cache for T-90/T-45/T-15 minute game windows. Arbitrage scans run cache-only from `.github/workflows/arbitrage_scan.yml` and from the core pipeline, routing guaranteed-profit stake splits to the arbitrage lane. Bet lifecycle and CLV movement updates run from `.github/workflows/bet_lifecycle.yml`, routing still-playable, no-longer-playable, graded, and CLV movement notifications into the results lane. The odds edge alert workflow runs at `20 14,20 * * *`, 20 minutes after each core run, plus live-window summaries at `10,40 23,0,1,2,3 * * *`. A master odds cache is pulled at the beginning of each core run using NBA spreads, WNBA spreads, NHL spreads, and MLB H2H, which keeps the primary footprint to 8 API credits per execution (16 per day). If `ODDS_API_KEY_2` is provided, a secondary expansion pull is merged into the same cache using NBA H2H + totals, WNBA H2H + totals, and NHL H2H for 10 additional credits per execution (20 per day on the second key). If `ODDS_API_KEY_3` is provided, a tertiary expansion pull is merged into the same cache using NHL totals plus MLB spreads and totals for 6 additional credits per execution (12 per day on the third key). Partial-game and alternate markets are supported by the scanner but the paid `ENABLE_ODDS_PARTIAL_MARKET_PULL` is disabled by default because it is high-credit; turn it on only for targeted testing or funded keys. MLB H2H remains available for the MLB model, and the core workflow enables unified MLB H2H alerts. NBA totals, WNBA markets, NHL totals, MLB H2H, MLB spreads, and MLB totals can all be scanned by the unified +EV engine. The SGO grader and the daily slips summary share `.github/workflows/daily_reports.yml`, which runs once per day at `13:15 UTC` with a small SGO fetch budget so a single SGO key is preserved for the prop bot during the core live run. That report covers slips placed, bets settled, and CLV updates based on their actual timestamps instead of only the original bet date.
