@@ -139,7 +139,7 @@ class PerKeyCreditBudgetTests(unittest.TestCase):
     def test_each_key_gets_its_own_cap_sized_to_its_plan(self):
         seen = {}
 
-        def fake_fetch(cache, api_key, config, label, region, books, props, tracker, max_events):
+        def fake_fetch(cache, api_key, config, label, region, books, props, tracker, max_events, daily_props_due=False):
             seen.setdefault(api_key, []).append(tracker)
             tracker.charge(tracker.limit)
             return 1
@@ -358,3 +358,74 @@ class RetryBackoffTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DailyPropPullTests(unittest.TestCase):
+    """WNBA props are affordable once a day, not four times."""
+
+    def _props_call(self, sport, daily_props_due, remaining="500"):
+        tracker = fetcher._CreditTracker(700)
+        events = [_cached_event("evt-1"), _cached_event("evt-2")]
+        with (
+            patch.object(fetcher, "request", return_value=_response({"id": "evt-1"}, remaining)) as mock_request,
+            patch.object(fetcher.time, "sleep"),
+        ):
+            fetcher._fetch_props_for_events(
+                "key", sport, events, "eu", "pinnacle", tracker, 50, daily_props_due
+            )
+        return mock_request, tracker
+
+    def test_wnba_props_are_pulled_when_the_day_is_claimed(self):
+        mock_request, tracker = self._props_call("basketball_wnba", daily_props_due=True)
+        self.assertEqual(mock_request.call_count, 2)
+        # 3 markets x 2 credits per event.
+        self.assertEqual(tracker.used, 12)
+        self.assertIn(
+            "player_points",
+            mock_request.call_args_list[0].kwargs["params"]["markets"],
+        )
+
+    def test_wnba_props_are_skipped_in_every_other_window(self):
+        mock_request, tracker = self._props_call("basketball_wnba", daily_props_due=False)
+        mock_request.assert_not_called()
+        self.assertEqual(tracker.used, 0)
+
+    def test_mlb_props_are_not_gated_to_the_daily_window(self):
+        mock_request, _tracker = self._props_call("baseball_mlb", daily_props_due=False)
+        self.assertEqual(mock_request.call_count, 2)
+
+    def test_mlb_prop_markets_are_trimmed_to_the_non_redundant_pair(self):
+        markets = fetcher.PLAYER_PROP_CONFIG["baseball_mlb"].split(",")
+        # Total bases is a superset of hits; pulling both paid twice for one edge.
+        self.assertNotIn("batter_total_bases", markets)
+        self.assertNotIn("batter_hits", markets)
+        self.assertEqual(markets, ["batter_home_runs", "pitcher_strikeouts"])
+
+    def test_daily_prop_claim_is_shared_by_both_regions_of_one_run(self):
+        claims = []
+
+        def fake_fetch(cache, api_key, config, label, region, books, props, tracker, max_events, daily_props_due=False):
+            claims.append(daily_props_due)
+            return 1
+
+        with (
+            patch.multiple(
+                fetcher,
+                ODDS_API_KEY="k1",
+                ODDS_API_KEY_2="k2",
+                ODDS_API_KEY_3="k3",
+                ENABLE_MLB_F5_PULL=False,
+                ENABLE_MLB_NRFI_PULL=False,
+            ),
+            patch.object(fetcher, "_claim_daily_pull", return_value=True) as claim,
+            patch.object(fetcher, "_fetch_config", side_effect=fake_fetch),
+            patch.object(fetcher, "get_master_cache", return_value={}),
+            patch.object(fetcher, "save_master_cache"),
+            patch.object(fetcher, "filter_config_in_season", side_effect=lambda cfg: cfg),
+        ):
+            fetcher.run_fetcher()
+
+        # One claim for the run, seen by every tier and both regions.
+        claim.assert_called_once_with("daily_props")
+        self.assertTrue(claims)
+        self.assertTrue(all(claims))
