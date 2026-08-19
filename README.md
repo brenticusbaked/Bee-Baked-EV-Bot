@@ -4,6 +4,95 @@ This repository contains a fully automated, high-frequency sports betting ecosys
 
 By combining real-time API scanning, headless browser scraping, and advanced situational models into a **serverless cloud database**, the Bee-Baked system operates as a professional-grade betting syndicate on autopilot.
 
+## Order Of Operations
+
+Nothing here needs to be run by hand — every stage below is on a cron. The one rule that
+matters: **the master cache is written first, and everything else reads it.** A scan that
+runs before the cache exists finds nothing, which is why the scrapers and alert jobs are
+scheduled *behind* the core pipeline rather than alongside it.
+
+```mermaid
+flowchart TD
+    subgraph API["Paid odds APIs"]
+        ODDS["The Odds API<br/>key 1 = 20k/mo, keys 2-4 = 500/mo"]
+        SGO["SportsGameOdds"]
+        SAPI["ScraperAPI<br/>100k credits/mo"]
+    end
+
+    subgraph CORE["1. main.yml — 13:30/15:30/18:30/20:30 UTC (0 13,15,18,20)"]
+        direction TB
+        MR["master_run.py<br/>master_odds_fetcher.py pulls sharp (Pinnacle) + soft books"]
+        MR --> CACHE[("Supabase<br/>master cache / fixtures / historical_odds")]
+        MR --> SCAN["unified_bot.py scans · de-vig (power) · EV · quarter-Kelly<br/>execution/desk.py paper-routes"]
+        SCAN --> BETS[("Supabase bets_log<br/>execution_orders / fills")]
+        MODELS["sgo_sharp_ingest · wnba_model · model_nrfi<br/>scraper_mlb_statcast_hr · daily_slips_report"]
+        CACHE --> MODELS
+    end
+
+    subgraph SCRAPE["2. post_pipeline.yml — +30 min (30 13,15,18,20)"]
+        SU["scraper_unified.py"]
+        SU --> BOOKS["scraper_draftkings · _fanduel · _betmgm<br/>_underdog · _prizepicks · _prophetx · _oddsharvester"]
+        BOOKS --> MERGE["odds_scraper_ingest merges retail lines<br/>into the cached events"]
+    end
+
+    subgraph READ["3. Cache-only scans — no API credits"]
+        CS["continuous_scan.py — */20 evenings, */30 mornings"]
+        OS["continuous_scan.py --opener — 45 9,21"]
+        PS["pregame_scan.py — */30 16-22 (T-90/45/15)"]
+        AS["arbitrage_scanner.py"]
+        MO["models.mlb_f5 · wnba_first_basket · nfl_player_props — 10 * * * *"]
+        LE["live_edge_poll / odds_push_feed — */15 23-03"]
+    end
+
+    subgraph AUDIT["4. Grading & audit"]
+        GR["sgo_grader.py + daily_slips_report.py — 15 13"]
+        LC["bet_lifecycle_monitor.py + clv_tracker.py — 5 14,17,20,23,02"]
+        PR["performance_report.py — overall + daily-by-book record"]
+        RET["db_retention.py — 30 8 (prunes to stay under 1 GB)"]
+    end
+
+    DISCORD["Discord lanes<br/>bet alerts · honey radar (near miss) · honey hammers (desk)<br/>home runs · arbitrage · results · injuries · status"]
+
+    ODDS --> MR
+    SGO --> MODELS
+    SAPI --> BOOKS
+    MERGE --> CACHE
+    CACHE --> READ
+    BETS --> AUDIT
+    READ --> DISCORD
+    SCAN --> DISCORD
+    MODELS --> DISCORD
+    AUDIT --> PRDB[("Supabase<br/>graded results, CLV")]
+    AUDIT --> DISCORD
+    PRDB --> PR
+```
+
+### Why the order matters
+
+| Stage | Workflow | Reads | Writes |
+| --- | --- | --- | --- |
+| 1. Ingest + scan | `main.yml` | The Odds API (paid) | master cache, `bets_log`, Discord |
+| 2. Retail scrape | `post_pipeline.yml` | ScraperAPI, master cache | retail lines merged into the cache, Discord |
+| 3. Cache scans | `continuous_scan`, `opener_scan`, `pregame_scans`, `arbitrage_scan`, `model_overlays`, `live_edge_window` | master cache only | `bets_log`, Discord |
+| 4. Grade + audit | `daily_reports`, `bet_lifecycle`, `db_retention` | `bets_log`, SGO box scores | results/CLV, pruned tables, Discord |
+
+Everything in stage 3 is free — it never calls a paid API, it only re-reads what stage 1
+and 2 cached. That is the design that keeps a 20,000-credit month affordable, and it is
+also why a broken stage 1 makes stage 3 look empty rather than error.
+
+### Manual, run-once jobs
+
+These are `workflow_dispatch` only and sit outside the flow above:
+
+* **Repair Imported Bet History** (`history_repair.yml`) — rewrites already-imported
+  `bets_log` rows with canonical `WIN/LOSS/PUSH` and their sportsbook, and deletes
+  duplicate imports. Run with `dry_run` checked first; it touches no odds API.
+* **Execution Desk Calibration** (`execution_calibration.yml`) — writes one synthetic
+  paper order to prove Supabase persistence.
+* **CLV Backfill** (`clv_backfill.yml`), **Environment Healthcheck**, **Deploy Edge
+  Function**.
+* `supabase_maintenance.sql` in the Supabase SQL editor — reports the true database size.
+
 ## Core Architecture
 The bot is organized into a modular pipeline, communicating seamlessly with a PostgreSQL cloud backend (Supabase) to completely eliminate file-locking bottlenecks:
 
