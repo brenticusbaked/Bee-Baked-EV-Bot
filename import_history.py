@@ -82,15 +82,9 @@ def import_csv():
 
     existing_history_ids = set()
     try:
-        existing_rows = (
-            supabase.table("bets_log")
-            .select("notes")
-            .ilike("notes", "Historical import - ID:%")
-            .execute()
-            .data
-            or []
-        )
-        for row in existing_rows:
+        # Unpaged, this returned PostgREST's 1,000-row maximum, so all but the
+        # first thousand ids looked absent and every run re-inserted the CSV.
+        for row in _iter_history_pages("id,notes"):
             note = str(row.get("notes") or "").strip()
             match = _HISTORICAL_NOTE_RE.match(note)
             if match:
@@ -138,33 +132,75 @@ def import_csv():
     print("Historical import complete! Monte Carlo is ready.")
 
 
-def _existing_history_rows() -> list:
-    """Every previously imported row, paged past PostgREST's row ceiling."""
-    rows: list = []
-    page_size = 1000
+PAGE_SIZE = 1000
+WRITE_CHUNK = 500
+
+
+def _iter_history_pages(columns: str = "*"):
+    """Every previously imported row, paged past PostgREST's row ceiling.
+
+    Ordered by id so a page's contents do not shift while rows are rewritten.
+    """
     offset = 0
     while True:
         page = (
             supabase.table("bets_log")
-            .select("id,notes,result")
+            .select(columns)
             .ilike("notes", "Historical import - ID:%")
-            .range(offset, offset + page_size - 1)
+            .order("id")
+            .range(offset, offset + PAGE_SIZE - 1)
             .execute()
             .data
             or []
         )
-        rows.extend(page)
-        if len(page) < page_size:
-            return rows
-        offset += page_size
+        yield from page
+        if len(page) < PAGE_SIZE:
+            return
+        offset += PAGE_SIZE
 
 
-def repair_history(csv_path: str = "bet_history.csv", dry_run: bool = False) -> int:
+def _write_repairs(payloads: list) -> int:
+    """Upsert whole rows, chunked.
+
+    PostgREST compiles an upsert to ``INSERT ... ON CONFLICT``, so Postgres checks
+    NOT NULL columns against the payload before it resolves to an update: a
+    three-column patch failed every chunk on ``date``. Each payload therefore
+    carries the row as it was read, with only the repaired fields replaced.
+    """
+    written = 0
+    for i in range(0, len(payloads), WRITE_CHUNK):
+        chunk = payloads[i:i + WRITE_CHUNK]
+        try:
+            supabase.table("bets_log").upsert(chunk).execute()
+            written += len(chunk)
+        except Exception as e:
+            print(f"[repair] failed to update chunk of {len(chunk)} row(s): {e}")
+    return written
+
+
+def _delete_rows(row_ids: list) -> int:
+    deleted = 0
+    for i in range(0, len(row_ids), WRITE_CHUNK):
+        chunk = row_ids[i:i + WRITE_CHUNK]
+        try:
+            supabase.table("bets_log").delete().in_("id", chunk).execute()
+            deleted += len(chunk)
+        except Exception as e:
+            print(f"[repair] failed to delete chunk of {len(chunk)} row(s): {e}")
+    return deleted
+
+
+def repair_history(
+    csv_path: str = "bet_history.csv",
+    dry_run: bool = False,
+    dedupe: bool = True,
+) -> int:
     """Rewrite already-imported rows with canonical results and their book.
 
     The first import wrote lower-case results and no sportsbook, which is why the
     overall record read empty and the per-book breakdown had nothing to group on.
-    This backfills both in place instead of re-importing 22k duplicates.
+    This backfills both in place instead of re-importing 22k duplicates, and drops
+    the copies the unpaged dedupe check let earlier imports insert.
     """
     if not supabase:
         print("[repair] Supabase client not configured.")
@@ -180,15 +216,29 @@ def repair_history(csv_path: str = "bet_history.csv", dry_run: bool = False) -> 
         if pd.notna(row.get("bet_id"))
     }
 
-    updates = []
-    for row in _existing_history_rows():
+    books: Counter = Counter()
+    results: Counter = Counter()
+    seen_bet_ids: set = set()
+    duplicate_ids: list = []
+    scanned = 0
+    repaired = 0
+    batch: list = []
+
+    for row in _iter_history_pages():
         match = _HISTORICAL_NOTE_RE.match(str(row.get("notes") or "").strip())
         if not match:
             continue
+        scanned += 1
         bet_id = match.group("bet_id")
+        if bet_id in seen_bet_ids:
+            duplicate_ids.append(row.get("id"))
+            continue
+        seen_bet_ids.add(bet_id)
+
         source = by_bet_id.get(bet_id)
         sportsbook = source.get("sportsbook") if source is not None else None
-        payload = {"id": row.get("id"), "notes": _historical_notes(bet_id, sportsbook)}
+        payload = dict(row)
+        payload["notes"] = _historical_notes(bet_id, sportsbook)
         status = str(source.get("status")) if source is not None else ""
         canonical = _STATUS_MAP.get(status) or normalize_result(row.get("result"))
         if canonical:
@@ -196,33 +246,43 @@ def repair_history(csv_path: str = "bet_history.csv", dry_run: bool = False) -> 
         closing = source.get("closing_line") if source is not None else None
         if pd.notna(closing) and float(closing) > 1.0:
             payload["closing_line_decimal"] = float(closing)
-        updates.append(payload)
 
-    books = Counter(book_from_notes(payload["notes"]) for payload in updates)
-    results = Counter(payload.get("result", "") for payload in updates)
+        books[book_from_notes(payload["notes"])] += 1
+        results[payload.get("result") or ""] += 1
+        batch.append(payload)
+        # Written a page at a time; holding 200k full rows to write at the end is
+        # what makes a job like this run out of memory or time.
+        if len(batch) >= PAGE_SIZE and not dry_run:
+            repaired += _write_repairs(batch)
+            print(f"[repair] {repaired} row(s) rewritten...")
+            batch = []
+
+    if batch and not dry_run:
+        repaired += _write_repairs(batch)
+
     print(
-        f"[repair] {len(updates)} imported row(s) to rewrite | "
-        f"results {dict(results)} | books {dict(books.most_common(10))}"
+        f"[repair] scanned {scanned} imported row(s) | {len(seen_bet_ids)} distinct bet(s) | "
+        f"{len(duplicate_ids)} duplicate row(s) | results {dict(results)} | "
+        f"books {dict(books.most_common(10))}"
     )
     if dry_run:
         print("[repair] dry run: nothing written.")
         return 0
 
-    chunk_size = 500
-    repaired = 0
-    for i in range(0, len(updates), chunk_size):
-        chunk = updates[i:i + chunk_size]
-        try:
-            supabase.table("bets_log").upsert(chunk).execute()
-            repaired += len(chunk)
-            print(f"[repair] {repaired} / {len(updates)} rows updated...")
-        except Exception as e:
-            print(f"[repair] failed to update chunk starting at {i}: {e}")
+    print(f"[repair] {repaired} row(s) rewritten.")
+    if duplicate_ids and dedupe:
+        deleted = _delete_rows(duplicate_ids)
+        print(f"[repair] deleted {deleted} duplicate row(s), keeping the earliest of each bet.")
+    elif duplicate_ids:
+        print("[repair] duplicates left in place (dedupe disabled); the record still counts them.")
     return repaired
 
 
 if __name__ == "__main__":
     if "--repair" in sys.argv:
-        repair_history(dry_run="--dry-run" in sys.argv)
+        repair_history(
+            dry_run="--dry-run" in sys.argv,
+            dedupe="--no-dedupe" not in sys.argv,
+        )
     else:
         import_csv()

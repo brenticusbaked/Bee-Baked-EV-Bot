@@ -10,6 +10,10 @@ on:
         description: 'Dry run (report the rewrite without writing)'
         type: boolean
         default: true
+      dedupe:
+        description: 'Delete duplicate imported rows, keeping the earliest of each bet'
+        type: boolean
+        default: true
 
 jobs:
   repair:
@@ -35,8 +39,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            python -u import_history.py --repair --dry-run
-          else
-            python -u import_history.py --repair
-          fi
+          args="--repair"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then args="$args --dry-run"; fi
+          if [ "${{ inputs.dedupe }}" != "true" ]; then args="$args --no-dedupe"; fi
+          python -u import_history.py $args
