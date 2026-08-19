@@ -1,9 +1,11 @@
 """ScraperAPI transport: request shaping, retry classification, credit
 accounting and the scrapers' wiring. No network access."""
 
+import asyncio
+import os
 import unittest
 from dataclasses import replace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from db_manager import _state_fallback
 from services import scraper_api_client as client
@@ -270,6 +272,101 @@ class CreditBookkeepingTests(unittest.TestCase):
         self.assertEqual(_state_fallback({"credits": 1}), {"credits": 1})
 
 
+class TelemetryIsolationTests(ScraperApiClientTestCase):
+    def test_stats_reporting_cannot_fail_the_scraper_job(self):
+        # The run that graded every scraper "ok" still exited 1, because this
+        # reporting line raised after the work was done.
+        with patch.object(client, "format_stats", side_effect=AttributeError("boom")):
+            client.log_stats()
+
+
+class DraftKingsFallbackTests(unittest.TestCase):
+    """DraftKings' Playwright fallbacks timed out from the runner and propagated,
+    marking the task failed after minutes of job time."""
+
+    def test_browser_fallbacks_are_off_unless_asked_for(self):
+        import scraper_draftkings
+
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("DRAFTKINGS_BROWSER_FALLBACK", None)
+            self.assertIsNone(asyncio.run(scraper_draftkings._fetch_dk_browser_direct_payload()))
+            self.assertIsNone(asyncio.run(scraper_draftkings._fetch_dk_playwright_payload()))
+
+    def test_navigation_failure_reports_no_data_instead_of_raising(self):
+        import scraper_draftkings
+
+        page = MagicMock()
+        page.goto = AsyncMock(side_effect=RuntimeError("Timeout 25000ms exceeded"))
+        browser = MagicMock()
+        browser.close = AsyncMock()
+        context = MagicMock()
+        context.new_page = AsyncMock(return_value=page)
+        browser.new_context = AsyncMock(return_value=context)
+        chromium = MagicMock()
+        chromium.launch = AsyncMock(return_value=browser)
+        playwright = MagicMock(chromium=chromium)
+        manager = MagicMock()
+        manager.__aenter__ = AsyncMock(return_value=playwright)
+        manager.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch.dict("os.environ", {"DRAFTKINGS_BROWSER_FALLBACK": "true"}, clear=False),
+            patch.object(scraper_draftkings, "async_playwright", return_value=manager),
+            patch.object(scraper_draftkings, "playwright_proxy", return_value=None),
+        ):
+            self.assertIsNone(asyncio.run(scraper_draftkings._fetch_dk_browser_direct_payload()))
+        browser.close.assert_awaited()
+
+    def test_page_url_decides_the_league_the_lines_are_ingested_under(self):
+        import scraper_draftkings
+
+        self.assertEqual(
+            scraper_draftkings.DK_PAGE_URL,
+            os.getenv("DRAFTKINGS_PAGE_URL", "https://sportsbook.draftkings.com/leagues/baseball/mlb"),
+        )
+        # The page pointed at one league while lines were ingested as
+        # basketball_nba, comparing them to the wrong sharp baseline.
+        for url, expected in (
+            ("https://sportsbook.draftkings.com/leagues/baseball/mlb", "baseball_mlb"),
+            ("https://sportsbook.draftkings.com/leagues/basketball/nba", "basketball_nba"),
+            ("https://sportsbook.draftkings.com/leagues/football/nfl", "americanfootball_nfl"),
+            ("https://sportsbook.draftkings.com/", "baseball_mlb"),
+        ):
+            self.assertEqual(scraper_draftkings._sport_key_for_page(url), expected, url)
+
+    def test_event_groups_are_discovered_from_the_league_page(self):
+        import scraper_draftkings
+
+        html = '<a href="/leagues/baseball/mlb?eventgroup=84240">MLB</a>{"eventGroupId":"84240"}'
+        with patch.object(
+            scraper_draftkings, "fetch", return_value=MagicMock(text=html)
+        ) as fetch_mock:
+            self.assertEqual(scraper_draftkings._discover_event_groups(), ["84240"])
+        self.assertEqual(fetch_mock.call_args.args[0], scraper_draftkings.DK_PAGE_URL)
+
+    def test_discovery_failure_is_not_fatal(self):
+        import scraper_draftkings
+
+        with patch.object(
+            scraper_draftkings, "fetch", side_effect=client.ScraperApiError("blocked")
+        ):
+            self.assertEqual(scraper_draftkings._discover_event_groups(), [])
+
+    def test_a_group_returning_no_spreads_falls_through_to_discovery(self):
+        import scraper_draftkings
+
+        empty = {"events": [{"eventId": "1"}], "offerCategories": []}
+        with (
+            patch.object(scraper_draftkings, "DK_EVENT_GROUPS", ["103"]),
+            patch.object(
+                scraper_draftkings, "fetch", return_value=MagicMock(json=lambda: empty, text="")
+            ),
+            patch.object(scraper_draftkings, "_discover_event_groups", return_value=[]) as discover,
+        ):
+            self.assertIsNone(scraper_draftkings._fetch_dk_direct_payload())
+        discover.assert_called_once()
+
+
 class ScraperWiringTests(ScraperApiClientTestCase):
     def test_book_scrapers_resolve_their_proxy_through_the_client(self):
         import scraper_betmgm
@@ -289,6 +386,8 @@ class ScraperWiringTests(ScraperApiClientTestCase):
             patch.object(scraper_draftkings, "fetch") as fetch,
             patch.object(scraper_draftkings, "_looks_like_direct_dk_payload", return_value=True),
             patch.object(scraper_draftkings, "_normalize_direct_dk_payload", return_value=payload),
+            patch.object(scraper_draftkings, "DK_EVENT_GROUPS", ["103"]),
+            patch.object(scraper_draftkings, "_parse_spread_lines", return_value={"a": {}}),
         ):
             fetch.return_value = _response(payload=payload)
             self.assertEqual(scraper_draftkings._fetch_dk_direct_payload(), payload)

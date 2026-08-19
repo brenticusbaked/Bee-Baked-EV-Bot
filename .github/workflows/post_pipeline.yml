@@ -1,20 +1,17 @@
 name: Post-Pipeline Scrapers & Edge Alerts
 
 on:
-  # Scheduled runs are DISABLED to conserve GitHub Actions minutes. The Playwright
-  # bookie scrapers (DraftKings/BetMGM/FanDuel/oddsharvester) no longer work — the
-  # sites' DOM changed and every selector times out, so each run ground on until
-  # the 30-min job timeout and was cancelled with zero data (~10,800 min/month
-  # wasted). Odds now come from Supabase-first ingestion (odds-cache-ingest Edge
-  # Function). The workflow + manual trigger are kept so the scrapers can be
-  # repaired and re-enabled later by uncommenting the schedule below.
+  # Scheduled again now that the books egress through ScraperAPI instead of the
+  # runner's own (blocked) IP: a manual dispatch returned Underdog, FanDuel and
+  # DraftKings payloads, where the old Playwright-on-the-runner path returned
+  # nothing and ground on to the 30-minute timeout.
   #
-  # The book requests now egress through ScraperAPI rather than the runner's own
-  # IP, so re-enabling the schedule is worth a manual dispatch first: check the
-  # per-book success rates in the [scraperapi] summary before paying for a cron.
-  # schedule:
-  #   - cron: '30 14,20 * * *'
-  #   - cron: '15,45 23,0,1,2,3 * * *'
+  # Four runs a day, 30 minutes after each main.yml window (13/15/18/20 UTC) so
+  # the master cache is already refreshed. At ~300 ScraperAPI credits a run that
+  # is ~36k of the 100k monthly plan, leaving headroom for manual dispatches;
+  # SCRAPERAPI_MONTHLY_CREDITS is the hard stop either way.
+  schedule:
+    - cron: '30 13,15,18,20 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -70,6 +67,9 @@ jobs:
           SCRAPER_PROXY_ATTEMPTS: "2"
           ENABLE_PYBASEBALL_FIP_SCRAPER: "true"
           ENABLE_DRAFTKINGS_SCRAPER: "true"
+          # DraftKings' Playwright fallbacks time out from runner IPs and cost
+          # minutes of job time; the ScraperAPI JSON endpoint is the live path.
+          DRAFTKINGS_BROWSER_FALLBACK: "false"
           ENABLE_BETMGM_SCRAPER: "true"
           ENABLE_FANDUEL_SCRAPER: "true"
           ENABLE_ODDSHARVESTER: "true"
