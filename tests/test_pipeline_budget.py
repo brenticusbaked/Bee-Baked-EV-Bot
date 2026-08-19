@@ -172,6 +172,82 @@ class PerKeyCreditBudgetTests(unittest.TestCase):
         self.assertEqual(f5_tracker.remaining, 50)
 
 
+class ExchangeRegionPullTests(unittest.TestCase):
+    """The exchanges (Novig/ProphetX/BetOpenly) are a separate Odds API region, so
+    they cost an extra pull and are gated behind their own flag."""
+
+    def _run(self, enabled):
+        calls = []
+
+        def fake_fetch(cache, api_key, config, label, region, books, props, tracker, max_events, **kwargs):
+            calls.append({"label": label, "region": region, "books": books, **kwargs})
+            return 1
+
+        with (
+            patch.multiple(
+                fetcher,
+                ODDS_API_KEY="k1",
+                ODDS_API_KEY_2=None,
+                ODDS_API_KEY_3=None,
+                ODDS_API_KEY_4=None,
+                ENABLE_ODDS_EXCHANGE_PULL=enabled,
+                ENABLE_MLB_F5_PULL=False,
+                ENABLE_MLB_NRFI_PULL=False,
+            ),
+            patch.object(fetcher, "_fetch_config", side_effect=fake_fetch),
+            patch.object(fetcher, "get_master_cache", return_value={}),
+            patch.object(fetcher, "save_master_cache"),
+            patch.object(fetcher, "filter_config_in_season", side_effect=lambda cfg: cfg),
+        ):
+            result = fetcher.run_fetcher()
+        return calls, result
+
+    def test_exchange_pull_is_off_by_default(self):
+        self.assertFalse(fetcher.ENABLE_ODDS_EXCHANGE_PULL)
+        calls, _ = self._run(enabled=False)
+        self.assertEqual([call["region"] for call in calls], [fetcher.SHARP_REGION, fetcher.SOFT_REGION])
+
+    def test_enabled_exchange_pull_asks_the_exchange_region_for_main_markets_only(self):
+        calls, result = self._run(enabled=True)
+        exchange_calls = [call for call in calls if call["region"] == fetcher.EXCHANGE_REGION]
+        self.assertEqual(len(exchange_calls), 1)
+        self.assertEqual(exchange_calls[0]["books"], fetcher.EXCHANGE_BOOKS)
+        # Props would be billed per event for feeds the exchanges barely list.
+        self.assertFalse(exchange_calls[0]["fetch_props"])
+        self.assertIn("exchange: 1/", result["detail"])
+
+    def test_exchange_prices_stay_out_of_the_sharp_baseline(self):
+        self.assertNotIn("pinnacle", fetcher.EXCHANGE_BOOKS)
+        self.assertNotIn("novig", fetcher.SHARP_BOOKS)
+        self.assertNotIn("novig", fetcher.SOFT_BOOKS)
+
+    def test_props_are_still_fetched_for_the_retail_region(self):
+        captured = {}
+
+        def fake_fetch(cache, api_key, config, label, region, books, props, tracker, max_events, **kwargs):
+            captured[region] = kwargs.get("fetch_props", True)
+            return 1
+
+        with (
+            patch.multiple(fetcher, ODDS_API_KEY="k1", ODDS_API_KEY_2=None, ODDS_API_KEY_3=None, ODDS_API_KEY_4=None),
+            patch.object(fetcher, "_fetch_config", side_effect=fake_fetch),
+            patch.object(fetcher, "get_master_cache", return_value={}),
+            patch.object(fetcher, "save_master_cache"),
+            patch.object(fetcher, "filter_config_in_season", side_effect=lambda cfg: cfg),
+        ):
+            fetcher.run_fetcher()
+
+        self.assertTrue(captured[fetcher.SOFT_REGION])
+
+
+class RetailBookCoverageTests(unittest.TestCase):
+    def test_fanatics_rides_along_in_the_existing_retail_region(self):
+        # Credits are charged per market per region, so an extra bookmaker in the
+        # us region is free.
+        self.assertIn("fanatics", fetcher.DEFAULT_SOFT_BOOKS)
+        self.assertEqual(fetcher.SOFT_REGION, "us")
+
+
 class LazyStatcastTests(unittest.TestCase):
     def _batter(self, player_id, name, team, iso, hr_per_ab):
         return {

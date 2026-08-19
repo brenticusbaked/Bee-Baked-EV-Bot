@@ -8,6 +8,10 @@ on:
   # wasted). Odds now come from Supabase-first ingestion (odds-cache-ingest Edge
   # Function). The workflow + manual trigger are kept so the scrapers can be
   # repaired and re-enabled later by uncommenting the schedule below.
+  #
+  # The book requests now egress through ScraperAPI rather than the runner's own
+  # IP, so re-enabling the schedule is worth a manual dispatch first: check the
+  # per-book success rates in the [scraperapi] summary before paying for a cron.
   # schedule:
   #   - cron: '30 14,20 * * *'
   #   - cron: '15,45 23,0,1,2,3 * * *'
@@ -47,6 +51,14 @@ jobs:
           DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
+          DISCORD_DEAD_LETTER_WEBHOOK_URL: ${{ secrets.DISCORD_DEAD_LETTER_WEBHOOK_URL }}
+          # Books whose odds only exist after the page's JavaScript runs. Each
+          # listed book costs 25 credits per request instead of 10.
+          SCRAPERAPI_RENDER_BOOKS: ""
+          SCRAPERAPI_MAX_CREDITS_PER_RUN: "600"
+          SCRAPERAPI_RUN_BUDGET_SECONDS: "600"
           SCRAPER_PROXY_ATTEMPTS: "2"
           ENABLE_PYBASEBALL_FIP_SCRAPER: "true"
           ENABLE_DRAFTKINGS_SCRAPER: "true"

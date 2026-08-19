@@ -36,3 +36,10 @@ RESULTS_WEBHOOK_URL = _first_env(
     "DISCORD_WEBHOOK_URL",
 )
 DAILY_SLIPS_WEBHOOK_URL = _first_env("DISCORD_DAILY_SLIPS_WEBHOOK_URL", "DISCORD_RESULTS_WEBHOOK_URL", "DISCORD_STATUS_WEBHOOK_URL", "DISCORD_WEBHOOK_URL")
+# Infrastructure failures that lose data (failed Supabase writes, a scraping
+# provider refusing every request) rather than betting content.
+DEAD_LETTER_WEBHOOK_URL = _first_env(
+    "DISCORD_DEAD_LETTER_WEBHOOK_URL",
+    "DISCORD_STATUS_WEBHOOK_URL",
+    "DISCORD_WEBHOOK_URL",
+)

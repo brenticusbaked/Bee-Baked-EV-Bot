@@ -9,6 +9,8 @@ from utils.time import get_local_now
 from db_manager import get_runtime_db_stats, log_workflow_run, reset_runtime_db_stats, validate_supabase_connection
 from services.discord_channels import STATUS_WEBHOOK_URL
 from services.http_client import post_discord
+from services.scraper_api_client import log_stats as log_scraper_api_stats
+from services.scraper_api_client import reset_run_state as reset_scraper_api_state
 from services.tasks import (
     PipelineTask,
     get_audit_tasks,
@@ -208,8 +210,10 @@ def run_master_pipeline() -> None:
 def run_scraper_pipeline() -> None:
     print(f"BEE-BAKED SCRAPER PIPELINE STARTING - {get_local_now().isoformat()}", flush=True)
     reset_runtime_db_stats()
+    reset_scraper_api_state()
     print("--- SCRAPER PHASE: EXECUTING BROWSER SCRAPERS ---", flush=True)
     results = run_parallel(get_scraper_tasks())
     print_results(results)
+    log_scraper_api_stats()
     send_pipeline_summary("BEE-BAKED SCRAPER RUN COMPLETE", results)
     print("BEE-BAKED SCRAPER PIPELINE COMPLETE.", flush=True)

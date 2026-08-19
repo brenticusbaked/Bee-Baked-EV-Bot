@@ -1,11 +1,10 @@
 import json
 import os
-import random
 import re
-import string
+from dataclasses import replace
 from html import unescape
 from typing import Dict, Optional
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import sync_playwright
 try:
@@ -15,15 +14,21 @@ except Exception:  # pragma: no cover - optional dependency in some environments
 
 from db_manager import get_master_cache, load_tracker_state, save_tracker_state
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
-from services.http_client import post_discord, request
+from services.http_client import post_discord
 from services.odds_reference import format_pinnacle_spread_reference
 from services.odds_scraper_ingest import extract_price, ingest_current_lines
+from services.scraper_api_client import fetch as scraper_api_fetch
+from services.scraper_api_client import (
+    options_for,
+    playwright_proxy,
+)
+from services.scraper_api_client import target_url as scraper_api_target_url
 
 
+BOOK_KEY = "betmgm"
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 TRACKER_FILE = "mgm_lines.json"
 STATE_KEY = "tracker_betmgm_nba"
-SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
 
 DIRECT_TIMEOUT_MS = int(os.getenv("BETMGM_DIRECT_TIMEOUT_MS", "8000"))
 LAUNCH_TIMEOUT_MS = int(os.getenv("BETMGM_LAUNCH_TIMEOUT_MS", "8000"))
@@ -98,23 +103,28 @@ def _browser_proxy_candidates():
 
 
 def _proxy_settings(proxy_ip: Optional[str]):
-    if not SCRAPER_API_KEY:
-        return None
-    return {
-        "server": "http://proxy-server.scraperapi.com:8001",
-        "username": "scraperapi",
-        "password": SCRAPER_API_KEY,
-    }
+    return playwright_proxy(BOOK_KEY)
 
 
-def _request_proxy_kwargs(proxy_ip: Optional[str]):
-    if not SCRAPER_API_KEY:
-        return {}
-    proxy_url = f"http://scraperapi:{SCRAPER_API_KEY}@proxy-server.scraperapi.com:8001"
-    return {
-        "proxies": {"http": proxy_url, "https": proxy_url},
-        "verify": False
-    }
+def _sa_get(
+    url: str,
+    headers: Dict[str, str],
+    params: Optional[Dict[str, str]] = None,
+    render: bool = False,
+):
+    """GET a BetMGM URL through ScraperAPI.
+
+    ``render`` is for the HTML sportsbook page, whose odds are injected by the
+    SPA after load; the ``offer/api`` endpoints answer with JSON and only need a
+    residential IP.
+    """
+    options = replace(options_for(BOOK_KEY), keep_headers=True, render=render)
+    return scraper_api_fetch(
+        scraper_api_target_url(url, params),
+        BOOK_KEY,
+        options=options,
+        headers=headers,
+    )
 
 
 def _looks_like_betmgm_payload(payload: dict) -> bool:
@@ -503,15 +513,10 @@ def _fetch_betmgm_api_lines() -> Dict[str, Dict[str, object]]:
 
     for proxy_ip in _proxy_candidates():
         proxy_label = proxy_ip or "direct"
-        request_kwargs = _request_proxy_kwargs(proxy_ip)
         try:
-            sports_response = request(
-                "GET",
+            sports_response = _sa_get(
                 f"{api_base}/offer/api/{BETMGM_API_COUNTRY}/sports",
-                headers=headers,
-                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-                retry_on_429=False,
-                **request_kwargs,
+                headers,
             )
             sports_items = sports_response.json().get("items", [])
             basketball_sport_id = None
@@ -525,14 +530,10 @@ def _fetch_betmgm_api_lines() -> Dict[str, Dict[str, object]]:
                 print(f"BetMGM API did not return a Basketball sport id via {proxy_label}.")
                 continue
 
-            competitions_response = request(
-                "GET",
+            competitions_response = _sa_get(
                 f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/competitions",
-                headers=headers,
-                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-                retry_on_429=False,
+                headers,
                 params={"language": "en"},
-                **request_kwargs,
             )
             competitions = competitions_response.json().get("items", [])
             nba_competition_id = None
@@ -546,12 +547,9 @@ def _fetch_betmgm_api_lines() -> Dict[str, Dict[str, object]]:
                 print(f"BetMGM API did not return an NBA competition id via {proxy_label}.")
                 continue
 
-            fixtures_response = request(
-                "GET",
+            fixtures_response = _sa_get(
                 f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/fixtures",
-                headers=headers,
-                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-                retry_on_429=False,
+                headers,
                 params={
                     "language": "en",
                     "competitionIds": nba_competition_id,
@@ -559,7 +557,6 @@ def _fetch_betmgm_api_lines() -> Dict[str, Dict[str, object]]:
                     "marketsFilterCriteria": "Visible",
                     "isInPlay": "false",
                 },
-                **request_kwargs,
             )
             fixtures = fixtures_response.json().get("items", [])
             current_lines = _build_current_lines_from_api(fixtures)
@@ -583,17 +580,11 @@ def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
     for proxy_ip in _proxy_candidates():
         proxy_label = proxy_ip or "direct"
         try:
-            request_kwargs = _request_proxy_kwargs(proxy_ip)
 
-            def fetch_lines_from_url(target_url: str, label_suffix: str = "") -> Dict[str, Dict[str, object]]:
-                response = request(
-                    "GET",
-                    target_url,
-                    headers=headers,
-                    timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-                    retry_on_429=False,
-                    **request_kwargs,
-                )
+            def fetch_lines_from_url(page_url: str, label_suffix: str = "") -> Dict[str, Dict[str, object]]:
+                # This is the SPA page rather than the JSON API, so the odds only
+                # exist after ScraperAPI runs the page's JavaScript.
+                response = _sa_get(page_url, headers, render=True)
                 rendered_text = _extract_rendered_text_from_html(response.text)
                 current = _parse_lines_from_rendered_text(rendered_text)
                 if current:
@@ -608,14 +599,7 @@ def _fetch_betmgm_direct_lines() -> Dict[str, Dict[str, object]]:
                     for candidate_url in _candidate_betmgm_urls_from_html(response.text):
                         try:
                             print(f"BetMGM trying state URL via {preview_label}: {candidate_url}")
-                            candidate_response = request(
-                                "GET",
-                                candidate_url,
-                                headers=headers,
-                                timeout=max(DIRECT_TIMEOUT_MS / 1000, 1),
-                                retry_on_429=False,
-                                **request_kwargs,
-                            )
+                            candidate_response = _sa_get(candidate_url, headers, render=True)
                             candidate_text = _extract_rendered_text_from_html(candidate_response.text)
                             candidate_current = _parse_lines_from_rendered_text(candidate_text)
                             if candidate_current:

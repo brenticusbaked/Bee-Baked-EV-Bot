@@ -73,8 +73,17 @@ TERTIARY_CONFIG = {
 SHARP_REGION = os.getenv("ODDS_API_SHARP_REGION", "eu")
 SOFT_REGION = os.getenv("ODDS_API_SOFT_REGION", "us")
 SHARP_BOOKS = os.getenv("ODDS_API_SHARP_BOOKS", "pinnacle")
-DEFAULT_SOFT_BOOKS = "fanduel,draftkings,betmgm,bet365,caesars,bovada"
+# fanatics is served in the same us region as the other retail books, and Odds
+# API credits are charged per market per region rather than per bookmaker, so
+# adding it widens the price comparison for free.
+DEFAULT_SOFT_BOOKS = "fanduel,draftkings,betmgm,bet365,caesars,bovada,fanatics"
 SOFT_BOOKS = os.getenv("ODDS_API_SOFT_BOOKS", DEFAULT_SOFT_BOOKS)
+# Betting exchanges live in their own Odds API region, so they cost a full extra
+# region pull rather than riding along with the retail books. Their low vig makes
+# them the best place to actually take a price, so the pull is opt-in per run.
+EXCHANGE_REGION = os.getenv("ODDS_API_EXCHANGE_REGION", "us_ex")
+EXCHANGE_BOOKS = os.getenv("ODDS_API_EXCHANGE_BOOKS", "novig,prophetx,betopenly")
+ENABLE_ODDS_EXCHANGE_PULL = env_flag("ENABLE_ODDS_EXCHANGE_PULL", False)
 ENABLE_ODDS_SECONDARY_PULL = env_flag("ENABLE_ODDS_SECONDARY_PULL", True)
 ENABLE_ODDS_TERTIARY_PULL = env_flag("ENABLE_ODDS_TERTIARY_PULL", True)
 ENABLE_ODDS_PARTIAL_MARKET_PULL = env_flag("ENABLE_ODDS_PARTIAL_MARKET_PULL", False)
@@ -280,6 +289,7 @@ def _fetch_config(
     fetched_props: Set[str],
     credit_tracker: _CreditTracker,
     max_enrich_events: int,
+    fetch_props: bool = True,
 ) -> int:
     success_count = 0
     for sport, markets in config.items():
@@ -305,7 +315,7 @@ def _fetch_config(
 
             # Deduplicated prop fetch: Only pull player props ONCE per sport + region per run
             tracker_key = f"{sport}_{region}"
-            if tracker_key not in fetched_props:
+            if fetch_props and tracker_key not in fetched_props:
                 _fetch_props_for_events(api_key, sport, events, region, bookmakers, credit_tracker, max_enrich_events)
                 fetched_props.add(tracker_key)
 
@@ -351,6 +361,27 @@ def run_fetcher():
     )
     primary_sharp = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary sharp eu", SHARP_REGION, SHARP_BOOKS, fetched_props, credits_for(ODDS_API_KEY), ODDS_MAX_EVENTS_PER_ENRICH)
     primary_soft = _fetch_config(cache, ODDS_API_KEY, active_primary, "primary soft us", SOFT_REGION, SOFT_BOOKS, fetched_props, credits_for(ODDS_API_KEY), ODDS_MAX_EVENTS_PER_ENRICH)
+
+    primary_exchange = 0
+    if ENABLE_ODDS_EXCHANGE_PULL:
+        # Main markets only: the exchanges list few props, so prop enrichment here
+        # would spend credits per event for mostly empty responses.
+        print(
+            "BEE-BAKED FETCH: Running exchange pull"
+            f" ({_credits_for_config(active_primary)} credits/run)"
+        )
+        primary_exchange = _fetch_config(
+            cache,
+            ODDS_API_KEY,
+            active_primary,
+            f"primary exchange {EXCHANGE_REGION}",
+            EXCHANGE_REGION,
+            EXCHANGE_BOOKS,
+            fetched_props,
+            credits_for(ODDS_API_KEY),
+            ODDS_MAX_EVENTS_PER_ENRICH,
+            fetch_props=False,
+        )
 
     active_secondary = filter_config_in_season(SECONDARY_CONFIG)
     secondary_sharp = 0
@@ -445,6 +476,7 @@ def run_fetcher():
     save_master_cache(cache)
 
     primary_denom = len(active_primary)
+    exchange_denom = len(active_primary) if ENABLE_ODDS_EXCHANGE_PULL else 0
     secondary_denom = len(active_secondary) if (ODDS_API_KEY_2 and ENABLE_ODDS_SECONDARY_PULL) else 0
     tertiary_denom = len(active_tertiary) if (ODDS_API_KEY_3 and ENABLE_ODDS_TERTIARY_PULL) else 0
     partial_denom = len(active_partial) if (ODDS_API_KEY_3 and ENABLE_ODDS_PARTIAL_MARKET_PULL) else 0
@@ -454,6 +486,7 @@ def run_fetcher():
     detail = (
         f"fetch complete"
         f" | primary sharp: {primary_sharp}/{primary_denom} soft: {primary_soft}/{primary_denom}"
+        f" | exchange: {primary_exchange}/{exchange_denom}"
         f" | secondary sharp: {secondary_sharp}/{secondary_denom} soft: {secondary_soft}/{secondary_denom}"
         f" | tertiary sharp: {tertiary_sharp}/{tertiary_denom} soft: {tertiary_soft}/{tertiary_denom}"
         f" | partial/alternate sharp: {partial_sharp}/{partial_denom} soft: {partial_soft}/{partial_denom}"

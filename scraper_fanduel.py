@@ -1,23 +1,28 @@
-import os
-import random
 import json
+import os
 import re
+from dataclasses import replace
 from typing import Dict, Optional
 
 from playwright.sync_api import sync_playwright
 
 from db_manager import get_master_cache, load_tracker_state, save_tracker_state
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
-from services.http_client import request
 from services.http_client import post_discord
 from services.odds_reference import format_pinnacle_spread_reference
 from services.odds_scraper_ingest import extract_price, ingest_current_lines
+from services.scraper_api_client import (
+    options_for,
+    playwright_proxy,
+    target_url,
+    try_fetch_json,
+)
 
 
+BOOK_KEY = "fanduel"
 DISCORD_WEBHOOK_URL = BET_ALERTS_WEBHOOK_URL
 TRACKER_FILE = "fd_lines.json"
 STATE_KEY = "tracker_fanduel_nba"
-SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
 
 FANDUEL_URL = "https://sportsbook.fanduel.com/basketball/nba"
 FANDUEL_CONTENT_API = "https://sbapi.nj.sportsbook.fanduel.com/api/content-managed-page"
@@ -50,13 +55,7 @@ def _proxy_candidates():
 
 
 def _proxy_settings(proxy_ip: Optional[str]):
-    if not SCRAPER_API_KEY:
-        return None
-    return {
-        "server": "http://proxy-server.scraperapi.com:8001",
-        "username": "scraperapi",
-        "password": SCRAPER_API_KEY,
-    }
+    return playwright_proxy(BOOK_KEY)
 
 
 def _looks_like_fanduel_nba_payload(response_url: str, payload: dict) -> bool:
@@ -172,21 +171,20 @@ def _fetch_fanduel_direct_payload():
         "User-Agent": FANDUEL_USER_AGENT,
     }
 
-    try:
-        response = request(
-            "GET",
-            FANDUEL_CONTENT_API,
-            params=params,
-            headers=headers,
-            timeout=20,
-            retry_on_429=False,
-        )
-        payload = response.json()
-        if _looks_like_fanduel_nba_payload(FANDUEL_CONTENT_API, payload):
-            print("FanDuel payload captured via direct content-managed endpoint.")
-            return payload
-    except Exception as exc:
-        print(f"FanDuel direct content-managed fetch failed: {exc}")
+    # The content-managed endpoint returns JSON, so this needs an unblocked
+    # residential IP rather than ScraperAPI-side rendering. keep_headers carries
+    # the Referer and _ak that FanDuel requires.
+    payload = try_fetch_json(
+        target_url(FANDUEL_CONTENT_API, params),
+        BOOK_KEY,
+        options=replace(options_for(BOOK_KEY), keep_headers=True),
+        headers=headers,
+    )
+    if isinstance(payload, dict) and _looks_like_fanduel_nba_payload(FANDUEL_CONTENT_API, payload):
+        print("FanDuel payload captured via direct content-managed endpoint.")
+        return payload
+    if payload is not None:
+        print("FanDuel content-managed endpoint returned an unusable payload.")
     return None
 
 
