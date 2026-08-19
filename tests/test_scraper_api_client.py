@@ -5,6 +5,7 @@ import unittest
 from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
+from db_manager import _state_fallback
 from services import scraper_api_client as client
 
 
@@ -224,6 +225,49 @@ class RunBudgetTests(ScraperApiClientTestCase):
         self.assertIn("fanduel: 0/3 ok (0%)", report)
         self.assertIn("10 credits", report)
         self.assertIn("250 this month", report)
+
+
+class CreditBookkeepingTests(unittest.TestCase):
+    """The first live run logged ``credit bookkeeping skipped: 'str' object has
+    no attribute 'get'``: the tracker was passing a filename where
+    ``load_tracker_state`` expects a dict fallback, so it got the filename back."""
+
+    def test_month_state_is_read_and_written_as_a_dict(self):
+        saved = {}
+
+        def save(key, state, *args):
+            saved[key] = state
+
+        with (
+            patch.object(client, "load_tracker_state", return_value={}) as load,
+            patch.object(client, "save_tracker_state", side_effect=save),
+        ):
+            client._record_monthly_credits(10)
+
+        self.assertIsInstance(load.call_args.args[1], dict)
+        self.assertEqual(saved[client.CREDIT_STATE_KEY]["credits"], 10)
+
+    def test_spend_accumulates_within_a_month(self):
+        state = {"month": client._month_key(), "credits": 15}
+        with (
+            patch.object(client, "load_tracker_state", return_value=state),
+            patch.object(client, "save_tracker_state") as save,
+        ):
+            client._record_monthly_credits(10)
+        self.assertEqual(save.call_args.args[1]["credits"], 25)
+
+    def test_a_new_month_starts_from_zero(self):
+        with (
+            patch.object(client, "load_tracker_state", return_value={"month": "1999-01", "credits": 900}),
+            patch.object(client, "save_tracker_state") as save,
+        ):
+            client._record_monthly_credits(10)
+        self.assertEqual(save.call_args.args[1], {"month": client._month_key(), "credits": 10})
+
+    def test_a_filename_fallback_no_longer_leaks_a_string_to_callers(self):
+        self.assertEqual(_state_fallback("scraperapi_credits.json"), {})
+        self.assertEqual(_state_fallback(None), {})
+        self.assertEqual(_state_fallback({"credits": 1}), {"credits": 1})
 
 
 class ScraperWiringTests(ScraperApiClientTestCase):
