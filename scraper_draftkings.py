@@ -35,12 +35,45 @@ USER_AGENT = os.getenv(
 # overridable so an out-of-season league (NBA in August) can be pointed at a live
 # one without a deploy.
 DK_PAGE_URL = os.getenv(
-    "DRAFTKINGS_PAGE_URL", "https://sportsbook.draftkings.com/leagues/basketball/nba"
+    "DRAFTKINGS_PAGE_URL", "https://sportsbook.draftkings.com/leagues/baseball/mlb"
 )
-DK_EVENT_GROUP = os.getenv("DRAFTKINGS_EVENT_GROUP", "103")
-DK_DIRECT_URLS = [
-    f"https://sportsbook.draftkings.com/sites/US-NJ-SB/api/v1/eventgroup/{DK_EVENT_GROUP}/full?format=json",
+# Event group ids are DraftKings-internal and go stale per league, and a stale id
+# returns an eventless payload that reads exactly like a scrape failure, so
+# ``_discover_event_groups`` reads the live ids off the league page instead.
+DK_EVENT_GROUPS: list[str] = [
+    group.strip()
+    for group in os.getenv(
+        "DRAFTKINGS_EVENT_GROUPS", os.getenv("DRAFTKINGS_EVENT_GROUP", "")
+    ).split(",")
+    if group.strip()
 ]
+DK_EVENT_GROUP_URL = (
+    "https://sportsbook.draftkings.com/sites/US-NJ-SB/api/v1/eventgroup/{group}/full?format=json"
+)
+MAX_DISCOVERED_GROUPS = 3
+# Only populated when groups are pinned by env; the browser fallback uses it.
+DK_DIRECT_URLS = [DK_EVENT_GROUP_URL.format(group=group) for group in DK_EVENT_GROUPS]
+
+# The league the configured page points at, so scraped lines are ingested and
+# compared against the sharp baseline for the right sport.
+DK_SPORT_BY_PATH = {
+    "baseball/mlb": "baseball_mlb",
+    "basketball/nba": "basketball_nba",
+    "basketball/wnba": "basketball_wnba",
+    "football/nfl": "americanfootball_nfl",
+    "hockey/nhl": "icehockey_nhl",
+}
+
+
+def _sport_key_for_page(page_url: str) -> str:
+    lowered = page_url.lower()
+    for path, sport_key in DK_SPORT_BY_PATH.items():
+        if path in lowered:
+            return sport_key
+    return "baseball_mlb"
+
+
+DK_SPORT_KEY = os.getenv("DRAFTKINGS_SPORT_KEY", "") or _sport_key_for_page(DK_PAGE_URL)
 
 
 def load_previous_lines():
@@ -54,7 +87,7 @@ def save_current_lines(lines):
 def _pinnacle_reference(current: dict) -> str:
     return format_pinnacle_spread_reference(
         get_master_cache() or {},
-        "basketball_nba",
+        DK_SPORT_KEY,
         str(current.get("matchup", "")),
         str(current.get("team", "")),
     )
@@ -273,24 +306,68 @@ def _to_ingest_events(current_lines: Dict[str, Dict[str, object]]) -> List[Dict[
     return list(by_event.values())
 
 
+def _discover_event_groups() -> list[str]:
+    """Event group ids advertised by the league page itself."""
+    try:
+        response = fetch(
+            DK_PAGE_URL,
+            BOOK_KEY,
+            options=replace(options_for(BOOK_KEY), keep_headers=True),
+            headers={"User-Agent": USER_AGENT},
+        )
+    except ScraperApiError as exc:
+        print(f"DraftKings event group discovery failed: {exc}")
+        return []
+
+    html = response.text or ""
+    found: list[str] = []
+    for pattern in (r"eventgroup[/=](\d{2,8})", r'"eventGroupId"\s*:\s*"?(\d{2,8})"?'):
+        for group in re.findall(pattern, html, flags=re.IGNORECASE):
+            if group not in found:
+                found.append(group)
+    if found:
+        print(f"DraftKings discovered event group(s) from {DK_PAGE_URL}: {found[:MAX_DISCOVERED_GROUPS]}")
+    else:
+        print(f"DraftKings page returned no event group id ({len(html)} bytes)")
+    return found[:MAX_DISCOVERED_GROUPS]
+
+
+def _fetch_group_payload(group: str, options, headers: dict[str, str]):
+    url = DK_EVENT_GROUP_URL.format(group=group)
+    try:
+        response = fetch(url, BOOK_KEY, options=options, headers=headers)
+    except ScraperApiError as exc:
+        print(f"DraftKings direct fetch failed for {url}: {exc}")
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = _decode_possible_json(response.text)
+    if not _looks_like_direct_dk_payload(payload):
+        return None
+    payload = _normalize_direct_dk_payload(payload)
+    lines = _parse_spread_lines(payload)
+    print(f"DraftKings eventgroup {group}: {len(lines)} spread line(s)")
+    return payload if lines else None
+
+
 def _fetch_dk_direct_payload():
     headers = {"Accept": "application/json", "User-Agent": USER_AGENT, "Referer": DK_PAGE_URL}
     # The eventgroup feed is JSON behind Akamai: premium residential IPs get it,
     # ScraperAPI-side rendering would only add 15 credits per call.
     options = replace(options_for(BOOK_KEY), keep_headers=True)
-    for url in DK_DIRECT_URLS:
-        try:
-            response = fetch(url, BOOK_KEY, options=options, headers=headers)
-            payload = None
-            try:
-                payload = response.json()
-            except ValueError:
-                payload = _decode_possible_json(response.text)
-            if _looks_like_direct_dk_payload(payload):
-                print(f"DraftKings payload captured via direct endpoint: {url}")
-                return _normalize_direct_dk_payload(payload)
-        except ScraperApiError as exc:
-            print(f"DraftKings direct fetch failed for {url}: {exc}")
+    tried: list[str] = []
+    for group in DK_EVENT_GROUPS:
+        tried.append(group)
+        payload = _fetch_group_payload(group, options, headers)
+        if payload:
+            return payload
+    for group in _discover_event_groups():
+        if group in tried:
+            continue
+        payload = _fetch_group_payload(group, options, headers)
+        if payload:
+            return payload
     return None
 
 
@@ -438,7 +515,7 @@ async def scrape_dk():
         save_current_lines(current_lines)
         events = _to_ingest_events(current_lines)
         if events:
-            ingest_events("basketball_nba", events)
+            ingest_events(DK_SPORT_KEY, events)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 15844367}]}, webhook_url=DISCORD_WEBHOOK_URL)
         return {
