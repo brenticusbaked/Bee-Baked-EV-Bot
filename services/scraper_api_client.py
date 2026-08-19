@@ -17,10 +17,12 @@ of API credits (retrying only burns runner minutes) and a 401 means the key is
 bad. The last two trip a run-wide kill switch instead.
 """
 
+import asyncio
 import json
 import os
 import random
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -56,6 +58,10 @@ BACKOFF_MAX_SECONDS = float(os.getenv("SCRAPERAPI_BACKOFF_MAX_SECONDS", "8"))
 # rather than letting retries walk into the job timeout.
 RUN_BUDGET_SECONDS = float(os.getenv("SCRAPERAPI_RUN_BUDGET_SECONDS", "600"))
 MAX_CREDITS_PER_RUN = int(os.getenv("SCRAPERAPI_MAX_CREDITS_PER_RUN", "600"))
+# Concurrent in-flight requests. ScraperAPI answers 429 when a plan's thread
+# limit is exceeded, so this stays low enough to keep the retry path rare while
+# still overlapping the 5-15s each protected page takes.
+MAX_CONCURRENCY = int(os.getenv("SCRAPERAPI_CONCURRENCY", "5"))
 
 RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 OUT_OF_CREDITS_STATUS = 403
@@ -128,6 +134,12 @@ BOOK_PROFILES: dict[str, ScraperApiOptions] = {
     "novig": JSON_FEED_OPTIONS,
     "fanatics": JSON_FEED_OPTIONS,
     "onyx": JSON_FEED_OPTIONS,
+    # DFS and exchange feeds are plain JSON APIs; PrizePicks sits behind
+    # Cloudflare and needs the residential IP, the others just need an IP that
+    # is not a datacentre range.
+    "prizepicks": JSON_FEED_OPTIONS,
+    "underdog": JSON_FEED_OPTIONS,
+    "prophetx": JSON_FEED_OPTIONS,
 }
 
 
@@ -453,6 +465,39 @@ def try_fetch_json(url: str, book: str, **kwargs) -> Any | None:
     except ScraperApiError as exc:
         print(f"[scraperapi] {exc}", flush=True)
         return None
+
+
+async def fetch_json_async(url: str, book: str, **kwargs) -> Any | None:
+    """``try_fetch_json`` on a worker thread, so many books can be in flight at
+    once. ``requests`` is blocking; a thread per request is cheaper than adding an
+    async HTTP dependency and keeps one retry/credit implementation."""
+    return await asyncio.to_thread(try_fetch_json, url, book, **kwargs)
+
+
+async def gather_json(
+    targets: Sequence[tuple[str, str]],
+    *,
+    concurrency: int | None = None,
+    **kwargs,
+) -> list[Any | None]:
+    """Fetch ``(url, book)`` pairs concurrently, bounded by ScraperAPI's thread
+    limit. Results keep the input order; a failed fetch is ``None``, so one dead
+    league or book never aborts the others."""
+    if not targets:
+        return []
+    limit = max(1, concurrency or MAX_CONCURRENCY)
+    semaphore = asyncio.Semaphore(limit)
+
+    async def _one(url: str, book: str) -> Any | None:
+        async with semaphore:
+            return await fetch_json_async(url, book, **kwargs)
+
+    return list(await asyncio.gather(*(_one(url, book) for url, book in targets)))
+
+
+def gather_json_sync(targets: Sequence[tuple[str, str]], **kwargs) -> list[Any | None]:
+    """``gather_json`` for the synchronous pipeline tasks."""
+    return asyncio.run(gather_json(targets, **kwargs))
 
 
 def _month_key() -> str:

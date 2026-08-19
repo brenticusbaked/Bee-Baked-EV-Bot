@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from typing import Callable, List
 
@@ -218,6 +219,31 @@ def get_scraper_tasks() -> List[PipelineTask]:
             tasks.append(PipelineTask(name="scraper_fanduel", func=scrape_fanduel))
         except Exception as exc:
             print(f"[scraper-loader] Skipping scraper_fanduel: {exc}")
+    if env_flag("ENABLE_UNDERDOG_SCRAPER", True):
+        try:
+            from scraper_underdog import scrape_underdog
+
+            tasks.append(PipelineTask(name="scraper_underdog", func=scrape_underdog))
+        except Exception as exc:
+            print(f"[scraper-loader] Skipping scraper_underdog: {exc}")
+    if env_flag("ENABLE_PRIZEPICKS_SCRAPER", True):
+        try:
+            from scraper_prizepicks import scrape_prizepicks
+
+            tasks.append(PipelineTask(name="scraper_prizepicks", func=scrape_prizepicks))
+        except Exception as exc:
+            print(f"[scraper-loader] Skipping scraper_prizepicks: {exc}")
+    # ProphetX is an authenticated partner API, so it only loads when a key is
+    # present; without one the task would just log a skip on every run.
+    if env_flag("ENABLE_PROPHETX_INGEST", True) and (
+        os.getenv("PROPHETX_API_KEY") or os.getenv("PROPHETX_ACCESS_KEY")
+    ):
+        try:
+            from scraper_prophetx import scrape_prophetx
+
+            tasks.append(PipelineTask(name="scraper_prophetx", func=scrape_prophetx))
+        except Exception as exc:
+            print(f"[scraper-loader] Skipping scraper_prophetx: {exc}")
     if env_flag("ENABLE_ODDSHARVESTER", True):
         try:
             from scraper_oddsharvester import scrape_oddsharvester

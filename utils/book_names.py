@@ -28,6 +28,7 @@ _BOOK_PATTERNS: Dict[str, tuple[str, ...]] = {
     "fliff": ("fliff",),
     "dabble": ("dabble",),
     "prizepicks": ("prizepicks", "prize picks"),
+    "underdog": ("underdog", "underdog fantasy"),
     "pinnacle": ("pinnacle",),
 }
 

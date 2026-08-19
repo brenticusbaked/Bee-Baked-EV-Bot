@@ -59,12 +59,23 @@ jobs:
           SCRAPERAPI_RENDER_BOOKS: ""
           SCRAPERAPI_MAX_CREDITS_PER_RUN: "600"
           SCRAPERAPI_RUN_BUDGET_SECONDS: "600"
+          SCRAPERAPI_CONCURRENCY: "5"
           SCRAPER_PROXY_ATTEMPTS: "2"
           ENABLE_PYBASEBALL_FIP_SCRAPER: "true"
           ENABLE_DRAFTKINGS_SCRAPER: "true"
           ENABLE_BETMGM_SCRAPER: "true"
           ENABLE_FANDUEL_SCRAPER: "true"
           ENABLE_ODDSHARVESTER: "true"
+          ENABLE_UNDERDOG_SCRAPER: "true"
+          ENABLE_PRIZEPICKS_SCRAPER: "true"
+          # PrizePicks publishes no per-leg price. Leave this unset and the board
+          # is logged for line-shopping only; set it to the decimal price your
+          # account actually pays per leg to price it for EV.
+          PRIZEPICKS_LEG_DECIMAL_PRICE: ""
+          ENABLE_PROPHETX_INGEST: "true"
+          PROPHETX_API_KEY: ${{ secrets.PROPHETX_API_KEY }}
+          PROPHETX_ACCESS_KEY: ${{ secrets.PROPHETX_ACCESS_KEY }}
+          PROPHETX_SECRET_KEY: ${{ secrets.PROPHETX_SECRET_KEY }}
           BETMGM_ENABLE_BROWSER_FALLBACK: "true"
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}

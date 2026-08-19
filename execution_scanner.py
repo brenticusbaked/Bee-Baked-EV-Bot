@@ -199,6 +199,7 @@ def run_execution_scan() -> dict:
     soft_books = {
         "fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada",
         "novig", "kalshi", "polymarket", "prophetx",
+        "prizepicks", "underdog",
     }
     reports: List[dict] = []
     candidates: List[dict] = []
