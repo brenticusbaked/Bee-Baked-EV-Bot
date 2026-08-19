@@ -57,7 +57,11 @@ jobs:
           # Books whose odds only exist after the page's JavaScript runs. Each
           # listed book costs 25 credits per request instead of 10.
           SCRAPERAPI_RENDER_BOOKS: ""
-          SCRAPERAPI_MAX_CREDITS_PER_RUN: "600"
+          # 100,000/month plan. At ~2,500 per run the plan funds ~40 runs a
+          # month, so the monthly ceiling is what actually protects the balance
+          # once this workflow goes on a cron.
+          SCRAPERAPI_MAX_CREDITS_PER_RUN: "2500"
+          SCRAPERAPI_MONTHLY_CREDITS: "100000"
           SCRAPERAPI_RUN_BUDGET_SECONDS: "600"
           # PrizePicks 429'd on 5 parallel league requests, so both the per-call
           # and the process-wide ceilings stay under the plan's thread limit.

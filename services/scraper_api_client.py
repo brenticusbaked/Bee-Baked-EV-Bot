@@ -58,7 +58,11 @@ BACKOFF_MAX_SECONDS = float(os.getenv("SCRAPERAPI_BACKOFF_MAX_SECONDS", "8"))
 # the pipeline, so the client refuses to start a request once this is spent
 # rather than letting retries walk into the job timeout.
 RUN_BUDGET_SECONDS = float(os.getenv("SCRAPERAPI_RUN_BUDGET_SECONDS", "600"))
-MAX_CREDITS_PER_RUN = int(os.getenv("SCRAPERAPI_MAX_CREDITS_PER_RUN", "600"))
+MAX_CREDITS_PER_RUN = int(os.getenv("SCRAPERAPI_MAX_CREDITS_PER_RUN", "2500"))
+# Plan ceiling for the billing month. The per-run cap alone cannot stop a
+# frequent cron from spending the plan by the 10th, so spend is also checked
+# against the month's running total before each request.
+MONTHLY_CREDIT_BUDGET = int(os.getenv("SCRAPERAPI_MONTHLY_CREDITS", "100000"))
 # Concurrent in-flight requests. ScraperAPI answers 429 when a plan's thread
 # limit is exceeded, so this stays low enough to keep the retry path rare while
 # still overlapping the 5-15s each protected page takes.
@@ -282,6 +286,11 @@ def _check_run_limits(book: str, options: ScraperApiOptions) -> None:
     if _spent_credits() + options.credits > MAX_CREDITS_PER_RUN:
         raise ScraperApiError(
             f"ScraperAPI per-run credit cap of {MAX_CREDITS_PER_RUN} reached before {book} request"
+        )
+    if MONTHLY_CREDIT_BUDGET > 0 and monthly_credits() + options.credits > MONTHLY_CREDIT_BUDGET:
+        raise ScraperApiError(
+            f"ScraperAPI monthly budget of {MONTHLY_CREDIT_BUDGET} credits reached"
+            f" before {book} request"
         )
 
 
@@ -550,7 +559,12 @@ def format_stats() -> str:
             f" {stats.blocks} blocked, {stats.credits} credits,"
             f" {stats.avg_latency:.1f}s avg"
         )
-    lines.append(f"[scraperapi] run total: {_spent_credits()} credits, {monthly_credits()} this month")
+    spent_this_month = monthly_credits()
+    remaining = max(MONTHLY_CREDIT_BUDGET - spent_this_month, 0) if MONTHLY_CREDIT_BUDGET > 0 else 0
+    lines.append(
+        f"[scraperapi] run total: {_spent_credits()} credits,"
+        f" {spent_this_month} this month, {remaining} left of {MONTHLY_CREDIT_BUDGET}"
+    )
     return "\n".join(lines)
 
 
