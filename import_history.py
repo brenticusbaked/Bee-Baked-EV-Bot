@@ -1,12 +1,13 @@
 import os
 import re
 import sys
+from collections import Counter
 
 import pandas as pd
 
 from db_manager import supabase
 from utils.book_names import normalize_book
-from utils.results import LOSS, PUSH, WIN, normalize_result
+from utils.results import LOSS, PUSH, WIN, book_from_notes, normalize_result
 
 _HISTORICAL_NOTE_RE = re.compile(r"^Historical import - ID:\s*(?P<bet_id>[^;]+?)\s*(?:;|$)")
 
@@ -158,7 +159,7 @@ def _existing_history_rows() -> list:
         offset += page_size
 
 
-def repair_history(csv_path: str = "bet_history.csv") -> int:
+def repair_history(csv_path: str = "bet_history.csv", dry_run: bool = False) -> int:
     """Rewrite already-imported rows with canonical results and their book.
 
     The first import wrote lower-case results and no sportsbook, which is why the
@@ -192,11 +193,21 @@ def repair_history(csv_path: str = "bet_history.csv") -> int:
         canonical = _STATUS_MAP.get(status) or normalize_result(row.get("result"))
         if canonical:
             payload["result"] = canonical
-        if source is not None and pd.notna(source.get("closing_line")) and float(source["closing_line"]) > 1.0:
-            payload["closing_line_decimal"] = float(source["closing_line"])
+        closing = source.get("closing_line") if source is not None else None
+        if pd.notna(closing) and float(closing) > 1.0:
+            payload["closing_line_decimal"] = float(closing)
         updates.append(payload)
 
-    print(f"[repair] rewriting {len(updates)} imported row(s) with canonical results and books.")
+    books = Counter(book_from_notes(payload["notes"]) for payload in updates)
+    results = Counter(payload.get("result", "") for payload in updates)
+    print(
+        f"[repair] {len(updates)} imported row(s) to rewrite | "
+        f"results {dict(results)} | books {dict(books.most_common(10))}"
+    )
+    if dry_run:
+        print("[repair] dry run: nothing written.")
+        return 0
+
     chunk_size = 500
     repaired = 0
     for i in range(0, len(updates), chunk_size):
@@ -212,6 +223,6 @@ def repair_history(csv_path: str = "bet_history.csv") -> int:
 
 if __name__ == "__main__":
     if "--repair" in sys.argv:
-        repair_history()
+        repair_history(dry_run="--dry-run" in sys.argv)
     else:
         import_csv()

@@ -1,0 +1,42 @@
+name: Repair Imported Bet History
+
+# One-off, manual only: re-keys the rows imported from bet_history.csv so they
+# carry canonical WIN/LOSS/PUSH results and their sportsbook. Supabase-only,
+# zero API cost. Run the dry run first to see the counts it would write.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (report the rewrite without writing)'
+        type: boolean
+        default: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: history-repair
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Repair imported history
+        env:
+          PYTHONUNBUFFERED: "1"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python -u import_history.py --repair --dry-run
+          else
+            python -u import_history.py --repair
+          fi
