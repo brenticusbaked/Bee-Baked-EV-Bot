@@ -21,7 +21,7 @@ from execution.venue_scores import build_venue_scores
 from execution_signal import build_order_from_edge, quote_from_book
 from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
-from services.discord_channels import BET_ALERTS_WEBHOOK_URL, DEFAULT_WEBHOOK_URL
+from services.discord_channels import EXECUTION_DESK_WEBHOOK_URL
 from services.last_ten import build_last_ten_context_line
 from utils.odds import decimal_to_american, fair_probabilities_from_prices, quarter_kelly_units
 from utils.scratch_guard import (
@@ -100,9 +100,6 @@ ENABLE_EXECUTION_DESK_ALERTS = os.getenv("ENABLE_EXECUTION_DESK_ALERTS", "true")
 # within this many minutes, so the desk stops re-alerting an edge every run.
 # 0 disables dedup.
 EXECUTION_DEDUP_MINUTES = max(0, env_int("EXECUTION_DEDUP_MINUTES", 360))
-EXECUTION_DESK_WEBHOOK_URL = (
-    os.getenv("DISCORD_EXECUTION_DESK_WEBHOOK_URL") or BET_ALERTS_WEBHOOK_URL or DEFAULT_WEBHOOK_URL
-)
 
 
 def _outcome_key(outcome: dict) -> Tuple[str, str, str]:

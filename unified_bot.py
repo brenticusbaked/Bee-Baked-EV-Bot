@@ -15,7 +15,7 @@ from models.nhl_pdo import PDOContext, build_pdo_context, pdo_total_adjustment
 from models.talent_model import TalentContext, adjusted_fair_probability, build_talent_context
 from services.alerts import send_discord_alert
 from services.book_weights import book_weight_for, get_book_weights
-from services.discord_channels import BET_ALERTS_WEBHOOK_URL, STATUS_WEBHOOK_URL
+from services.discord_channels import BET_ALERTS_WEBHOOK_URL, NEAR_MISS_WEBHOOK_URL
 from services.last_ten import build_last_ten_context_line
 from services.history_calibration import prop_type_ev_adjustment, validated_ev_floor
 from utils.correlation import ExposureEntry, ExposureTracker, check_exposure
@@ -986,7 +986,7 @@ def scan_markets(
             source=source,
             alert_type="near_miss_digest",
             dedupe_key=summary_description[:200],
-            webhook_url=webhook_override or STATUS_WEBHOOK_URL or DISCORD_WEBHOOK_URL,
+            webhook_url=webhook_override or NEAR_MISS_WEBHOOK_URL or DISCORD_WEBHOOK_URL,
             add_bee_image=False,
         )
 
