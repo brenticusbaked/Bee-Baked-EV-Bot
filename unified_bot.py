@@ -610,6 +610,7 @@ def scan_markets(
     soft_books = [
         "fanduel", "draftkings", "betmgm", "bet365", "caesars", "bovada",
         "novig", "kalshi", "polymarket", "prophetx",
+        "prizepicks", "underdog",
     ]
     graded_bets = get_all_graded_bets()
     today_bets = get_today_bets()
