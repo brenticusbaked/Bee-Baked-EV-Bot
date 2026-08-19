@@ -10,6 +10,32 @@ from services import scraper_api_client as client
 FIXTURE = json.loads(
     (Path(__file__).with_name("mock_draftkings_markets.json")).read_text()
 )
+PROP_FIXTURE = json.loads(
+    (Path(__file__).with_name("mock_draftkings_props.json")).read_text()
+)
+
+# Two prop entries as the league page embeds them: one under "Batter" and one
+# under "Pitcher", which is what tells an ambiguous title like "Hits" apart.
+NAV_HTML = (
+    '{"id":"8RHTD82","parentId":"NavRoot","generatorId":"8RHTD82","seoId":"batter",'
+    '"title":"Batter","sortOrder":1,"tags":[],"parameters":{"sportId":"7",'
+    '"leagueId":"84240"},"children":['
+    '{"id":"PZEOIML","parentId":"8RHTD82","generatorId":"g","seoId":"hits",'
+    '"title":"Hits","sortOrder":1,"tags":["OSB","PlayerProps"],'
+    '"parameters":{"sportId":"7","leagueId":"84240","categoryId":"743",'
+    '"subcategoryId":"17320","marketTypeId":"13227"},"children":[]}]},'
+    '{"id":"X2LC65P","parentId":"NavRoot","generatorId":"X2LC65P","seoId":"pitcher",'
+    '"title":"Pitcher","sortOrder":2,"tags":[],"parameters":{"sportId":"7",'
+    '"leagueId":"84240"},"children":['
+    '{"id":"KMDYUB7","parentId":"X2LC65P","generatorId":"g","seoId":"hits",'
+    '"title":"Hits","sortOrder":3,"tags":["OSB","PlayerProps"],'
+    '"parameters":{"sportId":"7","leagueId":"84240","categoryId":"1924",'
+    '"subcategoryId":"19457","marketTypeId":"16663"},"children":[]},'
+    '{"id":"T8SY5ST","parentId":"X2LC65P","generatorId":"g","seoId":"game-lines",'
+    '"title":"Game Lines","sortOrder":0,"tags":["OSB","PrimaryMarket"],'
+    '"parameters":{"sportId":"7","leagueId":"84240","categoryId":"493",'
+    '"subcategoryId":"4519"},"children":[]}]}'
+)
 
 
 class MarketParsingTests(unittest.TestCase):
@@ -109,6 +135,10 @@ class LeagueDiscoveryTests(unittest.TestCase):
         '"nameIdentifier":"mlb"}'
     )
 
+    def setUp(self):
+        scraper_draftkings._PAGE_HTML_CACHE.clear()
+        self.addCleanup(scraper_draftkings._PAGE_HTML_CACHE.clear)
+
     def test_the_league_id_is_matched_by_slug(self):
         with (
             patch.object(scraper_draftkings, "DK_LEAGUE_SLUG", "mlb"),
@@ -202,7 +232,168 @@ class TransportTests(unittest.TestCase):
             self.assertIsNone(scraper_draftkings._fetch_dk_direct_payload())
 
 
+class PropDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        scraper_draftkings._PAGE_HTML_CACHE.clear()
+        self.addCleanup(scraper_draftkings._PAGE_HTML_CACHE.clear)
+
+    def test_prop_subcategories_are_keyed_by_their_navigation_group(self):
+        with patch.object(scraper_draftkings, "_fetch_page_html", return_value=NAV_HTML):
+            found = scraper_draftkings._discover_prop_subcategories("84240")
+
+        # The same title under two groups is two different markets.
+        self.assertEqual(
+            found, [("batter_hits", "17320"), ("pitcher_hits_allowed", "19457")]
+        )
+
+    def test_primary_market_entries_are_not_mistaken_for_props(self):
+        with patch.object(scraper_draftkings, "_fetch_page_html", return_value=NAV_HTML):
+            found = scraper_draftkings._discover_prop_subcategories("84240")
+
+        self.assertNotIn("4519", [subcategory for _, subcategory in found])
+
+    def test_another_leagues_props_are_ignored(self):
+        with patch.object(scraper_draftkings, "_fetch_page_html", return_value=NAV_HTML):
+            self.assertEqual(scraper_draftkings._discover_prop_subcategories("88808"), [])
+
+    def test_the_market_count_is_capped_so_a_run_cannot_drain_credits(self):
+        with (
+            patch.object(scraper_draftkings, "_fetch_page_html", return_value=NAV_HTML),
+            patch.object(scraper_draftkings, "DK_PROP_MARKET_LIMIT", 1),
+        ):
+            self.assertEqual(len(scraper_draftkings._discover_prop_subcategories("84240")), 1)
+
+    def test_a_failed_page_fetch_yields_no_props(self):
+        with patch.object(scraper_draftkings, "_fetch_page_html", return_value=""):
+            self.assertEqual(scraper_draftkings._discover_prop_subcategories("84240"), [])
+
+    def test_the_page_is_only_fetched_once_per_process(self):
+        response = MagicMock(text=NAV_HTML)
+        with patch.object(scraper_draftkings, "fetch", return_value=response) as fetch:
+            scraper_draftkings._fetch_page_html()
+            scraper_draftkings._fetch_page_html()
+
+        fetch.assert_called_once()
+
+
+class PropParsingTests(unittest.TestCase):
+    """DraftKings publishes props as a milestone ladder ("2+") or as an explicit
+    over/under with a point; both have to land on the same market key."""
+
+    def test_a_milestone_ladder_becomes_over_lines_half_a_unit_below(self):
+        lines = scraper_draftkings._to_prop_lines(
+            PROP_FIXTURE["milestone"], "batter_home_runs"
+        )
+        by_player = {(line.player, line.point): line for line in lines}
+
+        # "1+ home runs" is the same wager as over 0.5.
+        self.assertEqual(sorted({point for _, point in by_player}), [0.5, 1.5])
+        line = by_player[("Brandon Lowe", 0.5)]
+        self.assertEqual(line.market_key, "batter_home_runs")
+        self.assertAlmostEqual(line.over_price, 4.73)
+        self.assertIsNone(line.under_price)
+
+    def test_every_player_in_a_market_is_kept(self):
+        lines = scraper_draftkings._to_prop_lines(
+            PROP_FIXTURE["milestone"], "batter_home_runs"
+        )
+        self.assertEqual({line.player for line in lines}, {"Brandon Lowe", "Oneil Cruz"})
+
+    def test_an_over_under_market_pairs_both_sides_on_one_line(self):
+        lines = scraper_draftkings._to_prop_lines(
+            PROP_FIXTURE["over_under"], "pitcher_outs"
+        )
+
+        self.assertEqual(len(lines), 1)
+        line = lines[0]
+        self.assertEqual((line.player, line.point), ("Paul Skenes", 15.5))
+        self.assertAlmostEqual(line.over_price, 1.84, places=2)
+        self.assertAlmostEqual(line.under_price, 1.89, places=2)
+
+    def test_props_are_ingested_under_the_market_key_with_the_player_described(self):
+        lines = scraper_draftkings._to_prop_lines(
+            PROP_FIXTURE["over_under"], "pitcher_outs"
+        )
+        cache = {
+            "baseball_mlb": [
+                {
+                    "id": "cached-event",
+                    "home_team": "Pittsburgh Pirates",
+                    "away_team": "Detroit Tigers",
+                    "commence_time": "2026-08-19T16:35:00Z",
+                    "bookmakers": [
+                        {
+                            "key": "pinnacle",
+                            "markets": [
+                                {
+                                    "key": "pitcher_outs",
+                                    "outcomes": [
+                                        {
+                                            "name": "Over",
+                                            "description": "Paul Skenes",
+                                            "price": 1.9,
+                                            "point": 15.5,
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with patch.object(scraper_draftkings, "DK_SPORT_KEY", "baseball_mlb"):
+            events, counts = scraper_draftkings.build_prop_events(
+                "draftkings", "DraftKings", lines, cache
+            )
+
+        self.assertEqual(counts["matched"], 1)
+        market = events[0]["bookmakers"][0]["markets"][0]
+        self.assertEqual(market["key"], "pitcher_outs")
+        self.assertEqual(
+            {(outcome["name"], outcome["description"]) for outcome in market["outcomes"]},
+            {("Over", "Paul Skenes"), ("Under", "Paul Skenes")},
+        )
+
+    def test_an_unpriced_or_unlabelled_selection_is_dropped(self):
+        payload = {
+            "events": PROP_FIXTURE["over_under"]["events"],
+            "markets": PROP_FIXTURE["over_under"]["markets"],
+            "selections": [
+                {"marketId": "x", "label": "Over", "points": 1.5},
+                {"marketId": "x", "trueOdds": 1.9},
+            ],
+        }
+        self.assertEqual(scraper_draftkings._to_prop_lines(payload, "pitcher_outs"), [])
+
+    def test_props_can_be_turned_off_without_touching_the_main_markets(self):
+        with (
+            patch.object(scraper_draftkings, "ENABLE_DK_PROPS", False),
+            patch.object(scraper_draftkings, "_fetch_page_html") as page,
+        ):
+            self.assertEqual(scraper_draftkings._scrape_prop_events(FIXTURE), [])
+
+        page.assert_not_called()
+
+    def test_a_prop_fetch_failure_does_not_fail_the_scrape(self):
+        with (
+            patch.object(
+                scraper_draftkings,
+                "_fetch_prop_lines",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch.object(scraper_draftkings, "_league_id_from_payload", return_value="84240"),
+        ):
+            self.assertEqual(scraper_draftkings._scrape_prop_events(FIXTURE), [])
+
+
 class ScrapeTests(unittest.TestCase):
+    def setUp(self):
+        props = patch.object(scraper_draftkings, "_scrape_prop_events", return_value=[])
+        props.start()
+        self.addCleanup(props.stop)
+
     def test_a_successful_scrape_ingests_all_markets_under_the_page_league(self):
         with (
             patch.object(scraper_draftkings, "_fetch_dk_direct_payload", return_value=FIXTURE),

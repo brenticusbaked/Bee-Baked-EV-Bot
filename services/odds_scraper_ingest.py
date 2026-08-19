@@ -15,11 +15,18 @@ from utils.odds import american_to_decimal
 
 
 def _dedupe_outcomes(outcomes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop repeats of the same outcome, keyed the way the feed identifies one.
+
+    Player props name every outcome ``Over``/``Under`` and identify the player in
+    ``description``, so the description belongs in the key: without it a whole
+    market of props collapses onto whichever player was parsed first.
+    """
     seen: Dict[str, Dict[str, Any]] = {}
     for outcome in outcomes:
         name = str(outcome.get("name") or "").strip()
+        description = str(outcome.get("description") or "").strip()
         point = outcome.get("point")
-        key = f"{name}:{point}"
+        key = f"{name}:{description}:{point}"
         if key not in seen:
             seen[key] = outcome
     return list(seen.values())
