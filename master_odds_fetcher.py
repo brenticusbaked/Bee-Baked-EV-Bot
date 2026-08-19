@@ -110,15 +110,25 @@ def _credits_for_config(config: Dict[str, str]) -> int:
     return sum(len(markets.split(",")) * 2 for markets in config.values())
 
 
+def _outcome_key(outcome: dict) -> tuple[str, str, str]:
+    """Identity of an outcome within a market.
+
+    Player-prop markets name every outcome ``Over``/``Under`` and carry the player
+    in ``description``, so the description is part of the identity: keying on name
+    and point alone lets one player's line overwrite the whole market.
+    """
+    return (
+        str(outcome.get("name", "")).strip(),
+        str(outcome.get("description", "")).strip(),
+        str(outcome.get("point", "")).strip(),
+    )
+
+
 def _merge_outcomes(existing_market: dict, incoming_market: dict) -> None:
     existing_outcomes = existing_market.setdefault("outcomes", [])
-    outcome_index = {
-        (str(outcome.get("name", "")).strip(), str(outcome.get("point", "")).strip()): outcome
-        for outcome in existing_outcomes
-    }
+    outcome_index = {_outcome_key(outcome): outcome for outcome in existing_outcomes}
     for outcome in incoming_market.get("outcomes", []):
-        key = (str(outcome.get("name", "")).strip(), str(outcome.get("point", "")).strip())
-        outcome_index[key] = outcome
+        outcome_index[_outcome_key(outcome)] = outcome
     existing_market["outcomes"] = list(outcome_index.values())
 
 

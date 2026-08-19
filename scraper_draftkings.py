@@ -5,6 +5,8 @@ from dataclasses import replace
 from typing import Dict, Iterable, List, Optional
 
 from db_manager import get_master_cache, load_tracker_state, save_tracker_state
+from services.dfs_normalize import PropLine
+from services.dfs_normalize import build_events as build_prop_events
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import post_discord
 from services.odds_reference import format_pinnacle_spread_reference
@@ -79,6 +81,54 @@ DK_MARKET_KEYS = {
     "total points": "totals",
     "total goals": "totals",
 }
+
+# Player props live behind their own subcategory ids, one request each, so they
+# are keyed by the league page's own navigation labels: DraftKings groups them
+# under a role ("Batter", "Pitcher"), and the role is what disambiguates a title
+# like "Hits", which means batter hits under one group and hits allowed under the
+# other. Titles are slugged, so "Hits + Runs + RBIs" matches "hits runs rbis".
+DK_PROP_MARKET_KEYS = {
+    "batter home runs": "batter_home_runs",
+    "batter hits": "batter_hits",
+    "batter total bases": "batter_total_bases",
+    "batter hits runs rbis": "batter_hits_runs_rbis",
+    "batter rbis": "batter_rbis",
+    "batter runs": "batter_runs_scored",
+    "batter strikeouts": "batter_strikeouts",
+    "pitcher strikeouts": "pitcher_strikeouts",
+    "pitcher outs": "pitcher_outs",
+    "pitcher earned runs": "pitcher_earned_runs",
+    "pitcher hits": "pitcher_hits_allowed",
+    "pitcher walks": "pitcher_walks_allowed",
+}
+
+# Each prop subcategory is a separate ScraperAPI call, so the number fetched per
+# run is capped rather than pulling every category the page advertises.
+DK_PROP_MARKET_LIMIT = int(os.getenv("DRAFTKINGS_PROP_MARKET_LIMIT", "8"))
+ENABLE_DK_PROPS = os.getenv("ENABLE_DRAFTKINGS_PROPS", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
+
+# Navigation nodes as the league page embeds them, used to resolve a prop
+# subcategory id and the group title it hangs off.
+NAV_NODE_RE = re.compile(
+    r'"id":"([A-Za-z0-9]+)","parentId":"([A-Za-z0-9]*)","generatorId":"[^"]*"'
+    r',"seoId":"[^"]*","title":"((?:[^"\\]|\\.)*)"'
+)
+NAV_PROP_NODE_RE = re.compile(
+    r'"id":"([A-Za-z0-9]+)","parentId":"([A-Za-z0-9]*)","generatorId":"[^"]*"'
+    r',"seoId":"[^"]*","title":"((?:[^"\\]|\\.)*)","sortOrder":-?\d+'
+    r',"tags":\[([^\]]*)\],"parameters":\{([^}]*)\}'
+)
+
+OVER = "Over"
+UNDER = "Under"
+
+# The league page is the source of both league ids and prop subcategory ids, and
+# every fetch of it costs credits, so it is read once per process.
+_PAGE_HTML_CACHE: List[str] = []
 
 
 def _sport_key_for_page(page_url: str) -> str:
@@ -335,12 +385,10 @@ def _to_ingest_events(
     return list(by_event.values())
 
 
-def _discover_league_ids() -> list[str]:
-    """League ids advertised by the league page's own navigation state.
-
-    The page embeds every league DraftKings offers, so the id has to be matched
-    by slug: taking the first ids the page mentions returned AFL for an MLB page.
-    """
+def _fetch_page_html() -> str:
+    """The league page HTML, fetched once per process (it costs credits)."""
+    if _PAGE_HTML_CACHE:
+        return _PAGE_HTML_CACHE[0]
     try:
         response = fetch(
             DK_PAGE_URL,
@@ -349,10 +397,20 @@ def _discover_league_ids() -> list[str]:
             headers={"User-Agent": USER_AGENT},
         )
     except ScraperApiError as exc:
-        print(f"DraftKings league discovery failed: {exc}")
-        return []
-
+        print(f"DraftKings page fetch failed: {exc}")
+        return ""
     html = response.text or ""
+    _PAGE_HTML_CACHE.append(html)
+    return html
+
+
+def _discover_league_ids() -> list[str]:
+    """League ids advertised by the league page's own navigation state.
+
+    The page embeds every league DraftKings offers, so the id has to be matched
+    by slug: taking the first ids the page mentions returned AFL for an MLB page.
+    """
+    html = _fetch_page_html()
     found: list[str] = []
     patterns = (
         r'"eventGroupId":\s*"?(\d{2,8})"?[^{}]{0,240}?"nameIdentifier":"%s"',
@@ -405,6 +463,195 @@ def _fetch_league_payload(league_id: str, options, headers: dict[str, str]):
         + f" line(s) across {len(payload.get('events') or [])} event(s)"
     )
     return payload if by_market else None
+
+
+def _slug(value: object) -> str:
+    text = re.sub(r"[^a-z0-9]+", " ", str(value or "").lower())
+    return " ".join(text.split())
+
+
+def _prop_params(league_id: str, subcategory_id: str) -> Dict[str, str]:
+    """Query one player-prop subcategory for a league.
+
+    Unlike the primary markets, props have to be filtered on the subcategory id
+    on both the event and market query, or the service answers with the league's
+    game lines instead.
+    """
+    return {
+        "isBatchable": "false",
+        "templateVars": f"{league_id},{subcategory_id}",
+        "eventsQuery": (
+            f"$filter=leagueId eq '{league_id}' AND "
+            f"clientMetadata/Subcategories/any(s: s/Id eq '{subcategory_id}')"
+        ),
+        "marketsQuery": f"$filter=clientMetadata/subCategoryId eq '{subcategory_id}'",
+        "include": "Events",
+        "entity": "events",
+    }
+
+
+def _discover_prop_subcategories(league_id: str) -> List[tuple[str, str]]:
+    """``(market_key, subcategory_id)`` for the prop markets the page advertises."""
+    html = _fetch_page_html()
+    if not html:
+        return []
+
+    titles = {node[0]: node[2] for node in NAV_NODE_RE.findall(html)}
+    found: List[tuple[str, str]] = []
+    seen: set[str] = set()
+    for node_id, parent_id, title, tags, params in NAV_PROP_NODE_RE.findall(html):
+        del node_id
+        if "PlayerProps" not in tags:
+            continue
+        if f'"leagueId":"{league_id}"' not in params:
+            continue
+        subcategory = re.search(r'"subcategoryId":"(\d+)"', params)
+        if not subcategory:
+            continue
+        group = titles.get(parent_id, "")
+        market_key = DK_PROP_MARKET_KEYS.get(_slug(f"{group} {title}"))
+        if not market_key or market_key in seen:
+            continue
+        seen.add(market_key)
+        found.append((market_key, subcategory.group(1)))
+    return found[:DK_PROP_MARKET_LIMIT]
+
+
+def _prop_player(selection: dict, market: dict) -> str:
+    for participant in selection.get("participants") or []:
+        if isinstance(participant, dict) and str(participant.get("type") or "") == "Player":
+            name = str(participant.get("name") or "").strip()
+            if name:
+                return name
+    # Fall back to the market label, which reads "<player> <stat>" ("Aaron Judge Hits").
+    return str(market.get("name") or "").strip()
+
+
+def _prop_side_and_point(selection: dict) -> Optional[tuple[str, float]]:
+    """The over/under side and line a prop selection represents.
+
+    DraftKings publishes props two ways: an explicit over/under with ``points``,
+    and a milestone ladder labelled "2+", which is the same wager as over 1.5 and
+    is converted as such so both shapes land on one market key. Milestone rungs
+    have no under price, which the scanner already tolerates.
+    """
+    side = str(selection.get("outcomeType") or selection.get("label") or "").strip().lower()
+    point = selection.get("points")
+    if point is not None and side in {"over", "under"}:
+        try:
+            return (OVER if side == "over" else UNDER, float(point))
+        except (TypeError, ValueError):
+            return None
+
+    milestone = selection.get("milestoneValue")
+    if milestone is None:
+        match = re.fullmatch(r"(\d+)\+", str(selection.get("label") or "").strip())
+        milestone = match.group(1) if match else None
+    if milestone is None:
+        return None
+    try:
+        return (OVER, float(milestone) - 0.5)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_prop_lines(payload: dict, market_key: str) -> List[PropLine]:
+    """One prop market's payload as per-player over/under lines.
+
+    Props are keyed on the player rather than on DraftKings' own event id: the
+    master cache is keyed on Odds API events, so a prop only reaches the scanner
+    when the cache already prices that player, which is also the only case where a
+    sharp baseline exists to compare against.
+    """
+    if not isinstance(payload, dict):
+        return []
+
+    prices: Dict[tuple[str, float], Dict[str, float]] = {}
+    for market in _iter_offer_groups(payload):
+        for selection in market.get("selections", []):
+            price = _extract_price(selection)
+            side_and_point = _prop_side_and_point(selection)
+            player = _prop_player(selection, market)
+            if not price or not side_and_point or not player:
+                continue
+            side, point = side_and_point
+            prices.setdefault((player, point), {})[side] = price
+
+    return [
+        PropLine(
+            player=player,
+            sport_key=DK_SPORT_KEY,
+            market_key=market_key,
+            point=point,
+            over_price=sides.get(OVER),
+            under_price=sides.get(UNDER),
+        )
+        for (player, point), sides in prices.items()
+    ]
+
+
+def _fetch_prop_lines(
+    league_id: str, options, headers: Dict[str, str]
+) -> List[PropLine]:
+    """Every discoverable prop market for a league, one request per market."""
+    lines: List[PropLine] = []
+    for market_key, subcategory_id in _discover_prop_subcategories(league_id):
+        try:
+            response = fetch(
+                target_url(DK_MARKETS_URL, _prop_params(league_id, subcategory_id)),
+                BOOK_KEY,
+                options=options,
+                headers=headers,
+            )
+        except ScraperApiError as exc:
+            print(f"DraftKings {market_key} prop fetch failed: {exc}")
+            continue
+
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = _decode_possible_json(response.text)
+        if not _looks_like_direct_dk_payload(payload):
+            print(f"DraftKings {market_key} props returned no offer payload")
+            continue
+
+        market_lines = _to_prop_lines(payload, market_key)
+        print(f"DraftKings {market_key}: {len(market_lines)} prop line(s)")
+        lines.extend(market_lines)
+    return lines
+
+
+def _league_id_from_payload(payload: dict) -> str:
+    for market in payload.get("markets") or []:
+        if isinstance(market, dict) and market.get("leagueId"):
+            return str(market["leagueId"])
+    return ""
+
+
+def _scrape_prop_events(payload: dict) -> List[Dict[str, object]]:
+    if not ENABLE_DK_PROPS:
+        return []
+    league_id = _league_id_from_payload(payload)
+    if not league_id:
+        return []
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT, "Referer": DK_PAGE_URL}
+    options = replace(options_for(BOOK_KEY), keep_headers=True)
+    try:
+        lines = _fetch_prop_lines(league_id, options, headers)
+        events, counts = build_prop_events(
+            BOOK_KEY, "DraftKings", lines, get_master_cache() or {}
+        )
+    except Exception as exc:
+        # Props are additive: a failure here must not cost the main-market lines.
+        print(f"DraftKings prop scrape error: {exc}")
+        return []
+
+    print(
+        f"[draftkings] props | {len(lines)} priced line(s) | "
+        f"{counts['matched']} matched to cached events | "
+        f"{counts['unmatched']} without a cached counterpart"
+    )
+    return events
 
 
 def _fetch_dk_direct_payload():
@@ -466,15 +713,22 @@ def scrape_dk():
         events = _to_ingest_events(by_market)
         if events:
             ingest_events(DK_SPORT_KEY, events)
+        prop_events = _scrape_prop_events(api_data)
+        if prop_events:
+            ingest_events(DK_SPORT_KEY, prop_events)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 15844367}]}, webhook_url=DISCORD_WEBHOOK_URL)
 
         tracked = sum(len(lines) for lines in by_market.values())
+        prop_markets = sum(
+            len(event["bookmakers"][0]["markets"]) for event in prop_events
+        )
         return {
             "detail": (
                 f"draftkings scrape complete ({tracked} lines across "
                 f"{len(by_market)} market(s), {len(events)} events ingested "
-                f"on {DK_SPORT_KEY})"
+                f"on {DK_SPORT_KEY}, {prop_markets} prop market(s) across "
+                f"{len(prop_events)} event(s))"
             ),
             "count": len(alerts),
             "label": "alerts",
