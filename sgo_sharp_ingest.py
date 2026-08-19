@@ -141,7 +141,9 @@ def fetch_sgo_sharp_lines():
                                     "line_hash": line_hash,
                                     "last_update": last_update,
                                     "captured_at": datetime.now(timezone.utc).isoformat(),
-                                    "raw_outcome": odd,
+                                    # raw_outcome deliberately omitted: it stored a
+                                    # second copy of the columns above and nothing
+                                    # reads it, at the cost of most of the table.
                                 }
                             )
                 league_success = True

@@ -6,10 +6,24 @@ from db_manager import get_all_bets
 from services.discord_channels import DAILY_SLIPS_WEBHOOK_URL, STATUS_WEBHOOK_URL
 from services.http_client import post_discord
 from utils.odds import profit_for_result
+from utils.results import (
+    GRADED_RESULTS,
+    LOSS,
+    PUSH,
+    WIN,
+    book_from_notes,
+    normalize_result,
+)
 from utils.time import DEFAULT_TZ, get_local_now
 
-
 DISCORD_DAILY_SLIPS_WEBHOOK_URL = DAILY_SLIPS_WEBHOOK_URL
+
+
+def _column(df: pd.DataFrame, name: str, default="") -> pd.Series:
+    """The named column, or a filled series when the table predates it."""
+    if name in df.columns:
+        return df[name]
+    return pd.Series(default, index=df.index, dtype="object")
 
 
 def _safe_numeric(series):
@@ -26,6 +40,30 @@ def _local_date_mask(df: pd.DataFrame, column: str, report_date: str) -> pd.Seri
     return local_dates.eq(report_date).fillna(False)
 
 
+def _book_record_lines(settled: pd.DataFrame, limit: int = 8) -> list:
+    """Per-book W-L and units for an already-settled frame.
+
+    The book lives in ``notes`` as ``book=``/``book_key=``; rows without one
+    (hand-entered or imported without a sportsbook) group under ``unknown``.
+    """
+    if settled.empty:
+        return []
+    frame = settled.copy()
+    frame["book"] = _column(frame, "notes").apply(book_from_notes)
+    rows = []
+    for book, group in frame.groupby("book", dropna=False):
+        wins = int((group["result"] == WIN).sum())
+        losses = int((group["result"] == LOSS).sum())
+        pushes = int((group["result"] == PUSH).sum())
+        net = sum(
+            profit_for_result(row.get("odds", 0), row.get("units", 0), row.get("result", ""))
+            for _, row in group.iterrows()
+        )
+        record = f"{wins}-{losses}" + (f"-{pushes}" if pushes else "")
+        rows.append((len(group), f"`{book}` {record} ({net:+.2f}u)"))
+    return [line for _, line in sorted(rows, key=lambda item: item[0], reverse=True)[:limit]]
+
+
 def build_daily_slips_report() -> str:
     all_bets = get_all_bets()
     if not all_bets:
@@ -35,6 +73,10 @@ def build_daily_slips_report() -> str:
     if df.empty:
         return "**BEE BAKED DAILY SLIPS**\nNo bets logged yet."
 
+    # One vocabulary for results: the CSV import wrote lower case, the graders
+    # write upper case, and the comparisons below only ever matched the latter.
+    df["result"] = _column(df, "result").apply(normalize_result)
+
     report_date = (get_local_now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     # --- Daily Calculations ---
@@ -42,9 +84,10 @@ def build_daily_slips_report() -> str:
     settled_df = df[_local_date_mask(df, "graded_at", report_date)].copy()
     if settled_df.empty:
         settled_df = df[
-            df.get("date", "").astype(str).eq(report_date)
-            & df.get("result", "").astype(str).isin(["WIN", "LOSS", "PUSH"])
+            df.get("date", "").astype(str).eq(report_date) & df["result"].isin(GRADED_RESULTS)
         ].copy()
+    else:
+        settled_df = settled_df[settled_df["result"].isin(GRADED_RESULTS)].copy()
 
     clv_df = df[_local_date_mask(df, "clv_tracked_at", report_date)].copy()
     if clv_df.empty:
@@ -53,21 +96,18 @@ def build_daily_slips_report() -> str:
             & _safe_numeric(df.get("clv_edge_pct")).notna()
         ].copy()
 
-    wins = int((settled_df.get("result", "").astype(str) == "WIN").sum()) if not settled_df.empty else 0
-    losses = int((settled_df.get("result", "").astype(str) == "LOSS").sum()) if not settled_df.empty else 0
-    pushes = int((settled_df.get("result", "").astype(str) == "PUSH").sum()) if not settled_df.empty else 0
+    wins = int((settled_df["result"] == WIN).sum()) if not settled_df.empty else 0
+    losses = int((settled_df["result"] == LOSS).sum()) if not settled_df.empty else 0
+    pushes = int((settled_df["result"] == PUSH).sum()) if not settled_df.empty else 0
 
     net_units = 0.0
     risked_units = 0.0
     if not settled_df.empty:
-        settled_results = settled_df.get("result", "").astype(str).str.upper()
         net_units = sum(
             profit_for_result(row.get("odds", 0), row.get("units", 0), row.get("result", ""))
             for _, row in settled_df.iterrows()
         )
         risked_units = sum(abs(float(row.get("units", 0) or 0.0)) for _, row in settled_df.iterrows())
-        settled_df = settled_df.copy()
-        settled_df["result"] = settled_results
 
     roi_pct = (net_units / risked_units * 100.0) if risked_units > 0 else 0.0
     win_pct = ((wins / (wins + losses + pushes)) * 100.0) if (wins + losses + pushes) > 0 else 0.0
@@ -88,11 +128,14 @@ def build_daily_slips_report() -> str:
     source_text = " | ".join(placed_by_source[:6]) if placed_by_source else "n/a"
 
     # --- Lifetime Calculations ---
-    lifetime_settled = df[df.get("result", "").astype(str).str.upper().isin(["WIN", "LOSS", "PUSH"])].copy()
-    lifetime_wins = int((lifetime_settled.get("result", "").astype(str).str.upper() == "WIN").sum())
-    lifetime_losses = int((lifetime_settled.get("result", "").astype(str).str.upper() == "LOSS").sum())
-    lifetime_pushes = int((lifetime_settled.get("result", "").astype(str).str.upper() == "PUSH").sum())
-    
+    lifetime_settled = df[df["result"].isin(GRADED_RESULTS)].copy()
+    lifetime_wins = int((lifetime_settled["result"] == WIN).sum())
+    lifetime_losses = int((lifetime_settled["result"] == LOSS).sum())
+    lifetime_pushes = int((lifetime_settled["result"] == PUSH).sum())
+
+    daily_book_lines = _book_record_lines(settled_df)
+    lifetime_book_lines = _book_record_lines(lifetime_settled)
+
     lifetime_net_units = sum(
         profit_for_result(row.get("odds", 0), row.get("units", 0), row.get("result", ""))
         for _, row in lifetime_settled.iterrows()
@@ -124,13 +167,15 @@ def build_daily_slips_report() -> str:
         f"CLV Beaten: {clv_beaten_rate:.1f}%\n"
         f"Avg CLV Edge: {avg_clv:+.2f}%\n"
         f"Placed Sources: {source_text}\n"
-        f"--------------------------\n"
+        + ("By Book: " + " | ".join(daily_book_lines) + "\n" if daily_book_lines else "")
+        + f"--------------------------\n"
         f"**ALL-TIME PERFORMANCE**\n"
         f"Lifetime Record: {lifetime_wins}-{lifetime_losses}"
         + (f"-{lifetime_pushes}" if lifetime_pushes else "")
         + "\n"
         f"Lifetime ROI: {lifetime_roi:+.1f}%\n"
         f"Lifetime Profit: {lifetime_net_units:+.2f}u (${lifetime_profit_dollars:+.2f})\n"
+        + ("Lifetime By Book: " + " | ".join(lifetime_book_lines) + "\n" if lifetime_book_lines else "")
     )
 
 
@@ -152,10 +197,11 @@ def build_overall_status_summary() -> str:
         return "**BEE BAKED OVERALL RECORD**\nNo bets logged yet."
 
     df = pd.DataFrame(all_bets)
-    lifetime_settled = df[df.get("result", "").astype(str).str.upper().isin(["WIN", "LOSS", "PUSH"])].copy()
-    lifetime_wins = int((lifetime_settled.get("result", "").astype(str).str.upper() == "WIN").sum())
-    lifetime_losses = int((lifetime_settled.get("result", "").astype(str).str.upper() == "LOSS").sum())
-    lifetime_pushes = int((lifetime_settled.get("result", "").astype(str).str.upper() == "PUSH").sum())
+    df["result"] = _column(df, "result").apply(normalize_result)
+    lifetime_settled = df[df["result"].isin(GRADED_RESULTS)].copy()
+    lifetime_wins = int((lifetime_settled["result"] == WIN).sum())
+    lifetime_losses = int((lifetime_settled["result"] == LOSS).sum())
+    lifetime_pushes = int((lifetime_settled["result"] == PUSH).sum())
 
     lifetime_net_units = sum(
         profit_for_result(row.get("odds", 0), row.get("units", 0), row.get("result", ""))
@@ -175,12 +221,14 @@ def build_overall_status_summary() -> str:
     if lifetime_pushes:
         record += f"-{lifetime_pushes}"
 
+    book_lines = _book_record_lines(lifetime_settled)
     return (
         f"**BEE BAKED OVERALL RECORD**\n"
         f"Record: {record}\n"
         f"Win%: {win_pct:.1f}%\n"
         f"ROI: {lifetime_roi:+.1f}%\n"
         f"Net: {lifetime_net_units:+.2f}u (${lifetime_profit_dollars:+.2f})"
+        + ("\nBy Book: " + " | ".join(book_lines) if book_lines else "")
     )
 
 
