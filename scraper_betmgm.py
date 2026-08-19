@@ -15,6 +15,7 @@ except Exception:  # pragma: no cover - optional dependency in some environments
 from db_manager import get_master_cache, load_tracker_state, save_tracker_state
 from services.discord_channels import BET_ALERTS_WEBHOOK_URL
 from services.http_client import post_discord
+from services.http_client import request as http_request
 from services.odds_reference import format_pinnacle_spread_reference
 from services.odds_scraper_ingest import extract_price, ingest_current_lines
 from services.scraper_api_client import fetch as scraper_api_fetch
@@ -35,7 +36,7 @@ LAUNCH_TIMEOUT_MS = int(os.getenv("BETMGM_LAUNCH_TIMEOUT_MS", "8000"))
 NAV_TIMEOUT_MS = int(os.getenv("BETMGM_NAV_TIMEOUT_MS", "15000"))
 WAIT_CYCLES = int(os.getenv("BETMGM_WAIT_CYCLES", "2"))
 WAIT_MS = int(os.getenv("BETMGM_WAIT_MS", "2000"))
-ENABLE_BROWSER_FALLBACK = os.getenv("BETMGM_ENABLE_BROWSER_FALLBACK", "true").strip().lower() in {
+ENABLE_BROWSER_FALLBACK = os.getenv("BETMGM_ENABLE_BROWSER_FALLBACK", "false").strip().lower() in {
     "1",
     "true",
     "yes",
@@ -46,6 +47,27 @@ BETMGM_HOME_URL = "https://www.betmgm.com/"
 BETMGM_URL = "https://www.betmgm.com/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_NBA_PATH = "/en/sports/basketball-7/betting/usa-9/nba-6004"
 BETMGM_API_COUNTRY = os.getenv("BETMGM_API_COUNTRY", "US").strip().upper()
+
+# BetMGM's SPA is fed by the bwin/GVC "cds-api" offer service. That service answers
+# JSON from an ordinary datacenter IP (it is the marketing site and the JS bundles
+# that sit behind Cloudflare), so the fixtures call is made directly and only falls
+# back to ScraperAPI when the direct call is refused. The one thing the service
+# requires is an ``x-bwin-accessid`` token, which is minted per brand and published
+# in the sportsbook page for a real browser session.
+CDS_FIXTURES_PATH = "/cds-api/bettingoffer/fixtures"
+BETMGM_ACCESS_ID = os.getenv("BETMGM_ACCESS_ID", "").strip()
+ACCESS_ID_STATE_KEY = "betmgm_access_id"
+ACCESS_ID_FILE = "betmgm_access_id.json"
+ACCESS_ID_PATTERNS = (
+    r"x-bwin-accessid=([A-Za-z0-9+/=_-]{12,})",
+    r'"accessId"\s*:\s*"([A-Za-z0-9+/=_-]{12,})"',
+    r'accessId["\']?\s*[:=]\s*["\']([A-Za-z0-9+/=_-]{12,})["\']',
+)
+# bwin sport ids: 23 = Baseball, 7 = Basketball, 11 = American Football, 12 = Ice Hockey.
+BETMGM_SPORT_ID = os.getenv("BETMGM_SPORT_ID", "23").strip()
+BETMGM_COMPETITION_NAME = os.getenv("BETMGM_COMPETITION_NAME", "MLB").strip()
+BETMGM_SPORT_KEY = os.getenv("BETMGM_SPORT_KEY", "baseball_mlb").strip()
+BETMGM_FIXTURE_LIMIT = int(os.getenv("BETMGM_FIXTURE_LIMIT", "50"))
 BETMGM_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -88,7 +110,7 @@ def save_current_lines(lines):
 def _pinnacle_reference(current: dict) -> str:
     return format_pinnacle_spread_reference(
         get_master_cache() or {},
-        "basketball_nba",
+        BETMGM_SPORT_KEY,
         str(current.get("matchup", "")),
         str(current.get("team", "")),
     )
@@ -334,11 +356,6 @@ def _preferred_betmgm_url() -> str:
     return f"https://{state}.betmgm.com{BETMGM_NBA_PATH}"
 
 
-def _preferred_betmgm_api_base() -> str:
-    state = BETMGM_PREFERRED_STATE or "ky"
-    return f"https://sportsapi.{state}.betmgm.com"
-
-
 def _preferred_state_label() -> str:
     return STATE_DISPLAY_NAMES.get(BETMGM_PREFERRED_STATE or "ky", "Kentucky")
 
@@ -398,11 +415,11 @@ def _translation_text(translations) -> str:
     if isinstance(translations, list):
         for item in translations:
             if isinstance(item, dict):
-                text = item.get("text") or item.get("shortText")
+                text = item.get("value") or item.get("text") or item.get("shortText")
                 if text:
                     return str(text).strip()
     if isinstance(translations, dict):
-        text = translations.get("text") or translations.get("shortText")
+        text = translations.get("value") or translations.get("text") or translations.get("shortText")
         if text:
             return str(text).strip()
     if isinstance(translations, str):
@@ -410,162 +427,190 @@ def _translation_text(translations) -> str:
     return ""
 
 
-def _translation_sign(translations) -> str:
-    if isinstance(translations, list):
-        for item in translations:
-            if isinstance(item, dict):
-                sign = item.get("sign") or item.get("shortTextSign")
-                if sign:
-                    return str(sign).strip()
-    if isinstance(translations, dict):
-        sign = translations.get("sign") or translations.get("shortTextSign")
-        if sign:
-            return str(sign).strip()
+def _cds_host() -> str:
+    state = BETMGM_PREFERRED_STATE or "ky"
+    return f"https://sports.{state}.betmgm.com"
+
+
+def _cds_headers() -> Dict[str, str]:
+    return {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": f"{_cds_host()}/en/sports",
+        "User-Agent": BETMGM_USER_AGENT,
+        "x-bwin-accessid": "",
+    }
+
+
+def _cds_params(access_id: str) -> Dict[str, str]:
+    state = (BETMGM_PREFERRED_STATE or "ky").upper()
+    return {
+        "x-bwin-accessid": access_id,
+        "lang": "en-us",
+        "country": BETMGM_API_COUNTRY,
+        "userCountry": BETMGM_API_COUNTRY,
+        "subdivision": f"{BETMGM_API_COUNTRY}-{state}",
+        "fixtureTypes": "Standard",
+        "state": "Latest",
+        "offerMapping": "All",
+        "offerCategories": "Gridable",
+        "fixtureCategories": "Gridable,NonGridable,Other",
+        "sportIds": BETMGM_SPORT_ID,
+        "skip": "0",
+        "take": str(BETMGM_FIXTURE_LIMIT),
+        "sortBy": "Tags",
+    }
+
+
+def _cached_access_id() -> str:
+    state = load_tracker_state(ACCESS_ID_STATE_KEY, ACCESS_ID_FILE)
+    if isinstance(state, dict):
+        return str(state.get("access_id") or "").strip()
+    if isinstance(state, str):
+        return state.strip()
     return ""
 
 
-def _build_current_lines_from_api(fixtures: list[dict]) -> Dict[str, Dict[str, object]]:
-    current_lines: Dict[str, Dict[str, object]] = {}
-
-    for fixture in fixtures:
-        if not isinstance(fixture, dict):
-            continue
-        participants = fixture.get("participants") or []
-        if len(participants) < 2:
-            continue
-        participant_names = [_translation_text(participant.get("name")) for participant in participants if isinstance(participant, dict)]
-        if len(participant_names) < 2:
-            continue
-        matchup = f"{participant_names[0]} @ {participant_names[1]}"
-
-        fixture_ids = fixture.get("id") or []
-        event_id = None
-        if isinstance(fixture_ids, list):
-            for item in fixture_ids:
-                if isinstance(item, dict) and item.get("entityId") is not None:
-                    event_id = str(item.get("entityId"))
-                    break
-        if not event_id:
-            event_id = re.sub(r"[^a-z0-9]+", "_", matchup.lower()).strip("_")
-
-        for market in fixture.get("markets", []):
-            if not isinstance(market, dict):
-                continue
-            market_name = _translation_text(market.get("name")).lower()
-            market_type = str(market.get("marketType", "")).lower()
-            if "spread" not in market_name and "spread" not in market_type:
-                continue
-
-            market_value = market.get("value")
-            options = market.get("options") or []
-            for option in options:
-                if not isinstance(option, dict):
-                    continue
-                option_name = option.get("name")
-                team = _translation_text(option_name)
-                if not team:
-                    continue
-
-                sign = _translation_sign(option_name)
-                line_value = None
-                if market_value not in (None, ""):
-                    try:
-                        value_float = float(market_value)
-                        if sign in {"+", "-"}:
-                            line_value = f"{sign}{abs(value_float):.1f}".rstrip("0").rstrip(".")
-                            if "." not in line_value:
-                                line_value = f"{line_value}.0"
-                        else:
-                            line_value = f"{value_float:+.1f}".rstrip("0").rstrip(".")
-                            if "." not in line_value:
-                                line_value = f"{line_value}.0"
-                    except Exception:
-                        line_value = None
-
-                if line_value is None:
-                    continue
-
-                unique_key = f"{event_id}_{team.lower()}"
-                current_lines[unique_key] = {
-                    "event_id": event_id,
-                    "matchup": matchup,
-                    "commence_time": str(
-                        fixture.get("startTime")
-                        or fixture.get("startDate")
-                        or fixture.get("eventStartTime")
-                        or ""
-                    ).strip(),
-                    "team": team,
-                    "line": line_value,
-                    "price": extract_price(option),
-                }
-
-    return current_lines
+def _store_access_id(access_id: str) -> None:
+    save_tracker_state(ACCESS_ID_STATE_KEY, {"access_id": access_id}, ACCESS_ID_FILE)
 
 
-def _fetch_betmgm_api_lines() -> Dict[str, Dict[str, object]]:
+def _access_id_from_text(text: str) -> str:
+    for pattern in ACCESS_ID_PATTERNS:
+        match = re.search(pattern, text or "")
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _discover_access_id() -> str:
+    """Find the brand's ``x-bwin-accessid`` token.
+
+    Cloudflare serves the sportsbook's JS bundles and client config as empty
+    bodies to datacenter IPs, so discovery goes through a residential ScraperAPI
+    IP. One HTML page is enough and the token is long-lived, so it is cached in
+    ``bot_state`` and only re-fetched when the offer service rejects it.
+    """
     headers = {
-        "Accept": "application/json",
-        "Referer": _preferred_betmgm_url(),
+        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
         "User-Agent": BETMGM_USER_AGENT,
     }
-    api_base = _preferred_betmgm_api_base()
+    targets = (
+        f"{_cds_host()}/en/sports",
+        f"{_cds_host()}/en/api/clientconfig?browserUrl={_cds_host()}/en/sports&x-from-product=host-app",
+    )
+    for target in targets:
+        for render in (False, True):
+            try:
+                response = _sa_get(target, headers, render=render)
+            except Exception as exc:
+                print(f"BetMGM access id lookup failed on {target} (render={render}): {exc}")
+                continue
+            access_id = _access_id_from_text(response.text)
+            if access_id:
+                print(f"BetMGM discovered access id via {target} (render={render}).")
+                _store_access_id(access_id)
+                return access_id
+    print("BetMGM: no access id found; set BETMGM_ACCESS_ID to skip discovery.")
+    return ""
 
-    for proxy_ip in _proxy_candidates():
-        proxy_label = proxy_ip or "direct"
+
+def _access_id_candidates() -> list[str]:
+    candidates = [BETMGM_ACCESS_ID, _cached_access_id()]
+    return [candidate for candidate in dict.fromkeys(candidates) if candidate]
+
+
+def _cds_get(access_id: str):
+    """Fetch the fixtures JSON, direct first and through ScraperAPI if refused.
+
+    The offer service itself is not WAF-protected, so the direct call normally
+    succeeds and costs nothing; ScraperAPI is the fallback for runners whose IP
+    range Cloudflare does challenge.
+    """
+    url = f"{_cds_host()}{CDS_FIXTURES_PATH}"
+    params = _cds_params(access_id)
+    headers = _cds_headers()
+    headers["x-bwin-accessid"] = access_id
+
+    try:
+        response = http_request("GET", url, params=params, headers=headers, timeout=DIRECT_TIMEOUT_MS / 1000)
+        if response.status_code < 400:
+            return response
+        print(f"BetMGM cds-api direct call returned {response.status_code}; retrying via scraperapi.")
+        if response.status_code == 400:
+            return response
+    except Exception as exc:
+        print(f"BetMGM cds-api direct call failed: {exc}")
+
+    return _sa_get(url, headers, params=params)
+
+
+def _fixture_competition(fixture: dict) -> str:
+    competition = fixture.get("competition")
+    if isinstance(competition, dict):
+        return _translation_text(competition.get("name"))
+    return ""
+
+
+def _matches_configured_competition(fixture: dict) -> bool:
+    if not BETMGM_COMPETITION_NAME:
+        return True
+    wanted = BETMGM_COMPETITION_NAME.lower()
+    haystacks = [_fixture_competition(fixture).lower(), _translation_text(fixture.get("league")).lower()]
+    return any(wanted in haystack for haystack in haystacks if haystack)
+
+
+def _fetch_betmgm_cds_markets() -> Dict[str, Dict[str, Dict[str, object]]]:
+    tried_discovery = False
+    for access_id in _access_id_candidates() + [""]:
+        if not access_id:
+            if tried_discovery:
+                break
+            tried_discovery = True
+            access_id = _discover_access_id()
+            if not access_id:
+                break
+
         try:
-            sports_response = _sa_get(
-                f"{api_base}/offer/api/{BETMGM_API_COUNTRY}/sports",
-                headers,
-            )
-            sports_items = sports_response.json().get("items", [])
-            basketball_sport_id = None
-            for sport in sports_items:
-                if not isinstance(sport, dict):
-                    continue
-                if _translation_text(sport.get("name")).lower() == "basketball":
-                    basketball_sport_id = sport.get("id")
-                    break
-            if basketball_sport_id is None:
-                print(f"BetMGM API did not return a Basketball sport id via {proxy_label}.")
-                continue
-
-            competitions_response = _sa_get(
-                f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/competitions",
-                headers,
-                params={"language": "en"},
-            )
-            competitions = competitions_response.json().get("items", [])
-            nba_competition_id = None
-            for competition in competitions:
-                if not isinstance(competition, dict):
-                    continue
-                if _translation_text(competition.get("name")).lower() == "nba":
-                    nba_competition_id = competition.get("id")
-                    break
-            if nba_competition_id is None:
-                print(f"BetMGM API did not return an NBA competition id via {proxy_label}.")
-                continue
-
-            fixtures_response = _sa_get(
-                f"{api_base}/offer/api/{basketball_sport_id}/{BETMGM_API_COUNTRY}/fixtures",
-                headers,
-                params={
-                    "language": "en",
-                    "competitionIds": nba_competition_id,
-                    "onlyMainMarkets": "true",
-                    "marketsFilterCriteria": "Visible",
-                    "isInPlay": "false",
-                },
-            )
-            fixtures = fixtures_response.json().get("items", [])
-            current_lines = _build_current_lines_from_api(fixtures)
-            if current_lines:
-                print(f"BetMGM lines parsed via sportsbook API on {api_base} using {proxy_label}.")
-                return current_lines
-            print(f"BetMGM sportsbook API returned fixtures but no spread lines on {api_base} using {proxy_label}.")
+            response = _cds_get(access_id)
         except Exception as exc:
-            print(f"BetMGM sportsbook API fetch failed via {proxy_label}: {exc}")
+            print(f"BetMGM cds-api fetch failed: {exc}")
+            continue
+
+        body = response.text or ""
+        if "Access id is invalid" in body or response.status_code == 400:
+            print("BetMGM access id rejected by the offer service; rediscovering.")
+            _store_access_id("")
+            continue
+
+        payload = _decode_possible_json(body)
+        if not isinstance(payload, (dict, list)):
+            print(f"BetMGM cds-api returned a non-JSON body ({len(body)} bytes).")
+            continue
+
+        container = _find_fixture_container(payload) or {}
+        fixtures = [
+            fixture
+            for fixture in container.get("fixtures", [])
+            if isinstance(fixture, dict) and _matches_configured_competition(fixture)
+        ]
+        if not fixtures:
+            print(
+                "BetMGM cds-api returned no "
+                f"{BETMGM_COMPETITION_NAME or BETMGM_SPORT_ID} fixtures."
+            )
+            continue
+
+        by_market = _build_market_lines({"fixtures": fixtures})
+        if by_market:
+            summary = ", ".join(f"{key} {len(lines)}" for key, lines in sorted(by_market.items()))
+            print(
+                f"BetMGM cds-api parsed {len(fixtures)} "
+                f"{BETMGM_COMPETITION_NAME or 'fixture'} event(s): {summary}."
+            )
+            return by_market
+        print(f"BetMGM cds-api returned {len(fixtures)} fixture(s) but no main-market lines.")
 
     return {}
 
@@ -780,45 +825,110 @@ def _fetch_betmgm_snapshot():
         return None, ""
 
 
-def _build_current_lines(data: dict) -> Dict[str, Dict[str, object]]:
-    current_lines = {}
-    container = _find_fixture_container(data) or {}
-    for fixture in container.get("fixtures", []):
-        matchup = fixture.get("name", {"value": "Unknown Matchup"}).get("value")
-        event_id = str(fixture.get("id"))
+def _classify_market(market_name: str) -> Optional[str]:
+    """Map a BetMGM grid market name onto a master-cache market key.
 
-        for option_market in fixture.get("optionMarkets", []):
-            market_name = option_market.get("name", {}).get("value", "")
-            if "Spread" not in market_name:
+    Period, alternate and player markets are skipped: the master cache holds one
+    line per outcome per market, so mixing "1st 5 Innings Run Line" into
+    ``spreads`` would overwrite the full-game price the scanner de-vigs against.
+    """
+    name = (market_name or "").lower()
+    if not name:
+        return None
+    if any(token in name for token in ("1st", "2nd", "3rd", "first ", "half", "quarter", "inning", "period", "player", "team total")):
+        return None
+    if any(token in name for token in ("spread", "run line", "puck line", "handicap")):
+        return "spreads"
+    if any(token in name for token in ("money line", "moneyline", "match result", "winner", "to win")):
+        return "h2h"
+    if "total" in name or "over/under" in name:
+        return "totals"
+    return None
+
+
+def _option_point(option: dict, market: dict) -> Optional[str]:
+    """The handicap or total attached to an option, as a signed string."""
+    attributes = option.get("attributes")
+    if isinstance(attributes, dict):
+        for key in ("spread", "line", "handicap", "total"):
+            value = attributes.get(key)
+            if value not in (None, ""):
+                return str(value)
+
+    for candidate in (
+        _translation_text(option.get("sourceName")),
+        str(option.get("attr") or ""),
+        _translation_text(option.get("name")),
+        str(market.get("value") or ""),
+    ):
+        match = re.search(r"[+-]?\d+(?:\.\d+)?", candidate or "")
+        if match:
+            return match.group(0)
+    return None
+
+
+def _build_market_lines(data: dict) -> Dict[str, Dict[str, Dict[str, object]]]:
+    """Group a cds-api fixtures payload into {market_key: {unique_key: line}}."""
+    by_market: Dict[str, Dict[str, Dict[str, object]]] = {}
+    container = _find_fixture_container(data) or {}
+
+    for fixture in container.get("fixtures", []):
+        if not isinstance(fixture, dict):
+            continue
+        matchup = _translation_text(fixture.get("name")) or "Unknown Matchup"
+        event_id = str(fixture.get("id"))
+        commence_time = str(
+            fixture.get("startDate")
+            or fixture.get("startTime")
+            or fixture.get("eventStartTime")
+            or ""
+        ).strip()
+
+        for market in fixture.get("optionMarkets", []):
+            if not isinstance(market, dict):
                 continue
-            for outcome in option_market.get("options", []):
-                team = outcome.get("name", {}).get("value")
-                attributes = outcome.get("attributes", {})
-                line = attributes.get("spread") or attributes.get("line")
-                if team in (None, "") or line in (None, ""):
+            market_key = _classify_market(_translation_text(market.get("name")))
+            if not market_key:
+                continue
+
+            for option in market.get("options", []):
+                if not isinstance(option, dict):
+                    continue
+                team = _translation_text(option.get("name"))
+                price = extract_price(option)
+                if not team or price is None:
                     continue
 
+                point = None if market_key == "h2h" else _option_point(option, market)
+                if market_key != "h2h" and point is None:
+                    continue
+
+                lines = by_market.setdefault(market_key, {})
                 unique_key = f"{event_id}_{team}"
-                current_lines[unique_key] = {
-                    "event_id": event_id,
-                    "matchup": matchup,
-                    "commence_time": str(
-                        fixture.get("startTime")
-                        or fixture.get("startDate")
-                        or fixture.get("eventStartTime")
-                        or ""
-                    ).strip(),
-                    "team": team,
-                    "line": line,
-                    "price": extract_price(outcome),
-                }
-    return current_lines
+                lines.setdefault(
+                    unique_key,
+                    {
+                        "event_id": event_id,
+                        "matchup": matchup,
+                        "commence_time": commence_time,
+                        "team": team,
+                        "line": point,
+                        "price": price,
+                    },
+                )
+
+    return by_market
+
+
+def _build_current_lines(data: dict) -> Dict[str, Dict[str, object]]:
+    return _build_market_lines(data).get("spreads", {})
 
 
 def scrape_betmgm():
     try:
-        current_lines = _fetch_betmgm_api_lines()
-        if not current_lines:
+        by_market = _fetch_betmgm_cds_markets()
+        current_lines = by_market.get("spreads", {})
+        if not by_market:
             current_lines = _fetch_betmgm_direct_lines()
         if not current_lines and ENABLE_BROWSER_FALLBACK:
             print("BetMGM: trying proxied browser fallback...")
@@ -828,8 +938,11 @@ def scrape_betmgm():
             if not current_lines and rendered_text:
                 current_lines = _parse_lines_from_rendered_text(rendered_text)
 
-        if not current_lines:
-            print("Could not capture usable BetMGM NBA lines.")
+        if current_lines and "spreads" not in by_market:
+            by_market["spreads"] = current_lines
+
+        if not by_market:
+            print(f"Could not capture usable BetMGM {BETMGM_COMPETITION_NAME or 'main-market'} lines.")
             return {"detail": "betmgm scrape no data", "count": 0, "label": "alerts"}
 
         alerts = []
@@ -850,11 +963,17 @@ def scrape_betmgm():
                 )
 
         save_current_lines(current_lines)
-        ingest_current_lines("basketball_nba", "betmgm", "spreads", current_lines)
+        for market_key, lines in by_market.items():
+            ingest_current_lines(BETMGM_SPORT_KEY, BOOK_KEY, market_key, lines)
         for message in alerts:
             post_discord({"embeds": [{"description": message, "color": 13611036}]}, webhook_url=DISCORD_WEBHOOK_URL)
+
+        tracked = sum(len(lines) for lines in by_market.values())
         return {
-            "detail": f"betmgm scrape complete ({len(current_lines)} lines tracked)",
+            "detail": (
+                f"betmgm scrape complete ({tracked} lines across "
+                f"{len(by_market)} market(s) on {BETMGM_SPORT_KEY})"
+            ),
             "count": len(alerts),
             "label": "alerts",
         }
